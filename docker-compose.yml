@@ -1,0 +1,24 @@
+version: "3.8"
+
+services:
+  gateway:
+    build: .
+    container_name: api-gateway
+    restart: unless-stopped
+    ports:
+      - "13579:13579"   # OpenAI-compatible proxy
+      - "24680:24680"   # Web dashboard
+    volumes:
+      - ./proxy.cfg:/app/proxy.cfg:ro
+      - gateway-data:/app/data
+    environment:
+      - TZ=Asia/Shanghai
+    # Health check (proxy endpoint)
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:13579/status", "||", "exit", "1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  gateway-data:

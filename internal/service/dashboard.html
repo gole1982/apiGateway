@@ -1,0 +1,2117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>API Gateway - Admin Panel</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+/* CYBERPUNK & GLASSMORPHISM AESTHETICS */
+:root {
+    --bg-base: #05050A;
+    --bg-card: rgba(20, 20, 35, 0.6);
+    --bg-card-hover: rgba(30, 30, 50, 0.8);
+    --border-color: rgba(0, 212, 255, 0.15);
+    --border-highlight: rgba(0, 212, 255, 0.5);
+    --primary: #00d4ff;
+    --primary-glow: 0 0 20px rgba(0, 212, 255, 0.4);
+    --success: #00ff88;
+    --success-glow: 0 0 20px rgba(0, 255, 136, 0.4);
+    --danger: #ff4444;
+    --danger-glow: 0 0 20px rgba(255, 68, 68, 0.4);
+    --warning: #ffaa00;
+    --text-main: #e2e8f0;
+    --text-muted: #94a3b8;
+    --font-ui: 'Inter', system-ui, sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { 
+    font-family: var(--font-ui); 
+    background: radial-gradient(circle at top center, #101020 0%, var(--bg-base) 100%); 
+    color: var(--text-main); 
+    min-height: 100vh;
+    background-attachment: fixed;
+}
+.container { max-width: 1600px; margin: 0 auto; padding: 30px; }
+
+/* HEADER & TABS */
+header { 
+    display: flex; justify-content: space-between; align-items: center; 
+    padding: 20px 30px; margin-bottom: 30px; 
+    background: var(--bg-card);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+}
+h1 { 
+    color: #fff; font-size: 1.8rem; font-weight: 700; letter-spacing: 1px;
+    text-shadow: var(--primary-glow);
+    background: linear-gradient(90deg, #fff, var(--primary));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+}
+.status { 
+    display: flex; align-items: center; gap: 10px; 
+    padding: 8px 16px; background: rgba(0, 212, 255, 0.05); 
+    border: 1px solid var(--border-color); border-radius: 20px;
+}
+.status-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--success); box-shadow: var(--success-glow); animation: pulse 2s infinite; }
+.status-dot.error { background: var(--danger); box-shadow: var(--danger-glow); }
+@keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.6; transform: scale(1.1); } }
+#proxyStatusText { font-family: var(--font-mono); font-size: 0.9rem; color: var(--primary); }
+
+.tab-nav { display: flex; gap: 8px; background: rgba(0,0,0,0.3); padding: 6px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.05); }
+.tab-btn { 
+    padding: 10px 24px; background: transparent; border: none; border-radius: 8px; 
+    color: var(--text-muted); cursor: pointer; font-size: 0.95rem; font-weight: 500;
+    transition: all 0.3s ease; position: relative; overflow: hidden;
+}
+.tab-btn:hover { color: #fff; background: rgba(255,255,255,0.05); }
+.tab-btn.active { color: var(--bg-base); background: var(--primary); box-shadow: var(--primary-glow); font-weight: 600; }
+.tab-content { display: none; animation: fadeIn 0.4s ease forwards; }
+.tab-content.active { display: block; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+/* CARDS */
+.card { 
+    background: var(--bg-card); 
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    border-radius: 16px; padding: 24px; margin-bottom: 24px; 
+    border: 1px solid var(--border-color); 
+    box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+    transition: transform 0.2s ease, border-color 0.2s ease;
+}
+.card:hover { border-color: var(--border-highlight); }
+.card h2 { color: #fff; margin-bottom: 20px; font-size: 1.3rem; font-weight: 600; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border-color); padding-bottom: 12px; }
+.card h3 { color: #fff; margin: 16px 0 12px; font-size: 1.1rem; font-weight: 500; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 24px; }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+
+/* FORMS & INPUTS */
+.form-group { margin: 16px 0; }
+.form-group label { display: block; margin-bottom: 8px; color: var(--text-muted); font-size: 0.85rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; }
+.form-group input, .form-group select, .form-group textarea { 
+    width: 100%; padding: 12px 16px; background: rgba(0,0,0,0.4); 
+    border: 1px solid var(--border-color); border-radius: 8px; 
+    color: #fff; font-size: 0.95rem; font-family: var(--font-mono);
+    transition: all 0.3s ease;
+}
+.form-group input:focus, .form-group textarea:focus, .form-group select:focus { 
+    outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(0, 212, 255, 0.1); background: rgba(0,0,0,0.6);
+}
+.btn { 
+    padding: 10px 24px; border: none; border-radius: 8px; cursor: pointer; 
+    font-size: 0.95rem; font-weight: 600; transition: all 0.2s ease; 
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+}
+.btn-primary { background: linear-gradient(135deg, #00d4ff, #0077ff); color: #fff; box-shadow: 0 4px 15px rgba(0, 119, 255, 0.3); }
+.btn-primary:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0, 119, 255, 0.5); }
+.btn-danger { background: linear-gradient(135deg, #ff4444, #cc0000); color: #fff; }
+.btn-danger:hover { transform: translateY(-2px); box-shadow: var(--danger-glow); }
+.btn-secondary { background: rgba(255,255,255,0.05); color: #fff; border: 1px solid var(--border-color); }
+.btn-secondary:hover { background: rgba(255,255,255,0.1); }
+.btn-sm { padding: 6px 14px; font-size: 0.85rem; }
+
+
+
+/* COMPACT TAG LISTS */
+.tag-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; margin-top: 16px; }
+.api-tag { 
+    background: rgba(0,0,0,0.4); border: 1px solid var(--border-color); border-radius: 8px; 
+    padding: 16px; cursor: pointer; display: flex; align-items: center; justify-content: space-between;
+    transition: all 0.2s ease; font-family: var(--font-mono); font-size: 1rem; color: #fff; font-weight: 500;
+}
+.api-tag:hover { background: rgba(30,30,50,0.8); border-color: var(--primary); transform: translateY(-2px); box-shadow: 0 4px 15px rgba(0,0,0,0.3); }
+.api-tag.status-success { background: rgba(0, 255, 136, 0.1); border-color: rgba(0, 255, 136, 0.4); }
+.api-tag.status-error { background: rgba(255, 68, 68, 0.1); border-color: rgba(255, 68, 68, 0.4); }
+.tag-indicator { width: 12px; height: 12px; border-radius: 50%; background: #444; border: 2px solid #222; }
+.api-tag.status-success .tag-indicator { background: var(--success); box-shadow: var(--success-glow); border-color: #000; }
+.api-tag.status-error .tag-indicator { background: var(--danger); box-shadow: var(--danger-glow); border-color: #000; }
+
+/* SCROLLBARS */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); border-radius: 4px; }
+::-webkit-scrollbar-thumb { background: rgba(0,212,255,0.3); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(0,212,255,0.5); }
+
+/* LIST CONTAINERS (For handling hundreds of items) */
+.scroll-list { max-height: 55vh; overflow-y: auto; padding-right: 8px; margin-top: 16px; }
+.sticky-header { position: sticky; top: 0; background: var(--bg-card); z-index: 10; padding-bottom: 12px; border-bottom: 1px solid var(--border-color); margin-bottom: 16px; backdrop-filter: blur(10px); }
+
+/* COMPACT CARDS FOR LARGE LISTS */
+.rapi-card, .lapi-card { padding: 12px 16px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
+.rapi-card > div, .lapi-card > div { flex: 1; min-width: 200px; }
+.rapi-header, .lapi-header { margin-bottom: 4px; }
+.rapi-url, .lapi-key { margin: 4px 0; display: inline-block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.rapi-actions { margin-top: 0; justify-content: flex-end; }
+
+/* SEARCH BAR */
+.search-box { position: relative; width: 100%; max-width: 300px; }
+.search-box input { 
+    width: 100%; padding: 10px 16px 10px 40px; 
+    background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); 
+    border-radius: 20px; color: #fff; font-size: 0.9rem;
+    transition: all 0.3s ease;
+}
+.search-box input:focus { border-color: var(--primary); box-shadow: 0 0 15px rgba(0, 212, 255, 0.15); background: rgba(0,0,0,0.5); outline: none; }
+.search-icon { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--primary); font-size: 1.1rem; }
+
+/* DASHBOARD GAUGES & CHARTS */
+.gauge-row { display: flex; justify-content: space-evenly; gap: 40px; margin: 20px 0 40px; flex-wrap: wrap; }
+.gauge-wrapper { 
+    position: relative; text-align: center; 
+    background: rgba(0,0,0,0.2); padding: 30px; border-radius: 24px;
+    border: 1px solid rgba(255,255,255,0.05); box-shadow: inset 0 0 30px rgba(0,0,0,0.5);
+}
+.gauge-title { color: var(--text-muted); font-size: 1rem; font-weight: 600; margin-bottom: 20px; text-transform: uppercase; letter-spacing: 3px; }
+.gauge-wrapper canvas { width: 220px; height: 220px; display: block; margin: 0 auto; filter: drop-shadow(0 0 10px rgba(0,212,255,0.2)); }
+
+/* ITEMS (LAPI/RAPI) */
+.rapi-card, .lapi-card { 
+    background: rgba(20,20,35,0.8); padding: 16px; border-radius: 12px; margin-bottom: 12px; 
+    border: 1px solid var(--border-color); border-left: 4px solid var(--primary);
+    transition: all 0.2s ease;
+}
+.rapi-card:hover, .lapi-card:hover { transform: translateX(4px); border-color: var(--border-highlight); background: rgba(30,30,50,0.9); }
+.rapi-card.dragging { opacity: 0.5; border-left-color: var(--warning); transform: scale(0.98); }
+.rapi-header, .lapi-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.rapi-alias, .lapi-alias { font-weight: 600; color: #fff; font-size: 1.1rem; }
+.rapi-url, .lapi-key { font-size: 0.85rem; color: var(--text-muted); font-family: var(--font-mono); background: rgba(0,0,0,0.3); padding: 6px 10px; border-radius: 6px; margin: 8px 0; word-break: break-all; }
+.rapi-token { font-size: 0.8rem; color: #666; font-family: var(--font-mono); }
+.rapi-actions { display: flex; gap: 8px; margin-top: 14px; }
+.badge { display: inline-flex; align-items: center; padding: 4px 10px; border-radius: 20px; font-size: 0.75rem; font-weight: 600; background: rgba(0, 212, 255, 0.1); color: var(--primary); border: 1px solid rgba(0,212,255,0.2); }
+.badge.dynamic { background: rgba(255, 170, 0, 0.1); color: var(--warning); border-color: rgba(255,170,0,0.2); }
+
+/* LAPI CHAINS */
+.lapi-chain { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; padding: 12px; background: rgba(0,0,0,0.2); border-radius: 8px; }
+.chain-item { background: linear-gradient(135deg, rgba(0,212,255,0.1), rgba(0,212,255,0.05)); padding: 6px 14px; border-radius: 20px; font-size: 0.85rem; font-weight: 500; display: flex; align-items: center; gap: 8px; border: 1px solid rgba(0,212,255,0.2); }
+.chain-arrow { color: var(--primary); font-size: 1.2rem; }
+.chain-num { background: var(--primary); color: var(--bg-base); width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: 700; }
+
+/* DRAG DROP ZONE */
+.drop-zone { min-height: 80px; background: rgba(0,0,0,0.2); border: 2px dashed rgba(255,255,255,0.1); border-radius: 12px; padding: 16px; margin-top: 16px; transition: all 0.3s ease; }
+.drop-zone.drag-over { border-color: var(--primary); background: rgba(0, 212, 255, 0.05); box-shadow: inset 0 0 20px rgba(0,212,255,0.1); }
+.drop-zone-placeholder { text-align: center; color: var(--text-muted); padding: 30px; font-weight: 500; }
+
+/* TEST PANEL */
+.test-panel { background: rgba(0,0,0,0.3); border-radius: 12px; padding: 20px; border: 1px solid rgba(255,255,255,0.05); margin-top: 20px; }
+.test-request, .test-response pre { font-family: var(--font-mono); font-size: 0.85rem; background: #0a0a10; padding: 16px; border-radius: 8px; border: 1px solid var(--border-color); white-space: pre-wrap; word-break: break-all; color: #a5b4fc; }
+.test-result { margin-top: 16px; padding: 16px; border-radius: 8px; font-weight: 500; }
+.test-result.success { background: rgba(0, 255, 136, 0.1); border: 1px solid rgba(0,255,136,0.3); color: var(--success); }
+.test-result.error { background: rgba(255, 68, 68, 0.1); border: 1px solid rgba(255,68,68,0.3); color: var(--danger); }
+
+/* STATS TABLE */
+.table-container { overflow-x: auto; border-radius: 12px; border: 1px solid var(--border-color); }
+.stats-table { width: 100%; border-collapse: collapse; background: rgba(0,0,0,0.2); }
+.stats-table th { padding: 16px; border-bottom: 1px solid var(--border-color); color: var(--primary); font-size: 0.85rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; text-align: left; background: rgba(0,212,255,0.05); }
+.stats-table td { padding: 16px; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 0.9rem; font-family: var(--font-mono); }
+.stats-table tr:last-child td { border-bottom: none; }
+.stats-table tr:hover { background: rgba(255,255,255,0.03); }
+.progress-bar { height: 8px; background: rgba(255,255,255,0.1); border-radius: 4px; overflow: hidden; margin-top: 6px; }
+.progress-fill { height: 100%; background: linear-gradient(90deg, #00d4ff, #00ff88); transition: width 0.4s ease; }
+.progress-fill.success { background: var(--success); }
+
+.hidden { display: none !important; }
+.toggle-form { cursor: pointer; color: var(--primary); font-size: 0.95rem; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; padding: 8px 0; }
+.toggle-form:hover { text-shadow: var(--primary-glow); }
+.refresh-control-inline { display: flex; align-items: center; gap: 10px; font-size: 0.9rem; color: var(--text-muted); }
+.refresh-control-inline select { padding: 6px 12px; background: rgba(0,0,0,0.5); border: 1px solid var(--border-color); border-radius: 6px; color: #fff; cursor: pointer; }
+
+/* MODALS & TOASTS */
+.modal { position: fixed; inset: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(5px); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+.modal-content { background: var(--bg-card); padding: 30px; border-radius: 16px; width: 600px; max-width: 90%; max-height: 85vh; overflow-y: auto; border: 1px solid var(--border-highlight); box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
+.toast { position: fixed; bottom: 30px; right: 30px; background: rgba(20,20,35,0.95); color: #fff; padding: 16px 24px; border-radius: 12px; font-weight: 500; border-left: 4px solid var(--primary); box-shadow: 0 10px 30px rgba(0,0,0,0.4); z-index: 2000; animation: slideIn 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+@keyframes slideIn { from { transform: translateX(120%); } to { transform: translateX(0); } }
+</style>
+</head>
+<body>
+<div class="container">
+<header>
+    <h1>☄️ API Gateway</h1>
+    <div class="tab-nav">
+        <button class="tab-btn active" onclick="showTab('dashboard', this)">仪表盘</button>
+        <button class="tab-btn" onclick="showTab('platform', this)">平台 & 模型管理</button>
+        <button class="tab-btn" onclick="showTab('orchestration', this)">API 编排 (LAPI)</button>
+        <button class="tab-btn" onclick="showTab('logs', this)">请求日志</button>
+    </div>
+    <div class="status">
+        <span class="status-dot" id="proxyStatusDot"></span>
+        <span id="proxyStatusText">Proxy: 检测中...</span>
+    </div>
+</header>
+
+<!-- Dashboard Tab -->
+<div id="tab-dashboard" class="tab-content active">
+    <div class="gauge-row">
+        <div class="gauge-wrapper">
+            <div class="gauge-title">Remote APIs Health</div>
+            <canvas id="rapiGauge" width="300" height="300"></canvas>
+        </div>
+        <div class="gauge-wrapper">
+            <div class="gauge-title">Local APIs Health</div>
+            <canvas id="lapiGauge" width="300" height="300"></canvas>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>
+            <span>📈 请求趋势监控</span>
+            <div class="refresh-control-inline">
+                <label for="refreshInterval">自动刷新</label>
+                <select id="refreshInterval" onchange="setRefreshInterval(parseInt(this.value))">
+                    <option value="0">已暂停</option>
+                    <option value="60" selected>1分钟</option>
+                    <option value="1800">30分钟</option>
+                </select>
+            </div>
+        </h2>
+        <canvas id="requestChart" style="max-height: 300px;"></canvas>
+    </div>
+
+    <div class="grid-2">
+        <div class="card">
+            <h2>
+                <span>RAPI 统计 (Remote)</span>
+                <div class="search-box">
+                    <span class="search-icon">🔍</span>
+                    <input type="text" id="rapiStatsSearch" placeholder="搜索 RAPI..." oninput="filterRAPIStats()">
+                </div>
+            </h2>
+            <div class="table-container" id="rapiStatsTable"></div>
+        </div>
+        
+        <div class="card">
+            <h2>
+                <span>LAPI 统计 (Local)</span>
+                <div class="search-box">
+                    <span class="search-icon">🔍</span>
+                    <input type="text" id="lapiStatsSearch" placeholder="搜索 LAPI..." oninput="filterLAPIStats()">
+                </div>
+            </h2>
+            <div class="table-container" id="lapiStatsTable"></div>
+        </div>
+    </div>
+</div>
+
+<!-- Platform & Model Management Tab -->
+<div id="tab-platform" class="tab-content">
+    <div class="card" style="min-height: 70vh;">
+        <div class="sticky-header" style="display: flex; justify-content: space-between; align-items: center;">
+            <h2 style="border-bottom: none; padding-bottom: 0; margin-bottom: 0;">☁️ 平台 & 模型管理</h2>
+            <div style="display: flex; gap: 16px; align-items: center;">
+                <button class="btn btn-primary" onclick="openPlatformModal(null)">+ 新增平台</button>
+            </div>
+        </div>
+        <div id="platformList" style="margin-top: 16px;"></div>
+    </div>
+</div>
+
+<!-- Orchestration (LAPI) Tab -->
+<div id="tab-orchestration" class="tab-content">
+    <div class="card" style="min-height: 70vh;">
+        <div class="sticky-header" style="display: flex; justify-content: space-between; align-items: center;">
+            <h2 style="border-bottom: none; padding-bottom: 0; margin-bottom: 0;">🔗 本地 API 编排 (LAPI)</h2>
+            <div style="display: flex; gap: 16px; align-items: center;">
+                <div class="search-box" style="margin-bottom: 0;">
+                    <span class="search-icon">🔍</span>
+                    <input type="text" id="lapiSearch" placeholder="搜索 LAPI 别名..." oninput="filterLAPIs()">
+                </div>
+                <button class="btn btn-primary" onclick="openLAPIModal(null)">+ 新增本地路由</button>
+            </div>
+        </div>
+        <div class="tag-grid scroll-list" id="lapiList" style="max-height: 60vh;"></div>
+    </div>
+</div>
+
+<!-- Logs Tab -->
+<div id="tab-logs" class="tab-content">
+    <div class="card">
+        <h2>
+            <span>📜 网关请求日志</span>
+            <button class="btn btn-sm btn-danger" onclick="clearLogs()">🗑️ 清空所有日志</button>
+        </h2>
+        
+        <div style="display: flex; gap: 16px; margin-bottom: 24px;">
+            <div class="search-box" style="flex: 1;">
+                <span class="search-icon">🔍</span>
+                <input type="text" id="logSearch" placeholder="按 LAPI 别名搜索..." oninput="filterLogs()">
+            </div>
+            <div class="form-group" style="margin:0; min-width: 150px;">
+                <select id="logStatusFilter" onchange="filterLogs()" style="height: 100%;">
+                    <option value="">所有状态</option>
+                    <option value="success">✅ 成功</option>
+                    <option value="error">❌ 错误</option>
+                </select>
+            </div>
+        </div>
+        
+        <div style="display: grid; grid-template-columns: 1fr 1.5fr; gap: 24px;">
+            <div>
+                <div id="sessionsList" style="margin-bottom: 24px;">
+                    <h3 style="color: var(--primary); border-bottom: 1px solid var(--border-color); padding-bottom: 8px; margin-bottom: 12px;">会话分组 (Sessions)</h3>
+                    <div id="sessionsContainer"></div>
+                </div>
+                <div>
+                    <h3 style="color: var(--primary); border-bottom: 1px solid var(--border-color); padding-bottom: 8px; margin-bottom: 12px;">请求记录</h3>
+                    <div id="requestsList"></div>
+                </div>
+            </div>
+            
+            <div id="logDetailPanel" style="background: rgba(0,0,0,0.3); border-radius: 12px; padding: 20px; border: 1px solid var(--border-color); display: none;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid var(--border-color); padding-bottom: 12px;">
+                    <h3 style="color: var(--primary); margin: 0; font-size: 1.2rem;">请求详情</h3>
+                    <button class="btn btn-sm btn-secondary" onclick="closeLogDetail()">× 关闭</button>
+                </div>
+                <div id="logDetailContent" style="max-height: 70vh; overflow-y: auto; padding-right: 10px;"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+
+<!-- RAPI Modal -->
+<div id="rapiModal" class="modal hidden">
+    <div class="modal-content" style="max-width: 800px; display: flex; flex-direction: column; gap: 0; padding: 0; position: relative;">
+        <button class="btn btn-sm btn-secondary" onclick="closeRAPIModal()" style="position: absolute; right: 20px; top: 20px; z-index: 10;">× 关闭</button>
+        
+        <!-- Top: Edit Form -->
+        <div style="padding: 30px;">
+            <h2 style="color: #fff; margin-bottom: 24px; border-bottom: 1px solid var(--border-color); padding-bottom: 12px;" id="rapiModalTitle">✏️ 模型配置</h2>
+            <div id="rapiForm">
+                    <input type="hidden" id="rapiId">
+                    <input type="hidden" id="rapiPlatformId">
+                    
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
+                        <div class="form-group" style="margin: 0;">
+                            <label>模型别名 (客户端使用的名字)</label>
+                            <input type="text" id="rapiAlias" placeholder="例如: gpt4-main">
+                        </div>
+                        <div class="form-group" style="margin: 0;">
+                            <label>目标模型名 (上游使用)</label>
+                            <input type="text" id="rapiModel" placeholder="例如: gpt-4-turbo">
+                        </div>
+                    </div>
+
+                    <div style="display:flex; gap:12px; margin-top:24px;">
+                        <button type="button" class="btn btn-primary" style="flex:1" onclick="saveRAPI()">💾 保存模型</button>
+                        <button type="button" class="btn btn-danger" id="rapiDeleteBtn" onclick="deleteRAPIFromModal()">🗑️ 删除</button>
+                    </div>
+            </div>
+        </div>
+
+        <!-- Bottom: Test Panel -->
+        <div style="background: rgba(0,0,0,0.3); padding: 30px; border-top: 1px solid var(--border-color);">
+            <h2 style="color: #fff; margin-bottom: 20px; border-bottom: 1px solid var(--border-color); padding-bottom: 12px;">🧪 连通性测试</h2>
+            <div id="testPanel" class="test-panel" style="margin-top: 0; padding: 0; border: none; background: transparent;">
+                <input type="hidden" id="testRapiId">
+                <div class="form-group">
+                    <label>请求载荷 (JSON)</label>
+                    <textarea id="testBody" rows="4" style="font-family: var(--font-mono); font-size: 0.9rem;" placeholder='{"model":"gpt-4","messages":[{"role":"user","content":"Hello!"}]}'></textarea>
+                </div>
+                <div class="form-group" style="display:none;">
+                    <select id="testStream"><option value="false">No</option><option value="true">Yes</option></select>
+                </div>
+                <button class="btn btn-secondary" onclick="sendTestRequest()" style="width:100%; margin-top: 8px; border: 1px solid var(--primary); color: var(--primary);">🚀 发送连通性测试请求</button>
+                
+                <div id="testResult" class="test-result hidden" style="margin-top: 16px;"></div>
+                <div id="testResponse" class="test-response hidden">
+                    <h3 style="margin-top: 20px; margin-bottom: 8px; color: var(--text-muted); font-size: 0.9rem; text-transform: uppercase;">响应内容</h3>
+                    <pre id="testResponseContent" style="max-height: 250px; overflow-y: auto; background: #08080f; border: 1px solid rgba(255,255,255,0.05);"></pre>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- LAPI Modal -->
+<div id="lapiModal" class="modal hidden">
+    <div class="modal-content" style="max-width: 800px; display: flex; flex-direction: column; gap: 0; padding: 0; position: relative;">
+        <button class="btn btn-sm btn-secondary" onclick="closeLAPIModal()" style="position: absolute; right: 20px; top: 20px; z-index: 10;">× 关闭</button>
+        
+        <!-- Top: Edit Form -->
+        <div style="padding: 30px;">
+            <h2 style="color: #fff; margin-bottom: 24px; border-bottom: 1px solid var(--border-color); padding-bottom: 12px;" id="lapiModalTitle">✏️ 路由配置</h2>
+            <div id="lapiForm">
+                <div style="display: flex; gap: 16px; align-items: flex-end;">
+                    <div class="form-group" style="flex: 1; margin: 0;">
+                        <label>LAPI 模型别名 (客户端使用的名字)</label>
+                        <input type="text" id="newLapiAlias" placeholder="例如: claude-3-haiku">
+                    </div>
+                    <button class="btn btn-primary" id="lapiSaveBtn" style="height: 44px; padding: 0 24px;">保存路由</button>
+                    <button class="btn btn-danger" id="lapiDeleteBtn" style="height: 44px; padding: 0 24px;">🗑️ 删除</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bottom: Chain Editor -->
+        <div style="background: rgba(0,0,0,0.3); padding: 30px; border-top: 1px solid var(--border-color);">
+            <h2 style="color: #fff; margin-bottom: 20px; border-bottom: 1px solid var(--border-color); padding-bottom: 12px;">⚙️ 故障转移与负载链 (Drag & Drop)</h2>
+            <div id="chainEditor"></div>
+        </div>
+    </div>
+</div>
+
+<!-- Platform Modal -->
+<div id="platformModal" class="modal hidden">
+    <div class="modal-content" style="max-width: 600px; position: relative;">
+        <button class="btn btn-sm btn-secondary" onclick="closePlatformModal()" style="position: absolute; right: 20px; top: 20px; z-index: 10;">× 关闭</button>
+        <div style="padding: 30px;">
+            <h2 style="color: #fff; margin-bottom: 24px; border-bottom: 1px solid var(--border-color); padding-bottom: 12px;" id="platformModalTitle">✏️ 平台配置</h2>
+            <form onsubmit="savePlatform(event)">
+                <input type="hidden" id="platformId">
+                <div class="form-group">
+                    <label>平台名称 (唯一标识)</label>
+                    <input type="text" id="platformName" required placeholder="例如: openai、deepseek、volcengine">
+                </div>
+                <div class="form-group">
+                    <label>Base URL</label>
+                    <input type="url" id="platformURL" required placeholder="https://api.openai.com/v1">
+                </div>
+                <div class="form-group">
+                    <label>访问令牌 (API Key)</label>
+                    <input type="password" id="platformToken" placeholder="sk-...">
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 16px; margin-bottom: 16px;">
+                    <div class="form-group" style="margin: 0;">
+                        <label>动态令牌刷新</label>
+                        <select id="platformIsDynamic">
+                            <option value="false">禁用 (静态Token)</option>
+                            <option value="true">启用 (命令行获取)</option>
+                        </select>
+                    </div>
+                    <div class="form-group" id="platformTokenCmdGroup" style="display:none; margin: 0;">
+                        <label>令牌刷新命令</label>
+                        <input type="text" id="platformTokenCommand" placeholder="C:\tools\get-token.exe">
+                    </div>
+                </div>
+                <div style="display:flex; gap:12px; margin-top:24px;">
+                    <button type="submit" class="btn btn-primary" style="flex:1">💾 保存平台</button>
+                    <button type="button" class="btn btn-danger" id="platformDeleteBtn" onclick="deletePlatformFromModal()">🗑️ 删除</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+</div>
+<script>
+// ============ Cyber Gauge (赛博仪表盘) ============
+class CyberGauge {
+    constructor(id, conf) {
+        this.canvas = document.getElementById(id);
+        this.ctx = this.canvas.getContext('2d');
+        this.conf = conf;
+        this.sAngle = Math.PI * 0.75;
+        this.eAngle = Math.PI * 2.25;
+        this.tAngle = this.eAngle - this.sAngle;
+        
+        this.duration = 1500;
+        this.startTime = performance.now();
+        this.startPercent = 0;
+        this.targetPercent = conf.current / conf.max * 100;
+        this.currentPercent = 0;
+        
+        this.loop();
+    }
+
+    getColor(r) {
+        const c = [{r:15,g:23,b:42},{r:0,g:100,b:255},{r:0,g:230,b:110},{r:245,g:245,b:0},{r:255,g:130,b:0},{r:255,g:35,b:35}];
+        const s = c.length - 1, idx = Math.min(Math.floor(r * s), s - 1), lR = (r * s) - idx;
+        var rVal = Math.round(c[idx].r+(c[idx+1].r-c[idx].r)*lR);
+        var gVal = Math.round(c[idx].g+(c[idx+1].g-c[idx].g)*lR);
+        var bVal = Math.round(c[idx].b+(c[idx+1].b-c[idx].b)*lR);
+        return "rgb(" + rVal + "," + gVal + "," + bVal + ")";
+    }
+
+    draw() {
+        const ctx = this.ctx, cx = this.canvas.width / 2, cy = this.canvas.height / 2, r = 120;
+        ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+
+        const displayPercent = this.currentPercent + (Math.random() - 0.5) * 0.3;
+        const ratio = Math.min(Math.max(displayPercent / 100, 0), 1);
+        const cAngle = this.sAngle + this.tAngle * ratio;
+        const curColor = this.getColor(ratio);
+
+        ctx.beginPath(); ctx.arc(cx, cy, r, this.sAngle, this.eAngle); ctx.lineWidth = 12; ctx.strokeStyle = '#111726'; ctx.lineCap = 'round'; ctx.stroke();
+
+        if (ratio > 0) {
+            ctx.beginPath(); ctx.arc(cx, cy, r, this.sAngle, cAngle);
+            const g = ctx.createLinearGradient(cx-r, cy+r, cx+r, cy-r); g.addColorStop(0, '#0055ff'); g.addColorStop(0.5, '#00ff66'); g.addColorStop(1, '#ff3300');
+            ctx.strokeStyle = g; ctx.lineWidth = 12; ctx.lineCap = 'round'; ctx.stroke();
+        }
+
+        for (let i = 0; i <= 10; i++) {
+            const tRatio = i / 10, ang = this.sAngle + this.tAngle * tRatio, isM = true, len = 10;
+            ctx.lineWidth = isM ? 2 : 1; ctx.strokeStyle = this.getColor(tRatio);
+            ctx.beginPath(); ctx.moveTo(cx + (r-12)*Math.cos(ang), cy + (r-12)*Math.sin(ang)); ctx.lineTo(cx + (r-12-len)*Math.cos(ang), cy + (r-12-len)*Math.sin(ang)); ctx.stroke();
+            ctx.fillStyle = '#64748b'; ctx.font = 'bold 10px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            ctx.fillText(i * 10 + "%", cx + (r-28)*Math.cos(ang), cy + (r-28)*Math.sin(ang));
+        }
+
+        ctx.save(); ctx.translate(cx, cy); ctx.rotate(cAngle); ctx.shadowBlur = 12; ctx.shadowColor = curColor;
+        ctx.beginPath(); ctx.moveTo(r-25, 0); ctx.lineTo(0, -4); ctx.lineTo(-15, 0); ctx.lineTo(0, 4); ctx.closePath();
+        const pG = ctx.createLinearGradient(0, 0, r-25, 0); pG.addColorStop(0, '#ffffff'); pG.addColorStop(1, curColor);
+        ctx.fillStyle = pG; ctx.fill(); ctx.restore(); ctx.shadowBlur = 0;
+
+        ctx.save(); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        
+        ctx.fillStyle = '#94a3b8'; ctx.font = '12px sans-serif'; ctx.letterSpacing = "2px"; ctx.fillText(this.conf.title, cx, cy - 40);
+        
+        ctx.font = 'bold 28px monospace'; 
+        ctx.shadowBlur = 15; ctx.shadowColor = curColor; ctx.fillStyle = '#ffffff';
+        ctx.fillText(Math.round(displayPercent) + "%", cx, cy + 15);
+        ctx.shadowBlur = 0;
+        
+        ctx.font = '14px sans-serif'; ctx.fillStyle = '#64748b';
+        ctx.fillText("请求数 / 配置数", cx, cy + 38);
+        
+        ctx.font = 'bold 16px monospace'; ctx.fillStyle = curColor;
+        ctx.fillText(this.conf.current + " / " + this.conf.max, cx, cy + 58);
+        
+        ctx.restore();
+    }
+
+    loop() {
+        const step = (timestamp) => {
+            if (!this.startTime) this.startTime = timestamp;
+            const progress = Math.min((timestamp - this.startTime) / this.duration, 1);
+            const ease = progress < 1 ? Math.pow(2, -10 * progress) * Math.sin((progress * 10 - 0.75) * (2 * Math.PI / 3)) + 1 : 1;
+            
+            this.currentPercent = this.startPercent + (this.targetPercent - this.startPercent) * ease;
+            this.draw();
+            requestAnimationFrame(step);
+        };
+        requestAnimationFrame(step);
+    }
+
+    update(current, max) {
+        this.conf.current = current;
+        this.conf.max = max;
+        this.startPercent = this.currentPercent;
+        this.targetPercent = Math.min(current / max * 100, 100);
+        this.startTime = performance.now();
+    }
+}
+
+let rapiGauge = null;
+let lapiGauge = null;
+
+// ============ State ============
+let rapis = [];
+let lapis = [];
+let selectedLAPI = null;
+let draggedRAPI = null;
+
+// ============ Init ============
+// Note: init is replaced by initStats() at the bottom
+
+// ============ Load Data ============
+async function loadAll() {
+await Promise.all([loadRAPIs(), loadLAPIs(), loadPlatforms()]);
+renderPlatformList();
+renderLAPIList();
+renderRAPIForTest();
+}
+
+async function loadRAPIs() {
+try {
+const resp = await fetch('/api/rapis');
+const data = await resp.json();
+rapis = Array.isArray(data) ? data : [];
+} catch (e) { rapis = []; }
+}
+
+async function loadLAPIs() {
+try {
+const resp = await fetch('/api/lapis');
+lapis = await resp.json();
+for (const u of lapis) {
+const r = await fetch('/api/lapis/' + u.id + '/rapis');
+u._rapis = await r.json();
+}
+} catch (e) { lapis = []; }
+}
+
+// ============ Tab Navigation ============
+function showTab(tab, btn) {
+document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+document.getElementById('tab-' + tab).classList.add('active');
+if (btn) { btn.classList.add("active"); }
+
+if (tab === 'logs') {
+    loadLogs();
+    loadSessions();
+}
+if (tab === 'platform') {
+    expandedPlatformId = null;
+    loadAll();
+}
+}
+
+// ============ Status Check ============
+async function checkServicesStatus() {
+    try {
+        const resp = await fetch('/api/status');
+        if (!resp.ok) {
+            throw new Error('HTTP error: ' + resp.status);
+        }
+        const data = await resp.json();
+        console.log('Status data:', data);
+        document.getElementById('proxyStatusDot').classList.remove('error');
+        document.getElementById('proxyStatusText').textContent = 'Proxy: ' + data.proxy_port + ' ✓';
+
+        // 更新赛博仪表盘
+        if (rapiGauge && data.rapi_stats) {
+            rapiGauge.update(data.rapi_stats.requested_count || 0, data.rapi_stats.configured_count || 1);
+        }
+        if (lapiGauge && data.lapi_stats) {
+            lapiGauge.update(data.lapi_stats.requested_count || 0, data.lapi_stats.configured_count || 1);
+        }
+
+        // 更新请求趋势图
+        drawRequestChart(data);
+    } catch (e) {
+        console.error('Status check failed:', e);
+        document.getElementById('proxyStatusDot').classList.add('error');
+        document.getElementById('proxyStatusText').textContent = 'Proxy: 离线';
+    }
+}
+
+// ============ Canvas Gauge Drawing ============
+// 仪表盘：完整的圆形，7点钟=0%，12点钟=50%，5点钟=100%
+let gaugeAnimationId = null;
+let gaugeShakeOffset = 0;
+
+function animateGaugeShake() {
+    gaugeShakeOffset = (Math.random() - 0.5) * 2; // 随机抖动 ±1度
+}
+
+function drawGauge(canvasId, requested, configured, color1, color2) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+    
+    const ctx = canvas.getContext('2d');
+    const centerX = 100;
+    const centerY = 100;
+    const radius = 85;
+    
+    // 设置canvas实际尺寸
+    canvas.width = 200;
+    canvas.height = 200;
+    
+    // 清空画布
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // 绘制外发光
+    const glowGradient = ctx.createRadialGradient(centerX, centerY, radius-40, centerX, centerY, radius+30);
+    glowGradient.addColorStop(0, 'rgba(0, 212, 255, 0.1)');
+    glowGradient.addColorStop(1, 'rgba(0, 212, 255, 0)');
+    ctx.fillStyle = glowGradient;
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, radius+30, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // 绘制刻度圆背景（完整圆，灰色底）
+    ctx.strokeStyle = '#2a2a3a';
+    ctx.lineWidth = 16;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+    ctx.stroke();
+    
+    // 计算进度（从7点钟(0%)顺时针到5点钟(100%)）
+    const progress = configured > 0 ? Math.min(requested / configured, 1) : 0;
+    const startAngle = Math.PI * 1.5; // 7点钟 = 270度
+    const endAngle = startAngle + progress * Math.PI * 2; // 顺时针
+    
+    // 绘制进度弧（渐变）
+    if (progress > 0) {
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, radius, startAngle, endAngle);
+        const progGradient = ctx.createLinearGradient(centerX - radius, centerY - radius, centerX + radius, centerY + radius);
+        progGradient.addColorStop(0, color1);
+        progGradient.addColorStop(1, color2);
+        ctx.strokeStyle = progGradient;
+        ctx.lineWidth = 14;
+        ctx.lineCap = 'round';
+        ctx.stroke();
+    }
+    
+    // 绘制刻度线（12个刻度）
+    ctx.strokeStyle = '#4a4a5a';
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 12; i++) {
+        const angle = (i / 12) * Math.PI * 2 - Math.PI / 2;
+        const x1 = centerX + (radius - 18) * Math.cos(angle);
+        const y1 = centerY + (radius - 18) * Math.sin(angle);
+        const x2 = centerX + (radius - 28) * Math.cos(angle);
+        const y2 = centerY + (radius - 28) * Math.sin(angle);
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+    }
+    
+    // 绘制指针（从中心指向当前值，添加颤抖效果）
+    const needleAngle = startAngle + progress * Math.PI * 2 + (gaugeShakeOffset * Math.PI / 180);
+    const needleLength = radius - 35;
+    const x = centerX + needleLength * Math.cos(needleAngle);
+    const y = centerY + needleLength * Math.sin(needleAngle);
+    
+    // 指针阴影
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.4)';
+    ctx.lineWidth = 5;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(centerX + 2, centerY + 2);
+    ctx.lineTo(x + 2, y + 2);
+    ctx.stroke();
+    
+    // 指针本体
+    ctx.strokeStyle = color1;
+    ctx.lineWidth = 5;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(centerX, centerY);
+    ctx.lineTo(x, y);
+    ctx.stroke();
+    
+    // 指针圆头
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(x, y, 6, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // 中心圆
+    const centerGradient = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, 15);
+    centerGradient.addColorStop(0, '#3a3a4a');
+    centerGradient.addColorStop(1, '#1a1a2a');
+    ctx.fillStyle = centerGradient;
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, 15, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // 中心小圆点
+    ctx.fillStyle = color1;
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, 5, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // 绘制数值（被请求数/已配置数）
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 26px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(requested + ' / ' + configured, centerX, centerY + 50);
+}
+
+function updateGauges(data) {
+    // 启动颤抖动画
+    if (!gaugeAnimationId) {
+        gaugeAnimationId = setInterval(() => {
+            animateGaugeShake();
+            // RAPI仪表盘 - 蓝紫色调（被请求数/已配置数）
+            drawGauge('rapiGauge', lastGaugeData.rapi_requested || 0, lastGaugeData.rapi_count, '#6366f1', '#a855f7');
+            // LAPI仪表盘 - 青绿色调（被请求数/已配置数）
+            drawGauge('lapiGauge', lastGaugeData.lapi_requested || 0, lastGaugeData.lapi_count, '#06b6d4', '#10b981');
+        }, 100); // 每100ms更新一次颤抖
+    }
+    
+    // 保存数据供动画使用
+    lastGaugeData = data;
+    
+    // 立即绘制一次
+    drawGauge('rapiGauge', data.rapi_requested || 0, data.rapi_count, '#6366f1', '#a855f7');
+    drawGauge('lapiGauge', data.lapi_requested || 0, data.lapi_count, '#06b6d4', '#10b981');
+}
+
+let lastGaugeData = { rapi_requested: 0, rapi_count: 0, lapi_requested: 0, lapi_count: 0 };
+
+// ============ Request Chart Drawing ============
+let requestHistory = [];
+
+function drawRequestChart(data) {
+    const canvas = document.getElementById('requestChart');
+    if (!canvas) return;
+    
+    const ctx = canvas.getContext('2d');
+    const parent = canvas.parentElement;
+    const containerWidth = parent ? Math.min(800, parent.clientWidth - 40) : 760;
+    const width = canvas.width = containerWidth;
+    const height = canvas.height = 220;
+    const padding = { top: 30, right: 30, bottom: 40, left: 60 };
+    
+    // 清空画布
+    ctx.clearRect(0, 0, width, height);
+    
+    // 准备数据（根据刷新间隔确定数据点数量）
+    const pointsCount = refreshInterval <= 60000 ? 30 : refreshInterval <= 1800000 ? 60 : 90;
+    
+    if (!data || !data.history) {
+        data = { history: [] };
+    }
+    requestHistory = data.history || [];
+    
+    // 如果没有历史数据，生成模拟数据
+    if (requestHistory.length === 0) {
+        const now = Date.now();
+        const intervalMs = refreshInterval <= 60000 ? 60000 : refreshInterval <= 1800000 ? 300000 : 600000;
+        for (let i = pointsCount - 1; i >= 0; i--) {
+            requestHistory.push({
+                time: new Date(now - i * intervalMs).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+                count: 0
+            });
+        }
+    }
+    
+    const chartWidth = width - padding.left - padding.right;
+    const chartHeight = height - padding.top - padding.bottom;
+    
+    // 找出最大值
+    const maxCount = Math.max(5, ...requestHistory.map(d => d.count));
+    
+    // 绘制网格线背景
+    const gridGradient = ctx.createLinearGradient(0, padding.top, 0, height - padding.bottom);
+    gridGradient.addColorStop(0, 'rgba(99, 102, 241, 0.02)');
+    gridGradient.addColorStop(1, 'rgba(168, 85, 247, 0.02)');
+    ctx.fillStyle = gridGradient;
+    ctx.fillRect(padding.left, padding.top, chartWidth, chartHeight);
+    
+    // 绘制网格线
+    ctx.strokeStyle = '#2a2a3a';
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= 4; i++) {
+        const y = padding.top + (chartHeight / 4) * i;
+        ctx.beginPath();
+        ctx.moveTo(padding.left, y);
+        ctx.lineTo(width - padding.right, y);
+        ctx.stroke();
+        
+        // Y轴标签
+        ctx.fillStyle = '#666';
+        ctx.font = '11px Arial';
+        ctx.textAlign = 'right';
+        const label = Math.round(maxCount * (4 - i) / 4);
+        ctx.fillText(label, padding.left - 8, y + 4);
+    }
+    
+    // Y轴标题
+    ctx.fillStyle = '#888';
+    ctx.font = '11px Arial';
+    ctx.textAlign = 'center';
+    ctx.save();
+    ctx.translate(20, height / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillText('请求数', 0, 0);
+    ctx.restore();
+    
+    // 绘制柱状图
+    const barWidth = Math.max(4, chartWidth / requestHistory.length - 3);
+    
+    // 渐变填充
+    const barGradient = ctx.createLinearGradient(0, padding.top, 0, height - padding.bottom);
+    barGradient.addColorStop(0, 'rgba(99, 102, 241, 0.9)');
+    barGradient.addColorStop(1, 'rgba(168, 85, 247, 0.4)');
+    
+    requestHistory.forEach((d, i) => {
+        const x = padding.left + i * (chartWidth / requestHistory.length) + 2;
+        const barHeight = (d.count / maxCount) * chartHeight;
+        const y = height - padding.bottom - barHeight;
+        
+        // 柱状图阴影
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
+        ctx.fillRect(x + 2, y + 2, barWidth, barHeight);
+        
+        // 柱状图本体
+        ctx.fillStyle = barGradient;
+        ctx.fillRect(x, y, barWidth, barHeight);
+    });
+    
+    // 绘制X轴标签（根据数据量决定显示间隔）
+    const labelInterval = Math.max(1, Math.floor(requestHistory.length / 6));
+    ctx.fillStyle = '#666';
+    ctx.font = '11px Arial';
+    ctx.textAlign = 'center';
+    requestHistory.forEach((d, i) => {
+        if (i % labelInterval === 0 || i === requestHistory.length - 1) {
+            const x = padding.left + i * (chartWidth / requestHistory.length) + barWidth / 2;
+            ctx.fillText(d.time, x, height - padding.bottom + 20);
+        }
+    });
+    
+    // X轴标签
+    ctx.fillStyle = '#888';
+    ctx.font = '12px Arial';
+    ctx.fillText('时间 →', width / 2, height - 10);
+}
+
+// ============ Stats ============
+function updateStats() {
+    // 使用Canvas绘制仪表盘（被请求数/已配置数）
+    drawGauge('rapiGauge', rapis.length, rapis.length, '#6366f1', '#a855f7');
+    drawGauge('lapiGauge', lapis.length, lapis.length, '#06b6d4', '#10b981');
+    // 绘制请求趋势图（使用本地数据）
+    drawRequestChart({ history: requestHistory });
+}
+
+// ============ RAPI Form ============
+function toggleRAPIForm() {
+document.getElementById('rapiForm').classList.toggle('hidden');
+document.getElementById('testPanel').classList.add('hidden');
+}
+
+function resetRAPIForm() {
+document.getElementById('rapiId').value = '';
+document.getElementById('rapiAlias').value = '';
+document.getElementById('rapiModel').value = '';
+document.getElementById('rapiPlatformId').value = '';
+}
+
+async function saveRAPI() {
+const id = document.getElementById('rapiId').value;
+const platformId = parseInt(document.getElementById('rapiPlatformId').value);
+const alias = document.getElementById('rapiAlias').value.trim();
+const model = document.getElementById('rapiModel').value.trim();
+
+if (!alias) { showToast('请输入模型别名'); return; }
+if (isNaN(platformId) || platformId <= 0) { showToast('平台未选择'); return; }
+
+const data = {
+    alias: alias,
+    model: model,
+    platform_id: platformId,
+    enabled: true,
+    available: true
+};
+
+try {
+if (id) {
+const existing = rapis.find(r => r.id === parseInt(id));
+if (existing) {
+    data.enabled = existing.enabled;
+    data.available = existing.available;
+}
+const resp = await fetch('/api/rapis', {
+method: 'PUT',
+headers: {'Content-Type': 'application/json'},
+body: JSON.stringify({...data, id: parseInt(id)})
+});
+if (!resp.ok) { const err = await resp.json(); throw new Error(err.error || 'update failed'); }
+showToast('模型已更新');
+} else {
+const resp = await fetch('/api/rapis', {
+method: 'POST',
+headers: {'Content-Type': 'application/json'},
+body: JSON.stringify(data)
+});
+if (!resp.ok) { const err = await resp.json(); throw new Error(err.error || 'create failed'); }
+showToast('模型已添加');
+}
+resetRAPIForm();
+closeRAPIModal();
+await loadRAPIs();
+renderPlatformList();
+updateStats();
+} catch (err) {
+showToast('保存失败: ' + err.message);
+}
+}
+
+function editRAPI(rapi) {
+document.getElementById('rapiId').value = rapi.id;
+document.getElementById('rapiAlias').value = rapi.alias;
+document.getElementById('rapiModel').value = rapi.model || '';
+document.getElementById('rapiPlatformId').value = rapi.platform_id || '';
+document.getElementById('rapiForm').classList.remove('hidden');
+}
+
+async function deleteRAPI(id) {
+if (!confirm('Delete this rapi?')) return;
+await fetch('/api/rapis?id=' + id, {method: 'DELETE'});
+await loadRAPIs();
+renderPlatformList();
+renderRAPIForTest();
+updateStats();
+showToast('rapi deleted');
+}
+
+
+// Global test cache
+window.rapiTestStatus = {};
+
+// MODAL CONTROLS
+function openRAPIModal(id, platformId) {
+    document.getElementById('rapiModal').classList.remove('hidden');
+    const resultDiv = document.getElementById('testResult');
+    const responseDiv = document.getElementById('testResponse');
+    resultDiv.classList.add('hidden');
+    responseDiv.classList.add('hidden');
+    
+    if (id) {
+        document.getElementById('rapiModalTitle').innerHTML = '✏️ 修改模型';
+        document.getElementById('rapiDeleteBtn').style.display = 'block';
+        const r = rapis.find(x => x.id === id);
+        if (r) {
+            editRAPI(r);
+            document.getElementById('testRapiId').value = r.id;
+        }
+    } else {
+        document.getElementById('rapiModalTitle').innerHTML = '✨ 添加模型';
+        document.getElementById('rapiDeleteBtn').style.display = 'none';
+        resetRAPIForm();
+        document.getElementById('rapiPlatformId').value = platformId || '';
+        document.getElementById('testRapiId').value = '';
+    }
+}
+function closeRAPIModal() {
+    document.getElementById('rapiModal').classList.add('hidden');
+}
+
+function openLAPIModal(id) {
+    document.getElementById('lapiModal').classList.remove('hidden');
+    if (id) {
+        document.getElementById('lapiModalTitle').innerHTML = '✏️ 配置本地路由';
+        const lapi = lapis.find(x => x.id === id);
+        if (lapi) {
+            document.getElementById('newLapiAlias').value = lapi.alias;
+            document.getElementById('lapiSaveBtn').onclick = () => updateLAPI(lapi.id);
+            document.getElementById('lapiDeleteBtn').onclick = () => { deleteLAPI(lapi.id); closeLAPIModal(); };
+            document.getElementById('lapiDeleteBtn').style.display = 'block';
+            selectLAPI(lapi.id);
+        }
+    } else {
+        document.getElementById('lapiModalTitle').innerHTML = '✨ 新建本地路由';
+        document.getElementById('newLapiAlias').value = '';
+        document.getElementById('lapiSaveBtn').onclick = createLAPI;
+        document.getElementById('lapiDeleteBtn').style.display = 'none';
+        document.getElementById('chainEditor').innerHTML = '<p style="color:var(--text-muted); text-align:center; padding:60px 20px;">请先创建路由，再配置代理链。</p>';
+    }
+}
+function closeLAPIModal() {
+    document.getElementById('lapiModal').classList.add('hidden');
+}
+
+function deleteRAPIFromModal() {
+    const id = document.getElementById('rapiId').value;
+    if (id) {
+        deleteRAPI(parseInt(id));
+        closeRAPIModal();
+    }
+}
+
+// RAPI list is now rendered under platforms in renderPlatformList()
+function renderRAPIList() {}
+function filterRAPIsManage() {}
+
+// RENDER LAPI LIST as TAGS
+function renderLAPIList(filterTerm = '') {
+    const container = document.getElementById('lapiList');
+    if (lapis.length === 0) {
+        container.innerHTML = '<p style="color:var(--text-muted); text-align:center; width:100%; grid-column: 1 / -1; padding: 40px;">暂无本地路由</p>';
+        return;
+    }
+    
+    let filtered = lapis;
+    if (filterTerm) {
+        const term = filterTerm.toLowerCase();
+        filtered = lapis.filter(r => (r.alias && r.alias.toLowerCase().includes(term)));
+    }
+    
+    container.innerHTML = filtered.map(u => {
+        const chainItems = (u._rapis || []).map((r, i) => {
+            const platform = getRAPIPlatform(r);
+            const platformName = platform ? platform.name : '?';
+            return '<span style="background:rgba(0,212,255,0.1); padding:2px 8px; border-radius:4px; font-size:0.8rem; color:#00d4ff;">' +
+                (i + 1) + '. ' + r.alias + ' <span style="color:#888;">(' + platformName + ')</span></span>';
+        });
+        const chainHTML = chainItems.length > 0 
+            ? '<div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:8px;">' + chainItems.join('<span style="color:#666;">→</span>') + '</div>'
+            : '<span style="color:#666; font-size:0.8rem;">未配置故障转移链</span>';
+        
+        return '<div class="api-tag" style="flex-direction:column; align-items:flex-start; padding:16px;" onclick="openLAPIModal(' + u.id + ')">' +
+               '<div style="display:flex; justify-content:space-between; width:100%; align-items:center;">' +
+                   '<span style="font-weight:600; color:#fff; font-size:1rem;">' + u.alias + '</span>' +
+                   '<div class="tag-indicator" style="background:var(--primary); border-color:#000;"></div>' +
+               '</div>' +
+               chainHTML +
+               '</div>';
+    }).join('');
+}
+
+function filterLAPIs() {
+    const term = document.getElementById('lapiSearch').value;
+    renderLAPIList(term);
+}
+
+// RAPI list is now rendered under platforms in renderPlatformList()
+
+// ============ RAPI Testing ============
+function getRAPIPlatform(rapi) {
+    return platforms.find(p => p.id === rapi.platform_id) || null;
+}
+
+function renderRAPIForTest() {
+const select = document.getElementById('testRapiId');
+select.innerHTML = rapis.map(r => '<option value="' + r.id + '">' + r.alias + '</option>').join('');
+if (rapis.length > 0) loadTestRAPI();
+}
+
+function loadTestRAPI() {
+const rapiId = parseInt(document.getElementById('testRapiId').value);
+const rapi = rapis.find(r => r.id === rapiId);
+if (!rapi) return;
+
+document.getElementById('testPanel').classList.remove('hidden');
+document.getElementById('testBody').value = JSON.stringify({
+model: rapi.model || 'test-model',
+messages: [{role: "user", content: "Hello!"}],
+stream: false
+}, null, 2);
+}
+
+function getEffectiveURL(rapi) {
+const platform = getRAPIPlatform(rapi);
+if (!platform) return null;
+let url = platform.base_url;
+if (url.endsWith('/')) url = url.slice(0, -1);
+if (!url.endsWith('/v1/chat/completions')) {
+    if (url.endsWith('/v1')) url += '/chat/completions';
+    else url += '/v1/chat/completions';
+}
+return url;
+}
+
+async function sendTestRequest() {
+const rapiId = parseInt(document.getElementById('testRapiId').value);
+const rapi = rapis.find(r => r.id === rapiId);
+if (!rapi) return;
+
+const platform = getRAPIPlatform(rapi);
+if (!platform) {
+    alert('此模型未关联平台，请先配置平台');
+    return;
+}
+
+const effectiveURL = getEffectiveURL(rapi);
+const resultDiv = document.getElementById('testResult');
+const responseDiv = document.getElementById('testResponse');
+const responseContent = document.getElementById('testResponseContent');
+
+resultDiv.className = 'test-result';
+resultDiv.textContent = 'Sending request to ' + effectiveURL + '...';
+resultDiv.classList.remove('hidden');
+
+try {
+const body = document.getElementById('testBody').value;
+
+const resp = await fetch(effectiveURL, {
+method: 'POST',
+headers: {
+'Content-Type': 'application/json',
+'Authorization': 'Bearer ' + (platform.token || '')
+},
+body: body
+});
+
+const text = await resp.text();
+responseContent.textContent = text;
+responseDiv.classList.remove('hidden');
+
+if (resp.ok) {
+window.rapiTestStatus[rapiId] = 'success';
+resultDiv.className = 'test-result success';
+resultDiv.textContent = 'Success! 模型 ' + rapi.alias + ' 可用';
+} else {
+window.rapiTestStatus[rapiId] = 'error';
+resultDiv.className = 'test-result error';
+resultDiv.textContent = 'Error ' + resp.status + ': ' + (text.length > 200 ? text.substring(0, 200) + '...' : text);
+}
+} catch (e) {
+window.rapiTestStatus[rapiId] = 'error';
+resultDiv.className = 'test-result error';
+resultDiv.textContent = 'Request failed: ' + e.message + ' (Check URL and network connectivity)';
+}
+}
+
+function testRAPI(rapiId) {
+showTab('platform');
+document.getElementById('testRapiId').value = rapiId;
+loadTestRAPI();
+document.getElementById('rapiForm').classList.add('hidden');
+document.getElementById('testPanel').classList.remove('hidden');
+}
+
+// ============ LAPI Orchestration ============
+function toggleLAPIForm() {
+document.getElementById('lapiForm').classList.toggle('hidden');
+}
+
+async function createLAPI() {
+const alias = document.getElementById('newLapiAlias').value.trim();
+if (!alias) return alert('Please enter alias');
+
+const resp = await fetch('/api/lapis', {
+method: 'POST',
+headers: {'Content-Type': 'application/json'},
+body: JSON.stringify({alias})
+});
+const result = await resp.json();
+
+document.getElementById('newLapiAlias').value = '';
+document.getElementById('lapiForm').classList.add('hidden');
+await loadLAPIs();
+renderLAPIList();
+updateStats();
+showToast('lapi created: ' + result.alias + ' (use this as model name)');
+}
+
+async function updateLAPI(id) {
+const alias = document.getElementById('newLapiAlias').value.trim();
+if (!alias) return alert('Please enter alias');
+
+await fetch('/api/lapis', {
+method: 'PUT',
+headers: {'Content-Type': 'application/json'},
+body: JSON.stringify({id: id, alias: alias})
+});
+
+await loadLAPIs();
+renderLAPIList();
+updateStats();
+showToast('lapi updated');
+}
+
+async function selectLAPI(lapiId) {
+selectedLAPI = lapis.find(u => u.id === lapiId);
+if (!selectedLAPI) return;
+await Promise.all([loadLAPIs(), loadRAPIs(), loadPlatforms()]);
+selectedLAPI = lapis.find(u => u.id === lapiId);
+renderLAPIList();
+renderChainEditor();
+}
+
+function renderChainEditor() {
+const container = document.getElementById('chainEditor');
+if (!selectedLAPI) {
+container.innerHTML = '<p style="color:#666;text-align:center;padding:40px">Select a lapi to configure its rapi chain</p>';
+return;
+}
+
+const currentRAPIs = selectedLAPI._rapis || [];
+container.innerHTML = '<h3 style="color:#fff;margin-bottom:12px">' + selectedLAPI.alias + '</h3>' +
+'<p style="color:#888;font-size:0.85rem;margin-bottom:16px">Drag rapis to configure failover order (1 = highest priority)</p>' +
+
+'<div class="drop-zone" id="chainDropZone" ondragover="onDragOver(event)" ondrop="onDrop(event)" ondragleave="onDragLeave(event)">' +
+(currentRAPIs.length === 0 ? '<div class="drop-zone-placeholder">Drag rapis here to add</div>' :
+currentRAPIs.map((r, i) => {
+    const platform = getRAPIPlatform(r);
+    const platformName = platform ? platform.name : '未关联';
+    return '<div class="rapi-card" draggable="true" ondragstart="onChainDragStart(event, ' + i + ')" ondragend="onChainDragEnd(event)">' +
+    '<div class="rapi-header"><span class="chain-num">' + (i+1) + '</span><span class="rapi-alias">' + r.alias + '</span></div>' +
+    '<div class="rapi-url">' + platformName + ' → ' + (r.model || r.alias) + '</div>' +
+    '<button class="btn btn-danger btn-sm" style="margin-top:8px" onclick="removeFromChain(' + i + ')">Remove</button></div>';
+}).join('')) +
+'</div>' +
+
+'<h3 style="margin-top:24px">Available rapis</h3>' +
+'<p style="color:#888;font-size:0.8rem;margin-bottom:12px">Drag to add to chain above</p>' +
+'<div id="availableRAPIs">' + rapis.filter(r => !currentRAPIs.find(cr => cr.id === r.id)).map(r => {
+    const platform = getRAPIPlatform(r);
+    const platformName = platform ? platform.name : '未关联';
+    return '<div class="rapi-card" draggable="true" ondragstart="onRAPIDragStart(event, ' + r.id + ')" ondragend="onRAPIDragEnd(event)" style="border-left-color:#ff8800">' +
+    '<div class="rapi-header"><span class="rapi-alias">' + r.alias + '</span><span class="badge">Drag to add</span></div>' +
+    '<div class="rapi-url">' + platformName + ' → ' + (r.model || r.alias) + '</div></div>';
+}).join('') + '</div>';
+}
+
+function onRAPIDragStart(e, rapiId) {
+draggedRAPI = rapiId;
+e.dataTransfer.setData('text/plain', 'rapi:' + rapiId);
+e.target.classList.add('dragging');
+}
+
+function onRAPIDragEnd(e) {
+e.target.classList.remove('dragging');
+draggedRAPI = null;
+}
+
+function onChainDragStart(e, index) {
+e.dataTransfer.setData('text/plain', 'chain:' + index);
+e.target.classList.add('dragging');
+}
+
+function onChainDragEnd(e) {
+e.target.classList.remove('dragging');
+}
+
+function onDragOver(e) {
+e.preventDefault();
+document.getElementById('chainDropZone').classList.add('drag-over');
+}
+
+function onDragLeave(e) {
+document.getElementById('chainDropZone').classList.remove('drag-over');
+}
+
+function onDrop(e) {
+e.preventDefault();
+document.getElementById('chainDropZone').classList.remove('drag-over');
+const data = e.dataTransfer.getData('text/plain');
+
+if (!selectedLAPI) return;
+
+// Initialize _rapis array if it doesn't exist
+if (!selectedLAPI._rapis) {
+selectedLAPI._rapis = [];
+}
+
+if (data.startsWith('rapi:')) {
+const rapiId = parseInt(data.split(':')[1]);
+const rapi = rapis.find(r => r.id === rapiId);
+if (rapi && !selectedLAPI._rapis.find(r => r.id === rapiId)) {
+selectedLAPI._rapis.push(rapi);
+saveChain();
+}
+} else if (data.startsWith('chain:')) {
+const fromIndex = parseInt(data.split(':')[1]);
+const toIndex = selectedLAPI._rapis.length - 1;
+if (fromIndex !== toIndex) {
+const [item] = selectedLAPI._rapis.splice(fromIndex, 1);
+selectedLAPI._rapis.splice(toIndex, 0, item);
+saveChain();
+}
+}
+}
+
+async function removeFromChain(index) {
+selectedLAPI._rapis.splice(index, 1);
+saveChain();
+}
+
+async function saveChain() {
+const rapiIds = selectedLAPI._rapis.map(r => r.id);
+await fetch('/api/lapis/' + selectedLAPI.id + '/rapis', {
+method: 'PUT',
+headers: {'Content-Type': 'application/json'},
+body: JSON.stringify(rapiIds)
+});
+await loadLAPIs();
+selectedLAPI = lapis.find(u => u.id === selectedLAPI.id);
+renderLAPIList();
+renderChainEditor();
+showToast('Chain updated');
+}
+
+async function deleteLAPI(id) {
+if (!confirm('Delete this lapi?')) return;
+await fetch('/api/lapis?id=' + id, {method: 'DELETE'});
+if (selectedLAPI && selectedLAPI.id === id) selectedLAPI = null;
+await loadLAPIs();
+renderLAPIList();
+renderChainEditor();
+updateStats();
+showToast('lapi deleted');
+}
+
+// ============ Platform Management ============
+let platforms = [];
+let expandedPlatformId = null;
+
+async function loadPlatforms() {
+    try {
+        const resp = await fetch('/api/platforms');
+        const data = await resp.json();
+        platforms = Array.isArray(data) ? data : [];
+    } catch (e) { platforms = []; }
+}
+
+function getPlatformRAPIs(platformId) {
+    return rapis.filter(r => r.platform_id === platformId);
+}
+
+function renderPlatformList() {
+    const container = document.getElementById('platformList');
+    if (!container) return;
+    if (platforms.length === 0) {
+        container.innerHTML = '<p style="color:var(--text-muted); text-align:center; padding:40px;">暂无平台配置，请先添加平台</p>';
+        return;
+    }
+    container.innerHTML = platforms.map(p => {
+        const tokenMask = p.token ? p.token.substring(0, 4) + '****' + p.token.substring(p.token.length - 4) : 'N/A';
+        const dynamicBadge = p.is_dynamic ? '<span class="badge dynamic">Dynamic</span>' : '<span class="badge">Static</span>';
+        const platformRAPIs = getPlatformRAPIs(p.id);
+        const isExpanded = expandedPlatformId === p.id;
+        
+        const enabledBadge = p.enabled 
+            ? '<span class="badge" style="background:#00ff8822;color:#00ff88;border-color:#00ff8844">已启用</span>'
+            : '<span class="badge" style="background:#ff444422;color:#ff4444;border-color:#ff444444">已禁用</span>';
+        const availableBadge = p.enabled && !p.available
+            ? '<span class="badge" style="background:#ffaa0022;color:#ffaa00;border-color:#ffaa0044">不可用</span>'
+            : '';
+        
+        let modelsHTML = '';
+        if (isExpanded) {
+            modelsHTML = '<div style="margin-top:16px; padding-top:16px; border-top:1px solid var(--border-color);">' +
+                '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">' +
+                    '<span style="color:var(--text-muted); font-size:0.85rem;">模型列表 (' + platformRAPIs.length + ')</span>' +
+                    '<button class="btn btn-sm btn-primary" onclick="event.stopPropagation(); openRAPIModal(null, ' + p.id + ')">+ 添加模型</button>' +
+                '</div>';
+            
+            if (platformRAPIs.length === 0) {
+                modelsHTML += '<p style="color:#666; text-align:center; padding:20px; font-size:0.85rem;">暂无模型，点击上方按钮添加</p>';
+            } else {
+                modelsHTML += platformRAPIs.map(r => {
+                    const modelDisplay = r.model || r.alias;
+                    const rEnabledBadge = r.enabled 
+                        ? (r.available ? '<span style="color:#00ff88;font-size:0.75rem;">●</span>' : '<span style="color:#ffaa00;font-size:0.75rem;">●</span>')
+                        : '<span style="color:#ff4444;font-size:0.75rem;">●</span>';
+                    return '<div class="rapi-card" style="cursor:pointer; margin-bottom:8px; border-left-color:#ff8800;" onclick="event.stopPropagation(); openRAPIModal(' + r.id + ')">' +
+                        '<div style="display:flex; justify-content:space-between; align-items:center; width:100%;">' +
+                            '<div>' +
+                                rEnabledBadge + ' ' +
+                                '<span style="font-weight:600; color:#fff;">' + r.alias + '</span>' +
+                                '<span style="color:#888; font-size:0.85rem; margin-left:8px;">→ ' + modelDisplay + '</span>' +
+                            '</div>' +
+                            '<div style="display:flex; gap:8px;">' +
+                                '<button class="btn btn-sm ' + (r.enabled ? 'btn-secondary' : 'btn-primary') + '" onclick="event.stopPropagation(); toggleRAPI(' + r.id + ', ' + !r.enabled + ')">' + (r.enabled ? '禁用' : '启用') + '</button>' +
+                                '<button class="btn btn-sm btn-danger" onclick="event.stopPropagation(); deleteRAPI(' + r.id + ')">删除</button>' +
+                            '</div>' +
+                        '</div>' +
+                    '</div>';
+                }).join('');
+            }
+            modelsHTML += '</div>';
+        }
+
+        return '<div class="rapi-card" style="margin-bottom:12px; border-left-color:#00d4ff;">' +
+            '<div style="flex:1; min-width:0;">' +
+                '<div class="rapi-header" style="cursor:pointer;" onclick="togglePlatformExpand(' + p.id + ')">' +
+                    '<span class="rapi-alias">' + p.name + '</span>' +
+                    '<div style="display:flex; gap:8px; align-items:center;">' +
+                        enabledBadge + availableBadge + dynamicBadge +
+                        '<span style="color:#888; font-size:0.85rem;">' + platformRAPIs.length + ' 个模型</span>' +
+                        '<span style="color:var(--primary); font-size:1.2rem;">' + (isExpanded ? '▼' : '▶') + '</span>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="rapi-url">' + p.base_url + '</div>' +
+                '<div class="rapi-token">Token: ' + tokenMask + '</div>' +
+                '<div style="display:flex; gap:8px; margin-top:12px;">' +
+                    '<button class="btn btn-sm ' + (p.enabled ? 'btn-secondary' : 'btn-primary') + '" onclick="event.stopPropagation(); togglePlatform(' + p.id + ', ' + !p.enabled + ')">' + (p.enabled ? '禁用平台' : '启用平台') + '</button>' +
+                    '<button class="btn btn-sm btn-secondary" onclick="event.stopPropagation(); openPlatformModal(' + p.id + ')">编辑</button>' +
+                    '<button class="btn btn-sm btn-danger" onclick="event.stopPropagation(); deletePlatform(' + p.id + ')">删除</button>' +
+                '</div>' +
+                modelsHTML +
+            '</div>' +
+        '</div>';
+    }).join('');
+}
+
+function togglePlatformExpand(platformId) {
+    expandedPlatformId = expandedPlatformId === platformId ? null : platformId;
+    renderPlatformList();
+}
+
+async function togglePlatform(id, enabled) {
+    await fetch('/api/platforms/toggle', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({id: id, enabled: enabled})
+    });
+    await loadPlatforms();
+    await loadRAPIs();
+    renderPlatformList();
+    showToast(enabled ? '平台已启用' : '平台已禁用');
+}
+
+async function toggleRAPI(id, enabled) {
+    await fetch('/api/rapis/toggle', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({id: id, enabled: enabled})
+    });
+    await loadRAPIs();
+    renderPlatformList();
+    showToast(enabled ? '模型已启用' : '模型已禁用');
+}
+
+function openPlatformModal(id) {
+    document.getElementById('platformModal').classList.remove('hidden');
+    if (id) {
+        document.getElementById('platformModalTitle').innerHTML = '✏️ 修改平台';
+        document.getElementById('platformDeleteBtn').style.display = 'block';
+        const p = platforms.find(x => x.id === id);
+        if (p) {
+            document.getElementById('platformId').value = p.id;
+            document.getElementById('platformName').value = p.name;
+            document.getElementById('platformURL').value = p.base_url;
+            document.getElementById('platformToken').value = p.token || '';
+            document.getElementById('platformIsDynamic').value = p.is_dynamic ? 'true' : 'false';
+            document.getElementById('platformTokenCommand').value = p.token_command || '';
+            document.getElementById('platformTokenCmdGroup').style.display = p.is_dynamic ? 'block' : 'none';
+        }
+    } else {
+        document.getElementById('platformModalTitle').innerHTML = '✨ 新增平台';
+        document.getElementById('platformDeleteBtn').style.display = 'none';
+        document.getElementById('platformId').value = '';
+        document.getElementById('platformName').value = '';
+        document.getElementById('platformURL').value = '';
+        document.getElementById('platformToken').value = '';
+        document.getElementById('platformIsDynamic').value = 'false';
+        document.getElementById('platformTokenCommand').value = '';
+        document.getElementById('platformTokenCmdGroup').style.display = 'none';
+    }
+}
+
+function closePlatformModal() {
+    document.getElementById('platformModal').classList.add('hidden');
+}
+
+document.getElementById('platformIsDynamic').addEventListener('change', function() {
+    document.getElementById('platformTokenCmdGroup').style.display = this.value === 'true' ? 'block' : 'none';
+});
+
+async function savePlatform(e) {
+    e.preventDefault();
+    const id = document.getElementById('platformId').value;
+    const data = {
+        name: document.getElementById('platformName').value,
+        base_url: document.getElementById('platformURL').value,
+        token: document.getElementById('platformToken').value,
+        is_dynamic: document.getElementById('platformIsDynamic').value === 'true',
+        token_command: document.getElementById('platformTokenCommand').value,
+        enabled: true,
+        available: true
+    };
+
+    if (id) {
+        data.id = parseInt(id);
+        const existing = platforms.find(p => p.id === data.id);
+        if (existing) {
+            data.enabled = existing.enabled;
+            data.available = existing.available;
+        }
+        await fetch('/api/platforms', {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(data)
+        });
+        showToast('平台已更新');
+    } else {
+        await fetch('/api/platforms', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(data)
+        });
+        showToast('平台已创建');
+    }
+    closePlatformModal();
+    await loadPlatforms();
+    renderPlatformList();
+}
+
+async function deletePlatform(id) {
+    if (!confirm('确定删除此平台？关联的 RAPI 将失去平台配置。')) return;
+    await fetch('/api/platforms?id=' + id, {method: 'DELETE'});
+    await loadPlatforms();
+    await loadRAPIs();
+    renderPlatformList();
+    showToast('平台已删除');
+}
+
+async function deletePlatformFromModal() {
+    const id = document.getElementById('platformId').value;
+    if (!id) return;
+    await deletePlatform(id);
+    closePlatformModal();
+}
+
+// ============ Utilities ============
+function copyToClipboard(text) {
+navigator.clipboard.writeText(text).then(() => showToast('Copied to clipboard!'));
+}
+
+function showToast(message) {
+const toast = document.createElement('div');
+toast.className = 'toast';
+toast.textContent = message;
+document.body.appendChild(toast);
+setTimeout(() => toast.remove(), 3000);
+}
+
+// ============ Periodic Refresh ============
+setInterval(async () => {
+await loadAll();
+updateStats();
+await loadStats();
+await checkServicesStatus();
+}, 15000);
+
+// ============ Statistics ============
+// 刷新间隔设置
+let refreshInterval = 60000; // 默认1分钟
+let refreshTimer = null;
+
+function setRefreshInterval(seconds) {
+    refreshInterval = seconds * 1000;
+    if (refreshTimer) {
+        clearInterval(refreshTimer);
+    }
+    if (refreshInterval > 0) {
+        refreshTimer = setInterval(() => {
+            checkServicesStatus();
+            loadStats();
+        }, refreshInterval);
+    }
+}
+
+async function loadStats() {
+try {
+const [rapiStats, lapiStats] = await Promise.all([
+fetch('/api/stats/rapis').then(r => r.json()),
+fetch('/api/stats/lapis').then(r => r.json())
+]);
+
+renderRAPIStats(rapiStats);
+renderLAPIStats(lapiStats);
+} catch (e) {
+console.error('Failed to load stats:', e);
+}
+}
+
+let allRAPIStats = [];
+
+function renderRAPIStats(stats) {
+allRAPIStats = stats;
+filterRAPIStats();
+}
+
+function filterRAPIStats() {
+const searchQuery = document.getElementById('rapiStatsSearch').value.toLowerCase();
+let stats = allRAPIStats.filter(s => s.alias.toLowerCase().includes(searchQuery));
+
+stats.sort((a, b) => {
+const aTime = parseDateTime(a.last_used);
+const bTime = parseDateTime(b.last_used);
+if (aTime === null && bTime === null) return 0;
+if (aTime === null) return 1;
+if (bTime === null) return -1;
+return bTime - aTime;
+});
+
+stats = stats.slice(0, 5);
+
+const container = document.getElementById('rapiStatsTable');
+
+if (!stats || stats.length === 0) {
+container.innerHTML = '<p style="color:#666;text-align:center;padding:20px">No rapi statistics yet</p>';
+return;
+}
+
+let html = '<table class="stats-table"><thead><tr>' +
+'<th>API名称</th><th>成功/总CALL数</th><th>成功率</th><th>平均耗时</th><th>最后请求时间</th><th>访问标志</th>' +
+'</tr></thead><tbody>';
+
+stats.forEach(s => {
+const successRate = s.total_requests > 0 ? s.success_rate.toFixed(1) : '0';
+const avgLatency = s.total_requests > 0 ? s.avg_latency_ms.toFixed(0) : '0';
+const lastUsed = formatDateTime(s.last_used);
+const accessFlag = getAccessFlag(s);
+html += '<tr>' +
+'<td class="stat-total" title="' + s.alias + '">' + s.alias + '</td>' +
+'<td><span class="stat-success">' + (s.success_requests || 0) + '</span> / <span class="stat-total">' + s.total_requests + '</span></td>' +
+'<td><span class="stat-success">' + successRate + '%</span><div class="progress-bar"><div class="progress-fill success" style="width:' + successRate + '%"></div></div></td>' +
+'<td>' + avgLatency + 'ms</td>' +
+'<td style="color:#888;font-size:0.8rem">' + lastUsed + '</td>' +
+'<td><span class="badge" style="' + accessFlag.style + '">' + accessFlag.text + '</span></td>' +
+'</tr>';
+});
+
+html += '</tbody></table>';
+container.innerHTML = html;
+}
+
+function parseDateTime(dtStr) {
+if (!dtStr || dtStr === 'Never' || dtStr === 'null') return null;
+try {
+return new Date(dtStr).getTime();
+} catch {
+return null;
+}
+}
+
+function formatDateTime(dtStr) {
+if (!dtStr || dtStr === 'Never' || dtStr === 'null') return 'Never';
+try {
+const dt = new Date(dtStr);
+if (isNaN(dt.getTime())) return 'Never';
+return dt.toLocaleString('zh-CN', {
+year: 'numeric',
+month: '2-digit',
+day: '2-digit',
+hour: '2-digit',
+minute: '2-digit',
+second: '2-digit'
+});
+} catch {
+return 'Never';
+}
+}
+
+function getAccessFlag(stat) {
+const successRate = stat.total_requests > 0 ? (stat.success_requests || 0) / stat.total_requests * 100 : 0;
+if (stat.total_requests === 0) {
+return { text: '未访问', style: 'background:#3a3a4a;color:#888' };
+} else if (successRate >= 95) {
+return { text: '稳定', style: 'background:#00ff8822;color:#00ff88' };
+} else if (successRate >= 80) {
+return { text: '正常', style: 'background:#ff880022;color:#ff8800' };
+} else {
+return { text: '异常', style: 'background:#ff444422;color:#ff4444' };
+}
+}
+
+let allLAPIStats = [];
+
+function renderLAPIStats(stats) {
+allLAPIStats = stats;
+filterLAPIStats();
+}
+
+function filterLAPIStats() {
+const searchQuery = document.getElementById('lapiStatsSearch').value.toLowerCase();
+let stats = allLAPIStats.filter(s => s.alias.toLowerCase().includes(searchQuery));
+
+stats.sort((a, b) => {
+const aTime = getLastUsedTimestamp(a.rapis);
+const bTime = getLastUsedTimestamp(b.rapis);
+if (aTime === null && bTime === null) return 0;
+if (aTime === null) return 1;
+if (bTime === null) return -1;
+return bTime - aTime;
+});
+
+stats = stats.slice(0, 5);
+
+const container = document.getElementById('lapiStatsTable');
+
+if (!stats || stats.length === 0) {
+container.innerHTML = '<p style="color:#666;text-align:center;padding:20px">No lapi statistics yet</p>';
+return;
+}
+
+let html = '<table class="stats-table"><thead><tr>' +
+'<th>API名称</th><th>成功/总CALL数</th><th>成功率</th><th>平均耗时</th><th>最后请求时间</th><th>访问标志</th>' +
+'</tr></thead><tbody>';
+
+stats.forEach(s => {
+const successRate = s.total_requests > 0 ? s.success_rate.toFixed(1) : '0';
+const avgLatency = s.total_requests > 0 ? s.avg_latency_ms.toFixed(0) : '0';
+const lastUsed = getLastUsedFromRAPIs(s.rapis);
+const accessFlag = getAccessFlag(s);
+html += '<tr>' +
+'<td class="stat-total" title="' + s.alias + '">' + s.alias + '</td>' +
+'<td><span class="stat-success">' + (s.success_requests || 0) + '</span> / <span class="stat-total">' + s.total_requests + '</span></td>' +
+'<td><span class="stat-success">' + successRate + '%</span><div class="progress-bar"><div class="progress-fill success" style="width:' + successRate + '%"></div></div></td>' +
+'<td>' + avgLatency + 'ms</td>' +
+'<td style="color:#888;font-size:0.8rem">' + lastUsed + '</td>' +
+'<td><span class="badge" style="' + accessFlag.style + '">' + accessFlag.text + '</span></td>' +
+'</tr>';
+});
+
+html += '</tbody></table>';
+container.innerHTML = html;
+}
+
+function getLastUsedTimestamp(rapis) {
+if (!rapis || rapis.length === 0) return null;
+let latest = null;
+rapis.forEach(r => {
+if (r.last_used && r.last_used !== 'Never' && r.last_used !== 'null') {
+const ts = parseDateTime(r.last_used);
+if (ts !== null) {
+if (latest === null || ts > latest) {
+latest = ts;
+}
+}
+}
+});
+return latest;
+}
+
+function getLastUsedFromRAPIs(rapis) {
+if (!rapis || rapis.length === 0) return 'Never';
+let latest = 'Never';
+rapis.forEach(r => {
+if (r.last_used && r.last_used !== 'Never' && r.last_used !== 'null') {
+if (latest === 'Never' || r.last_used > latest) {
+latest = r.last_used;
+}
+}
+});
+return formatDateTime(latest);
+}
+
+// ============ Logs Tab ============
+let allLogs = [];
+let allSessions = [];
+
+async function loadLogs() {
+    try {
+        const resp = await fetch('/api/logs/requests');
+        if (!resp.ok) throw new Error('Failed to load logs');
+        const data = await resp.json();
+        allLogs = (data && data.requests) ? data.requests : [];
+        renderLogs();
+    } catch (e) {
+        console.error('Load logs failed:', e);
+    }
+}
+
+async function loadSessions() {
+    try {
+        const resp = await fetch('/api/logs/sessions');
+        if (!resp.ok) throw new Error('Failed to load sessions');
+        const data = await resp.json();
+        allSessions = (data && data.sessions) ? data.sessions : [];
+        renderSessions();
+    } catch (e) {
+        console.error('Load sessions failed:', e);
+    }
+}
+
+function renderSessions() {
+    const container = document.getElementById('sessionsContainer');
+    if (!container) return;
+
+    if (allSessions.length === 0) {
+        container.innerHTML = '<p style="color:#666;font-size:0.9rem">暂无会话</p>';
+        return;
+    }
+
+    container.innerHTML = allSessions.map(s => {
+        const startTime = new Date(s.start_time);
+        const statusText = s.end_time ? '已结束' : '进行中';
+        return '<div class="session-item" style="background:#252540;padding:12px;border-radius:8px;margin-bottom:8px;cursor:pointer;" onclick="filterLogsBySession(\'' + s.id + '\')">' +
+            '<div style="display:flex;justify-content:space-between;align-items:center;">' +
+                '<span style="font-weight:500;color:#00d4ff">会话 ' + s.id.substring(0, 8) + '...</span>' +
+                '<span style="font-size:0.8rem;color:#888">' + startTime.toLocaleString() + '</span>' +
+            '</div>' +
+            '<div style="font-size:0.8rem;color:#888;margin-top:4px">' +
+                s.client_ip + ' | 请求数: ' + s.request_count + ' | 状态: ' + statusText +
+            '</div>' +
+        '</div>';
+    }).join('');
+}
+
+function filterLogsBySession(sessionID) {
+    document.getElementById('logSearch').value = '';
+    document.getElementById('logStatusFilter').value = '';
+    renderLogs(sessionID);
+}
+
+function filterLogs() {
+    renderLogs();
+}
+
+function renderLogs(filterSessionID) {
+    const container = document.getElementById('requestsList');
+    if (!container) return;
+
+    let filtered = allLogs;
+    const search = document.getElementById('logSearch')?.value.toLowerCase() || '';
+    const statusFilter = document.getElementById('logStatusFilter')?.value || '';
+
+    if (filterSessionID) {
+        filtered = filtered.filter(l => l.session_id === filterSessionID);
+    } else {
+        if (search) {
+            filtered = filtered.filter(l => (l.lapi_alias || '').toLowerCase().includes(search));
+        }
+        if (statusFilter) {
+            filtered = filtered.filter(l => {
+                if (statusFilter === 'success') return l.status === 'success';
+                if (statusFilter === 'error') return l.status === 'error';
+                return true;
+            });
+        }
+    }
+
+    if (filtered.length === 0) {
+        container.innerHTML = '<p style="color:#666;text-align:center;padding:40px">暂无日志记录</p>';
+        return;
+    }
+
+    filtered.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+    container.innerHTML = filtered.map(log => {
+        const time = new Date(log.timestamp);
+        const statusColor = log.status === 'success' ? '#00ff88' : log.status === 'error' ? '#ff4444' : '#ff8800';
+        return '<div class="log-card" style="background:#252540;padding:16px;border-radius:8px;margin-bottom:12px;border-left:3px solid ' + statusColor + ';" onclick="showLogDetail(\'' + log.id + '\')">' +
+            '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">' +
+                '<div>' +
+                    '<span style="font-weight:500;color:#fff">' + log.lapi_alias + '</span>' +
+                    '<span style="margin-left:8px;padding:2px 8px;border-radius:4px;font-size:0.75rem;color:' + statusColor + ';background:' + statusColor + '22">' + log.status + '</span>' +
+                '</div>' +
+                '<span style="font-size:0.8rem;color:#888">' + time.toLocaleString() + '</span>' +
+            '</div>' +
+            '<div style="font-size:0.85rem;color:#888;margin-bottom:4px">' +
+                '请求ID: ' + log.id.substring(0, 12) + '... | 会话: ' + log.session_id.substring(0, 8) + '...' +
+            '</div>' +
+            '<div style="font-size:0.8rem;color:#666">' +
+                '延迟: ' + log.latency_ms + 'ms | 令牌: ' + (log.tokens_used || 0) +
+            '</div>' +
+        '</div>';
+    }).join('');
+}
+
+async function showLogDetail(requestID) {
+    try {
+        const resp = await fetch('/api/logs/request/' + requestID);
+        if (!resp.ok) throw new Error('Failed to load log detail');
+        const data = await resp.json();
+
+        const panel = document.getElementById('logDetailPanel');
+        const content = document.getElementById('logDetailContent');
+
+        const statusColor = data.status === 'success' ? '#00ff88' : '#ff4444';
+        let html = '<div style="margin-bottom:16px;">' +
+            '<h4 style="color:#00d4ff;margin-bottom:8px">基本信息</h4>' +
+            '<div style="background:#0f0f1a;padding:12px;border-radius:6px;">' +
+                '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:0.85rem;">' +
+                    '<div><span style="color:#888">请求ID:</span> <span style="color:#fff">' + data.id + '</span></div>' +
+                    '<div><span style="color:#888">会话ID:</span> <span style="color:#fff">' + data.session_id + '</span></div>' +
+                    '<div><span style="color:#888">LAPI:</span> <span style="color:#fff">' + data.lapi_alias + '</span></div>' +
+                    '<div><span style="color:#888">状态:</span> <span style="color:' + statusColor + '">' + data.status + '</span></div>' +
+                    '<div><span style="color:#888">时间:</span> <span style="color:#fff">' + new Date(data.timestamp).toLocaleString() + '</span></div>' +
+                    '<div><span style="color:#888">延迟:</span> <span style="color:#fff">' + data.latency_ms + 'ms</span></div>' +
+                '</div>' +
+            '</div>' +
+        '</div>' +
+
+        '<div style="margin-bottom:16px;">' +
+            '<h4 style="color:#00d4ff;margin-bottom:8px">客户端请求</h4>' +
+            '<div style="background:#0f0f1a;padding:12px;border-radius:6px;">' +
+                '<div style="font-size:0.85rem;color:#888;margin-bottom:8px">Headers:</div>' +
+                '<pre style="font-size:0.75rem;color:#fff;white-space:pre-wrap;">' + formatJSON(data.request_headers) + '</pre>' +
+                '<div style="font-size:0.85rem;color:#888;margin:8px 0">Body:</div>' +
+                '<pre style="font-size:0.75rem;color:#fff;white-space:pre-wrap;">' + formatJSON(data.request_body) + '</pre>' +
+            '</div>' +
+        '</div>' +
+
+        '<div style="margin-bottom:16px;">' +
+            '<h4 style="color:#00d4ff;margin-bottom:8px">上游请求</h4>' +
+            '<div style="background:#0f0f1a;padding:12px;border-radius:6px;">' +
+                '<div style="font-size:0.85rem;color:#888;margin-bottom:8px">RAPI: ' + data.selected_rapi + ' (' + data.upstream_url + ')</div>' +
+                '<div style="font-size:0.85rem;color:#888;margin-bottom:8px">Headers:</div>' +
+                '<pre style="font-size:0.75rem;color:#fff;white-space:pre-wrap;">' + formatJSON(data.upstream_headers) + '</pre>' +
+                '<div style="font-size:0.85rem;color:#888;margin:8px 0">Body:</div>' +
+                '<pre style="font-size:0.75rem;color:#fff;white-space:pre-wrap;">' + formatJSON(data.upstream_body) + '</pre>' +
+            '</div>' +
+        '</div>' +
+
+        '<div style="margin-bottom:16px;">' +
+            '<h4 style="color:#00d4ff;margin-bottom:8px">上游响应</h4>' +
+            '<div style="background:#0f0f1a;padding:12px;border-radius:6px;">' +
+                '<div style="font-size:0.85rem;color:#888;margin-bottom:8px">状态码: ' + data.response_status + '</div>' +
+                '<div style="font-size:0.85rem;color:#888;margin-bottom:8px">Headers:</div>' +
+                '<pre style="font-size:0.75rem;color:#fff;white-space:pre-wrap;">' + formatJSON(data.response_headers) + '</pre>' +
+                '<div style="font-size:0.85rem;color:#888;margin:8px 0">Body:</div>' +
+                '<pre style="font-size:0.75rem;color:#fff;white-space:pre-wrap;">' + formatJSON(data.response_body) + '</pre>' +
+            '</div>' +
+        '</div>';
+
+        if (data.events && data.events.length > 0) {
+            html += '<div>' +
+                '<h4 style="color:#00d4ff;margin-bottom:8px">事件追踪</h4>' +
+                '<div style="background:#0f0f1a;padding:12px;border-radius:6px;">';
+            data.events.forEach(e => {
+                html += '<div style="border-bottom:1px solid #2a2a3a;padding:8px 0;">' +
+                    '<div style="display:flex;justify-content:space-between;">' +
+                        '<span style="color:#00d4ff">' + getEventTypeLabel(e.event_type) + '</span>' +
+                        '<span style="color:#888;font-size:0.8rem">' + new Date(e.timestamp).toLocaleTimeString() + '</span>' +
+                    '</div>' +
+                    (e.data ? '<pre style="font-size:0.75rem;color:#fff;white-space:pre-wrap;margin-top:4px;">' + JSON.stringify(e.data, null, 2) + '</pre>' : '') +
+                '</div>';
+            });
+            html += '</div></div>';
+        }
+
+        content.innerHTML = html;
+        panel.style.display = 'block';
+    } catch (e) {
+        console.error('Load log detail failed:', e);
+    }
+}
+
+function closeLogDetail() {
+    document.getElementById('logDetailPanel').style.display = 'none';
+    document.getElementById('logDetailContent').innerHTML = '';
+}
+
+function formatJSON(str) {
+    if (!str) return '';
+    try {
+        return JSON.stringify(JSON.parse(str), null, 2);
+    } catch {
+        return str;
+    }
+}
+
+function getEventTypeLabel(type) {
+    const labels = {
+        0: '请求接收',
+        1: '路由决策',
+        2: '上游发送',
+        3: '上游响应',
+        4: '客户端响应',
+        5: '错误',
+        'REQUEST_RECEIVED': '请求接收',
+        'ROUTING_DECISION': '路由决策',
+        'UPSTREAM_SENT': '上游发送',
+        'UPSTREAM_RESPONSE': '上游响应',
+        'CLIENT_RESPONSE': '客户端响应',
+        'ERROR': '错误'
+    };
+    return labels[type] || type;
+}
+
+async function clearLogs() {
+    if (!confirm('确定要清空所有日志吗？')) return;
+    try {
+        const resp = await fetch('/api/logs/clear', { method: 'DELETE' });
+        if (!resp.ok) throw new Error('Failed to clear logs');
+        allLogs = [];
+        allSessions = [];
+        renderLogs();
+        renderSessions();
+        showToast('日志已清空');
+    } catch (e) {
+        console.error('Clear logs failed:', e);
+        alert('清空日志失败');
+    }
+}
+
+// Call init after DOM is loaded
+document.addEventListener('DOMContentLoaded', async function() {
+    console.log('DOM loaded, initializing...');
+    rapiGauge = new CyberGauge('rapiGauge', { max: 10, current: 0, title: "rapi 配置" });
+    lapiGauge = new CyberGauge('lapiGauge', { max: 10, current: 0, title: "lapi 配置" });
+    await initStats();
+});
+
+async function initStats() {
+    try {
+        await loadAll();
+        updateStats();
+        await loadStats();
+        await checkServicesStatus();
+    } catch (e) {
+        console.error('Initialization failed:', e);
+    }
+}
+</script>
+</body>
+</html>

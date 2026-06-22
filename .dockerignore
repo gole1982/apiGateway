@@ -1,0 +1,26 @@
+# Dependencies
+vendor/
+
+# Binaries
+*.exe
+gateway
+gateway_tray
+
+# Database (created at runtime)
+gateway.db
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# OS temp
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Logs
+logs/

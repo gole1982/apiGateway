@@ -1,0 +1,6 @@
+.aider*
+.gocache/
+*.exe
+*.db
+logs/
+.traerules

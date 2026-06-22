@@ -1,0 +1,70 @@
+run:
+  timeout: 5m
+  tests: false
+
+linters:
+  enable:
+    - errcheck          
+    - unused            
+    - gosimple          
+    - govet            
+    - ineffassign      
+    - typecheck        
+    - staticcheck      
+    - gofmt            
+    - misspell         
+    - nakedret         
+    - prealloc         
+    - gosec            
+    - dupl             
+    - gocyclo          
+    - depguard         
+    - lll              
+    - unparam          
+    - bodyclose        
+    - exportloopref    
+    - forbidigo        
+    - goimports        
+
+linters-settings:
+  errcheck:
+    check-type-assertions: true
+    check-blank: true
+  
+  gocyclo:
+    min-complexity: 15
+  
+  depguard:
+    rules:
+      main:
+        allow:
+          - $gostd
+          - gateway/internal/...
+          - github.com/...
+  
+  forbidigo:
+    forbid:
+      - ^log$            
+      - ^fmt\.Println$   
+      - ^panic$          
+      - ^print$          
+      - ^println$        
+  
+  lll:
+    line-length: 120
+    tab-width: 4
+  
+  goimports:
+    local-prefixes: gateway/
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - errcheck
+        - gocyclo
+        - lll
+
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
