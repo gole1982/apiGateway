@@ -99,7 +99,34 @@ func (s *WindowsService) Run() error {
 	proxyAddr := fmt.Sprintf("0.0.0.0:%d", cfg.ProxyPort)
 	proxyMux := http.NewServeMux()
 	proxyMux.HandleFunc("/v1/chat/completions", proxyGateway.HandleChatCompletions)
-	// 添加状态页面和统计接口
+	proxyMux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		lapis, _ := db.Get().GetLAPIs()
+		type modelEntry struct {
+			ID       string `json:"id"`
+			Object   string `json:"object"`
+			Created  int64  `json:"created"`
+			OwnedBy  string `json:"owned_by"`
+		}
+		data := make([]modelEntry, 0, len(lapis))
+		for _, l := range lapis {
+			data = append(data, modelEntry{
+				ID:      l.Alias,
+				Object:  "model",
+				Created: l.CreatedAt.Unix(),
+				OwnedBy: "api-gateway",
+			})
+		}
+		resp := map[string]interface{}{"object": "list", "data": data}
+		json.NewEncoder(w).Encode(resp)
+	})
+	// Catch-all: return JSON 404 for unregistered paths instead of Go's default plain text 404
+	proxyMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("proxy: unhandled %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprintf(w, `{"error":{"message":"Unknown endpoint: %s %s","type":"invalid_request","code":"unknown_endpoint"}}`, r.Method, r.URL.Path)
+	})
 	proxyMux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		rapis, _ := db.Get().GetRAPIs()
