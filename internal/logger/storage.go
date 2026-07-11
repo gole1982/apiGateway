@@ -2,6 +2,7 @@ package logger
 
 import (
 	"database/sql"
+	"encoding/json"
 	"time"
 
 	"gateway/internal/db"
@@ -36,6 +37,7 @@ func (s *LogStorage) InitTables() error {
 			request_path TEXT,
 			request_headers TEXT,
 			request_body TEXT,
+			req_max_tokens INTEGER DEFAULT 0,
 			lapi_alias TEXT,
 			matched_rapis TEXT,
 			selected_rapi TEXT,
@@ -47,6 +49,7 @@ func (s *LogStorage) InitTables() error {
 			response_body TEXT,
 			latency_ms INTEGER,
 			tokens_used INTEGER,
+			finish_reason TEXT,
 			error_message TEXT,
 			retry_count INTEGER DEFAULT 0,
 			fallback_used BOOLEAN DEFAULT FALSE,
@@ -70,8 +73,19 @@ func (s *LogStorage) InitTables() error {
 		CREATE INDEX IF NOT EXISTS idx_logs_lapi ON request_logs(lapi_alias);
 		CREATE INDEX IF NOT EXISTS idx_logs_rapi ON request_logs(selected_rapi);
 		CREATE INDEX IF NOT EXISTS idx_logs_status ON request_logs(status);
+		CREATE INDEX IF NOT EXISTS idx_logs_finish_reason ON request_logs(finish_reason);
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+	// Migrate existing DB: add new columns if they don't exist yet.
+	for _, col := range []string{
+		"ALTER TABLE request_logs ADD COLUMN req_max_tokens INTEGER DEFAULT 0",
+		"ALTER TABLE request_logs ADD COLUMN finish_reason TEXT",
+	} {
+		s.db.Conn().Exec(col) // ignore "duplicate column" errors
+	}
+	return nil
 }
 
 func (s *LogStorage) SaveSession(session *Session) error {
@@ -101,18 +115,43 @@ func (s *LogStorage) EndSession(sessionID string) error {
 
 func (s *LogStorage) SaveRequestLog(log *RequestLog) error {
 	_, err := s.db.Conn().Exec(`
-		INSERT OR REPLACE INTO request_logs (
+		INSERT INTO request_logs (
 			id, session_id, timestamp, client_ip, request_method, request_path,
-			request_headers, request_body, lapi_alias, matched_rapis, selected_rapi,
+			request_headers, request_body, req_max_tokens, lapi_alias, matched_rapis, selected_rapi,
 			upstream_url, upstream_headers, upstream_body, response_status,
-			response_headers, response_body, latency_ms, tokens_used, error_message,
+			response_headers, response_body, latency_ms, tokens_used, finish_reason, error_message,
 			retry_count, fallback_used, status, completed_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			session_id      = CASE WHEN excluded.session_id      != '' THEN excluded.session_id      ELSE request_logs.session_id      END,
+			client_ip       = CASE WHEN excluded.client_ip       != '' THEN excluded.client_ip       ELSE request_logs.client_ip       END,
+			request_method  = CASE WHEN excluded.request_method  != '' THEN excluded.request_method  ELSE request_logs.request_method  END,
+			request_path    = CASE WHEN excluded.request_path    != '' THEN excluded.request_path    ELSE request_logs.request_path    END,
+			request_headers = CASE WHEN excluded.request_headers != '' THEN excluded.request_headers ELSE request_logs.request_headers END,
+			request_body    = CASE WHEN excluded.request_body    != '' THEN excluded.request_body    ELSE request_logs.request_body    END,
+			req_max_tokens  = CASE WHEN excluded.req_max_tokens   > 0  THEN excluded.req_max_tokens   ELSE request_logs.req_max_tokens  END,
+			lapi_alias      = CASE WHEN excluded.lapi_alias      != '' THEN excluded.lapi_alias      ELSE request_logs.lapi_alias      END,
+			matched_rapis   = CASE WHEN excluded.matched_rapis   != '' THEN excluded.matched_rapis   ELSE request_logs.matched_rapis   END,
+			selected_rapi   = CASE WHEN excluded.selected_rapi   != '' THEN excluded.selected_rapi   ELSE request_logs.selected_rapi   END,
+			upstream_url    = CASE WHEN excluded.upstream_url    != '' THEN excluded.upstream_url    ELSE request_logs.upstream_url    END,
+			upstream_headers= CASE WHEN excluded.upstream_headers!= '' THEN excluded.upstream_headers ELSE request_logs.upstream_headers END,
+			upstream_body   = CASE WHEN excluded.upstream_body   != '' THEN excluded.upstream_body   ELSE request_logs.upstream_body   END,
+			response_status = CASE WHEN excluded.response_status  > 0  THEN excluded.response_status  ELSE request_logs.response_status  END,
+			response_headers= CASE WHEN excluded.response_headers!= '' THEN excluded.response_headers ELSE request_logs.response_headers END,
+			response_body   = CASE WHEN excluded.response_body   != '' THEN excluded.response_body   ELSE request_logs.response_body   END,
+			latency_ms      = CASE WHEN excluded.latency_ms       > 0  THEN excluded.latency_ms       ELSE request_logs.latency_ms       END,
+			tokens_used     = CASE WHEN excluded.tokens_used      > 0  THEN excluded.tokens_used      ELSE request_logs.tokens_used      END,
+			finish_reason   = CASE WHEN excluded.finish_reason   != '' THEN excluded.finish_reason   ELSE request_logs.finish_reason   END,
+			error_message   = CASE WHEN excluded.error_message   != '' THEN excluded.error_message   ELSE request_logs.error_message   END,
+			retry_count     = CASE WHEN excluded.retry_count      > 0  THEN excluded.retry_count      ELSE request_logs.retry_count      END,
+			fallback_used   = CASE WHEN excluded.fallback_used         THEN excluded.fallback_used    ELSE request_logs.fallback_used    END,
+			status          = CASE WHEN excluded.status NOT IN ('', 'pending') THEN excluded.status   ELSE request_logs.status          END,
+			completed_at    = CASE WHEN excluded.status NOT IN ('', 'pending') THEN excluded.completed_at ELSE request_logs.completed_at END
 	`,
 		log.ID, log.SessionID, log.Timestamp, log.ClientIP, log.RequestMethod, log.RequestPath,
-		log.RequestHeaders, log.RequestBody, log.LapiAlias, log.MatchedRAPIs, log.SelectedRAPI,
+		log.RequestHeaders, log.RequestBody, log.ReqMaxTokens, log.LapiAlias, log.MatchedRAPIs, log.SelectedRAPI,
 		log.UpstreamURL, log.UpstreamHeaders, log.UpstreamBody, log.ResponseStatus,
-		log.ResponseHeaders, log.ResponseBody, log.LatencyMS, log.TokensUsed, log.ErrorMessage,
+		log.ResponseHeaders, log.ResponseBody, log.LatencyMS, log.TokensUsed, log.FinishReason, log.ErrorMessage,
 		log.RetryCount, log.FallbackUsed, log.Status, log.CompletedAt,
 	)
 	return err
@@ -120,11 +159,16 @@ func (s *LogStorage) SaveRequestLog(log *RequestLog) error {
 
 func (s *LogStorage) AppendEvent(requestID string, event *LogEvent) error {
 	eventType := event.EventType.String()
-	data := ""
+	var dataStr string
+	if event.Data != nil {
+		if bytes, err := json.Marshal(event.Data); err == nil {
+			dataStr = string(bytes)
+		}
+	}
 	_, err := s.db.Conn().Exec(`
 		INSERT INTO log_events (request_id, event_type, timestamp, data)
 		VALUES (?, ?, ?, ?)
-	`, requestID, eventType, event.Timestamp, data)
+	`, requestID, eventType, event.Timestamp, dataStr)
 	return err
 }
 
@@ -195,9 +239,9 @@ type RequestLogFilter struct {
 
 func (s *LogStorage) GetRequestLogs(filter RequestLogFilter) ([]RequestLog, error) {
 	query := `SELECT id, session_id, timestamp, client_ip, request_method, request_path,
-		request_headers, request_body, lapi_alias, matched_rapis, selected_rapi,
+		request_headers, request_body, req_max_tokens, lapi_alias, matched_rapis, selected_rapi,
 		upstream_url, upstream_headers, upstream_body, response_status,
-		response_headers, response_body, latency_ms, tokens_used, error_message,
+		response_headers, response_body, latency_ms, tokens_used, finish_reason, error_message,
 		retry_count, fallback_used, status, completed_at FROM request_logs WHERE 1=1`
 	args := []interface{}{}
 
@@ -245,9 +289,9 @@ func (s *LogStorage) GetRequestLogs(filter RequestLogFilter) ([]RequestLog, erro
 		var completedAt sql.NullTime
 		err := rows.Scan(
 			&log.ID, &log.SessionID, &log.Timestamp, &log.ClientIP, &log.RequestMethod, &log.RequestPath,
-			&log.RequestHeaders, &log.RequestBody, &log.LapiAlias, &log.MatchedRAPIs, &log.SelectedRAPI,
+			&log.RequestHeaders, &log.RequestBody, &log.ReqMaxTokens, &log.LapiAlias, &log.MatchedRAPIs, &log.SelectedRAPI,
 			&log.UpstreamURL, &log.UpstreamHeaders, &log.UpstreamBody, &log.ResponseStatus,
-			&log.ResponseHeaders, &log.ResponseBody, &log.LatencyMS, &log.TokensUsed, &log.ErrorMessage,
+			&log.ResponseHeaders, &log.ResponseBody, &log.LatencyMS, &log.TokensUsed, &log.FinishReason, &log.ErrorMessage,
 			&log.RetryCount, &log.FallbackUsed, &log.Status, &completedAt,
 		)
 		if err != nil {
@@ -267,16 +311,16 @@ func (s *LogStorage) GetRequestDetail(requestID string) (*RequestLog, error) {
 
 	err := s.db.Conn().QueryRow(`
 		SELECT id, session_id, timestamp, client_ip, request_method, request_path,
-			request_headers, request_body, lapi_alias, matched_rapis, selected_rapi,
+			request_headers, request_body, req_max_tokens, lapi_alias, matched_rapis, selected_rapi,
 			upstream_url, upstream_headers, upstream_body, response_status,
-			response_headers, response_body, latency_ms, tokens_used, error_message,
+			response_headers, response_body, latency_ms, tokens_used, finish_reason, error_message,
 			retry_count, fallback_used, status, completed_at
 		FROM request_logs WHERE id = ?
 	`, requestID).Scan(
 		&log.ID, &log.SessionID, &log.Timestamp, &log.ClientIP, &log.RequestMethod, &log.RequestPath,
-		&log.RequestHeaders, &log.RequestBody, &log.LapiAlias, &log.MatchedRAPIs, &log.SelectedRAPI,
+		&log.RequestHeaders, &log.RequestBody, &log.ReqMaxTokens, &log.LapiAlias, &log.MatchedRAPIs, &log.SelectedRAPI,
 		&log.UpstreamURL, &log.UpstreamHeaders, &log.UpstreamBody, &log.ResponseStatus,
-		&log.ResponseHeaders, &log.ResponseBody, &log.LatencyMS, &log.TokensUsed, &log.ErrorMessage,
+		&log.ResponseHeaders, &log.ResponseBody, &log.LatencyMS, &log.TokensUsed, &log.FinishReason, &log.ErrorMessage,
 		&log.RetryCount, &log.FallbackUsed, &log.Status, &completedAt,
 	)
 	if err != nil {
@@ -304,7 +348,12 @@ func (s *LogStorage) GetRequestDetail(requestID string) (*RequestLog, error) {
 			event.RequestID = requestID
 			event.EventType = ParseEventType(eventTypeStr)
 			if dataStr.Valid && dataStr.String != "" {
-				event.Data = map[string]interface{}{"raw": dataStr.String}
+				var dataMap map[string]interface{}
+				if err := json.Unmarshal([]byte(dataStr.String), &dataMap); err == nil {
+					event.Data = dataMap
+				} else {
+					event.Data = map[string]interface{}{"raw": dataStr.String}
+				}
 			}
 			log.Events = append(log.Events, event)
 		}
@@ -356,6 +405,11 @@ func (s *LogStorage) CleanupOldRecords(maxAgeDays int, maxRecords int) error {
 	}
 
 	if maxRecords > 0 {
+		// Bug 8.10: delete log_events for orphaned request_logs before deleting the parent rows.
+		_, err = tx.Exec(`DELETE FROM log_events WHERE request_id NOT IN (SELECT id FROM request_logs ORDER BY timestamp DESC LIMIT ?)`, maxRecords)
+		if err != nil {
+			return err
+		}
 		_, err = tx.Exec(`DELETE FROM request_logs WHERE id NOT IN (SELECT id FROM request_logs ORDER BY timestamp DESC LIMIT ?)`, maxRecords)
 		if err != nil {
 			return err

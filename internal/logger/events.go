@@ -41,8 +41,8 @@ func (e EventType) String() string {
 }
 
 type RequestLog struct {
-	ID             string `json:"id"`
-	SessionID      string `json:"session_id"`
+	ID             string    `json:"id"`
+	SessionID      string    `json:"session_id"`
 	Timestamp      time.Time `json:"timestamp"`
 
 	ClientIP       string `json:"client_ip"`
@@ -50,29 +50,33 @@ type RequestLog struct {
 	RequestPath    string `json:"request_path"`
 	RequestHeaders string `json:"request_headers"`
 	RequestBody    string `json:"request_body"`
+	// Extracted from request body for quick filtering (no body parse on hot path).
+	ReqMaxTokens   int    `json:"req_max_tokens"`
 
 	LapiAlias      string `json:"lapi_alias"`
 	MatchedRAPIs   string `json:"matched_rapis"`
 	SelectedRAPI   string `json:"selected_rapi"`
 
-	UpstreamURL    string `json:"upstream_url"`
+	UpstreamURL     string `json:"upstream_url"`
 	UpstreamHeaders string `json:"upstream_headers"`
-	UpstreamBody   string `json:"upstream_body"`
+	UpstreamBody    string `json:"upstream_body"`
 
-	ResponseStatus int    `json:"response_status"`
+	ResponseStatus  int    `json:"response_status"`
 	ResponseHeaders string `json:"response_headers"`
-	ResponseBody   string `json:"response_body"`
-	LatencyMS      int    `json:"latency_ms"`
-	TokensUsed     int    `json:"tokens_used"`
+	ResponseBody    string `json:"response_body"`
+	LatencyMS       int    `json:"latency_ms"`
+	TokensUsed      int    `json:"tokens_used"`
+	// Extracted from upstream response (last non-null finish_reason in SSE stream).
+	FinishReason    string `json:"finish_reason"`
 
-	ErrorMessage   string `json:"error_message"`
-	RetryCount     int    `json:"retry_count"`
-	FallbackUsed   bool   `json:"fallback_used"`
+	ErrorMessage string `json:"error_message"`
+	RetryCount   int    `json:"retry_count"`
+	FallbackUsed bool   `json:"fallback_used"`
 
-	Status         string `json:"status"`
-	CompletedAt    time.Time `json:"completed_at"`
+	Status      string    `json:"status"`
+	CompletedAt time.Time `json:"completed_at"`
 
-	Events         []LogEvent `json:"events"`
+	Events []LogEvent `json:"events"`
 }
 
 type Session struct {

@@ -6,13 +6,26 @@ import (
 	"testing"
 	"time"
 
+	"gateway/internal/crypto"
 	"gateway/internal/models"
 
 	_ "modernc.org/sqlite"
 )
 
+func initTestCrypto(t *testing.T) {
+	t.Helper()
+	// Point the key file to a temp directory so tests don't touch ~/.apiGateway.key.
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir) // Windows
+	if err := crypto.Init(); err != nil {
+		t.Fatalf("crypto.Init: %v", err)
+	}
+}
+
 func setupTestDB(t *testing.T) *DB {
 	t.Helper()
+	initTestCrypto(t)
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 
@@ -28,22 +41,30 @@ func setupTestDB(t *testing.T) *DB {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			name TEXT NOT NULL UNIQUE,
 			base_url TEXT NOT NULL,
+			url_auto_complete INTEGER NOT NULL DEFAULT 1,
 			token TEXT NOT NULL DEFAULT '',
 			is_dynamic INTEGER NOT NULL DEFAULT 0,
-			token_command TEXT,
+			dynamic_mode TEXT NOT NULL DEFAULT '',
+			script_content TEXT NOT NULL DEFAULT '',
+			script_lang TEXT NOT NULL DEFAULT '',
+			refresh_interval_sec INTEGER NOT NULL DEFAULT 0,
 			last_token_fetch DATETIME,
 			enabled INTEGER NOT NULL DEFAULT 1,
 			available INTEGER NOT NULL DEFAULT 1,
+			notes TEXT NOT NULL DEFAULT '',
+			custom_headers TEXT NOT NULL DEFAULT '',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);
 		CREATE TABLE IF NOT EXISTS rapi (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			alias TEXT NOT NULL UNIQUE,
+			alias TEXT NOT NULL,
 			model TEXT NOT NULL DEFAULT '',
+			notes TEXT NOT NULL DEFAULT '',
 			platform_id INTEGER NOT NULL DEFAULT 0,
 			enabled INTEGER NOT NULL DEFAULT 1,
 			available INTEGER NOT NULL DEFAULT 1,
+			unavailable_reason TEXT NOT NULL DEFAULT '',
 			base_cost INTEGER NOT NULL DEFAULT 0,
 			high_cost INTEGER NOT NULL DEFAULT 0,
 			rpm_limit INTEGER NOT NULL DEFAULT 0,
@@ -53,13 +74,18 @@ func setupTestDB(t *testing.T) *DB {
 			tph_limit INTEGER NOT NULL DEFAULT 0,
 			tpd_limit INTEGER NOT NULL DEFAULT 0,
 			time_period_rules TEXT,
+			supported_formats TEXT NOT NULL DEFAULT '["openai"]',
+			custom_headers TEXT NOT NULL DEFAULT '',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			FOREIGN KEY (platform_id) REFERENCES platform(id) ON DELETE CASCADE
+			FOREIGN KEY (platform_id) REFERENCES platform(id) ON DELETE CASCADE,
+			UNIQUE(platform_id, alias)
 		);
 		CREATE TABLE IF NOT EXISTS lapi (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			alias TEXT NOT NULL UNIQUE,
+			notes TEXT NOT NULL DEFAULT '',
+			enabled INTEGER NOT NULL DEFAULT 1,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);
 		CREATE TABLE IF NOT EXISTS lapi_rapi_order (
@@ -72,12 +98,24 @@ func setupTestDB(t *testing.T) *DB {
 			UNIQUE(lapi_id, rapi_id),
 			UNIQUE(lapi_id, order_index)
 		);
+		CREATE TABLE IF NOT EXISTS platform_keys (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			platform_id INTEGER NOT NULL,
+			key_index INTEGER NOT NULL DEFAULT 0,
+			token TEXT NOT NULL DEFAULT '',
+			label TEXT NOT NULL DEFAULT '',
+			enabled INTEGER NOT NULL DEFAULT 1,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (platform_id) REFERENCES platform(id) ON DELETE CASCADE,
+			UNIQUE(platform_id, key_index)
+		);
 		CREATE TABLE IF NOT EXISTS token_cache (
-			platform_id INTEGER PRIMARY KEY,
+			platform_key_id INTEGER PRIMARY KEY,
 			token TEXT NOT NULL,
 			expires_at DATETIME,
 			fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			FOREIGN KEY (platform_id) REFERENCES platform(id) ON DELETE CASCADE
+			FOREIGN KEY (platform_key_id) REFERENCES platform_keys(id) ON DELETE CASCADE
 		);
 		CREATE TABLE IF NOT EXISTS rapi_metrics (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -332,25 +370,93 @@ func TestTokenCache(t *testing.T) {
 	p := &models.Platform{Name: "openai", BaseURL: "https://api.openai.com/v1", Token: ""}
 	db.CreatePlatform(p)
 
-	// Set cache
-	if err := db.SetCachedToken(p.ID, "cached-token-123", 5*time.Minute); err != nil {
-		t.Fatalf("SetCachedToken: %v", err)
+	// Add a platform key first (new schema requires a key row).
+	k := &models.PlatformKey{PlatformID: p.ID, Token: "", Label: "default", Enabled: true}
+	if err := db.AddPlatformKey(k); err != nil {
+		t.Fatalf("AddPlatformKey: %v", err)
 	}
 
-	// Get cache
-	token, err := db.GetCachedToken(p.ID)
+	// Set cache via key
+	if err := db.SetCachedTokenForKey(k.ID, "cached-token-123", 5*time.Minute); err != nil {
+		t.Fatalf("SetCachedTokenForKey: %v", err)
+	}
+
+	// Get cache via key
+	token, err := db.GetCachedTokenForKey(k.ID)
 	if err != nil {
-		t.Fatalf("GetCachedToken: %v", err)
+		t.Fatalf("GetCachedTokenForKey: %v", err)
 	}
 	if token != "cached-token-123" {
-		t.Errorf("GetCachedToken returned %q, want %q", token, "cached-token-123")
+		t.Errorf("GetCachedTokenForKey returned %q, want %q", token, "cached-token-123")
+	}
+
+	// Backward-compat wrappers
+	if err := db.SetCachedToken(p.ID, "compat-token", 5*time.Minute); err != nil {
+		t.Fatalf("SetCachedToken (compat): %v", err)
+	}
+	token, err = db.GetCachedToken(p.ID)
+	if err != nil {
+		t.Fatalf("GetCachedToken (compat): %v", err)
+	}
+	if token != "compat-token" {
+		t.Errorf("GetCachedToken (compat) returned %q, want compat-token", token)
 	}
 
 	// Expired cache
-	db.SetCachedToken(p.ID, "expired-token", -1*time.Minute)
-	token, err = db.GetCachedToken(p.ID)
+	db.SetCachedTokenForKey(k.ID, "expired-token", -1*time.Minute)
+	token, err = db.GetCachedTokenForKey(k.ID)
 	if err == nil && token != "" {
-		t.Errorf("GetCachedToken should return empty for expired token, got %q", token)
+		t.Errorf("GetCachedTokenForKey should return empty for expired token, got %q", token)
+	}
+}
+
+func TestPlatformKeyCRUD(t *testing.T) {
+	db := setupTestDB(t)
+
+	p := &models.Platform{Name: "test-platform", BaseURL: "https://api.test.com/v1", Token: "sk-orig"}
+	db.CreatePlatform(p)
+
+	// Add keys
+	k1 := &models.PlatformKey{PlatformID: p.ID, Token: "key-a", Label: "primary", Enabled: true}
+	k2 := &models.PlatformKey{PlatformID: p.ID, Token: "key-b", Label: "secondary", Enabled: true}
+	if err := db.AddPlatformKey(k1); err != nil {
+		t.Fatalf("AddPlatformKey k1: %v", err)
+	}
+	if err := db.AddPlatformKey(k2); err != nil {
+		t.Fatalf("AddPlatformKey k2: %v", err)
+	}
+
+	keys, err := db.GetPlatformKeys(p.ID)
+	if err != nil {
+		t.Fatalf("GetPlatformKeys: %v", err)
+	}
+	if len(keys) != 2 {
+		t.Fatalf("GetPlatformKeys returned %d, want 2", len(keys))
+	}
+	if keys[0].KeyIndex != 0 || keys[1].KeyIndex != 1 {
+		t.Errorf("key_index ordering wrong: %v %v", keys[0].KeyIndex, keys[1].KeyIndex)
+	}
+
+	// Update key
+	k1.Token = "key-a-updated"
+	if err := db.UpdatePlatformKey(k1); err != nil {
+		t.Fatalf("UpdatePlatformKey: %v", err)
+	}
+	keys, _ = db.GetPlatformKeys(p.ID)
+	if keys[0].Token != "key-a-updated" {
+		t.Errorf("UpdatePlatformKey: token = %q, want key-a-updated", keys[0].Token)
+	}
+
+	// Delete first key; second should become index 0
+	if err := db.DeletePlatformKey(k1.ID); err != nil {
+		t.Fatalf("DeletePlatformKey: %v", err)
+	}
+	keys, _ = db.GetPlatformKeys(p.ID)
+	if len(keys) != 1 {
+		t.Fatalf("After delete, GetPlatformKeys returned %d, want 1", len(keys))
+	}
+	if keys[0].KeyIndex != 0 {
+		t.Errorf("After delete, remaining key_index = %d, want 0", keys[0].KeyIndex)
 	}
 }
 
@@ -424,5 +530,73 @@ func TestRequestTrends(t *testing.T) {
 	}
 	if !found {
 		t.Error("No trend points with request_count > 0")
+	}
+}
+
+// TestRAPISameAliasOnDifferentPlatforms verifies that two platforms can each have a RAPI
+// with the same alias (e.g. "glm-5.2" on JD and on ZhipuAI) now that the uniqueness
+// constraint is UNIQUE(platform_id, alias) rather than UNIQUE(alias).
+func TestRAPISameAliasOnDifferentPlatforms(t *testing.T) {
+	db := setupTestDB(t)
+
+	p1 := &models.Platform{Name: "jd", BaseURL: "https://api.jd.com/v1", Token: "key-jd"}
+	p2 := &models.Platform{Name: "zhipuai", BaseURL: "https://open.bigmodel.cn/v1", Token: "key-zp"}
+	if err := db.CreatePlatform(p1); err != nil {
+		t.Fatalf("CreatePlatform p1: %v", err)
+	}
+	if err := db.CreatePlatform(p2); err != nil {
+		t.Fatalf("CreatePlatform p2: %v", err)
+	}
+
+	r1 := &models.RAPI{Alias: "glm-5.2", Model: "glm-5.2", PlatformID: p1.ID, Enabled: true, Available: true}
+	r2 := &models.RAPI{Alias: "glm-5.2", Model: "glm-5.2", PlatformID: p2.ID, Enabled: true, Available: true}
+
+	if err := db.CreateRAPI(r1); err != nil {
+		t.Fatalf("CreateRAPI on platform 1: %v", err)
+	}
+	if err := db.CreateRAPI(r2); err != nil {
+		t.Fatalf("CreateRAPI same alias on platform 2 (should succeed): %v", err)
+	}
+	if r1.ID == r2.ID {
+		t.Errorf("both RAPIs got same ID %d", r1.ID)
+	}
+
+	// Same alias on same platform must still be rejected.
+	r3 := &models.RAPI{Alias: "glm-5.2", Model: "glm-5.2-dup", PlatformID: p1.ID}
+	if err := db.CreateRAPI(r3); err == nil {
+		t.Error("CreateRAPI with duplicate (platform_id, alias) should have failed but did not")
+	}
+}
+
+// TestTokenEncryptionRoundtrip verifies that tokens written to the DB are stored encrypted
+// and that reading them back returns the original plaintext.
+func TestTokenEncryptionRoundtrip(t *testing.T) {
+	db := setupTestDB(t)
+
+	const secret = "sk-super-secret-api-key"
+	p := &models.Platform{Name: "enc-test", BaseURL: "https://api.example.com/v1", Token: secret}
+	if err := db.CreatePlatform(p); err != nil {
+		t.Fatalf("CreatePlatform: %v", err)
+	}
+
+	// Verify that the raw value stored in SQLite is NOT the plaintext.
+	var rawToken string
+	if err := db.conn.QueryRow("SELECT token FROM platform WHERE id = ?", p.ID).Scan(&rawToken); err != nil {
+		t.Fatalf("raw query: %v", err)
+	}
+	if rawToken == secret {
+		t.Errorf("token stored as plaintext in DB; expected ciphertext")
+	}
+	if len(rawToken) < 4 || rawToken[:4] != "enc:" {
+		t.Errorf("stored token does not have 'enc:' prefix: %q", rawToken)
+	}
+
+	// Reading back via the DB API must return the original plaintext.
+	got, err := db.GetPlatformByID(p.ID)
+	if err != nil {
+		t.Fatalf("GetPlatformByID: %v", err)
+	}
+	if got.Token != secret {
+		t.Errorf("GetPlatformByID returned token %q, want %q", got.Token, secret)
 	}
 }

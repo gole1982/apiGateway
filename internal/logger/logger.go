@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"math/rand"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -68,9 +69,12 @@ func (l *Logger) RecordEvent(event LogEvent) {
 	}
 }
 
-func (l *Logger) RecordRequestReceived(sessionID, clientIP, method, path string, headers map[string]string, body string) {
+func (l *Logger) RecordRequestReceived(requestID, sessionID, clientIP, method, path string, headers map[string]string, body string) {
+	if requestID == "" {
+		requestID = NewRequestID()
+	}
 	event := LogEvent{
-		RequestID: NewRequestID(),
+		RequestID: requestID,
 		SessionID: sessionID,
 		EventType: REQUEST_RECEIVED,
 		Timestamp: time.Now(),
@@ -222,6 +226,7 @@ func (w *LogWorker) flushBatch() {
 func (w *LogWorker) persistBatch(batch []LogEvent) {
 	requestLogs := make(map[string]*RequestLog)
 
+	// First pass: accumulate all events into RequestLog structs.
 	for _, event := range batch {
 		log, ok := requestLogs[event.RequestID]
 		if !ok {
@@ -233,18 +238,25 @@ func (w *LogWorker) persistBatch(batch []LogEvent) {
 			}
 			requestLogs[event.RequestID] = log
 		}
-
 		w.updateRequestLog(log, event)
 	}
 
+	// Second pass: upsert the parent request_log row first, then append child events.
+	// This order is required because log_events has a FK referencing request_logs(id).
 	for _, log := range requestLogs {
 		if log.Status == "pending" {
 			log.Status = "completed"
 			log.CompletedAt = time.Now()
 		}
-		err := w.logger.Storage.SaveRequestLog(log)
-		if err != nil {
+		if err := w.logger.Storage.SaveRequestLog(log); err != nil {
 			saveFailedEvent(log)
+			continue
+		}
+	}
+
+	if w.logger.Storage != nil {
+		for _, event := range batch {
+			w.logger.Storage.AppendEvent(event.RequestID, &event)
 		}
 	}
 }
@@ -257,6 +269,7 @@ func (w *LogWorker) updateRequestLog(log *RequestLog, event LogEvent) {
 		log.RequestPath = getString(event.Data, "request_path")
 		log.RequestHeaders = getString(event.Data, "request_headers")
 		log.RequestBody = getString(event.Data, "request_body")
+		log.ReqMaxTokens = extractMaxTokens(log.RequestBody)
 
 	case ROUTING_DECISION:
 		log.LapiAlias = getString(event.Data, "lapi_alias")
@@ -275,6 +288,7 @@ func (w *LogWorker) updateRequestLog(log *RequestLog, event LogEvent) {
 		log.ResponseBody = getString(event.Data, "response_body")
 		log.LatencyMS = getInt(event.Data, "latency_ms")
 		log.TokensUsed = getInt(event.Data, "tokens_used")
+		log.FinishReason = extractFinishReason(log.ResponseBody)
 
 	case CLIENT_RESPONSE:
 		log.ResponseStatus = getInt(event.Data, "response_status")
@@ -333,6 +347,10 @@ func getString(data map[string]interface{}, key string) string {
 		if s, ok := val.(string); ok {
 			return s
 		}
+		// headers are stored as map[string]string — serialize to JSON string.
+		if b, err := json.Marshal(val); err == nil {
+			return string(b)
+		}
 	}
 	return ""
 }
@@ -359,6 +377,65 @@ func getBool(data map[string]interface{}, key string) bool {
 }
 
 func dropEvent(queueSize int) {
+}
+
+// extractMaxTokens pulls the max_tokens integer out of a JSON request body using
+// a lightweight string scan — avoids a full json.Unmarshal on the hot path.
+func extractMaxTokens(body string) int {
+	const key = `"max_tokens"`
+	idx := strings.Index(body, key)
+	if idx < 0 {
+		return 0
+	}
+	rest := strings.TrimSpace(body[idx+len(key):])
+	if len(rest) == 0 || rest[0] != ':' {
+		return 0
+	}
+	rest = strings.TrimSpace(rest[1:])
+	// Parse the decimal integer that follows.
+	n := 0
+	found := false
+	for _, c := range rest {
+		if c >= '0' && c <= '9' {
+			n = n*10 + int(c-'0')
+			found = true
+		} else if found {
+			break
+		}
+	}
+	if !found {
+		return 0
+	}
+	return n
+}
+
+// extractFinishReason scans an SSE response body for the last non-null finish_reason value.
+// The scan reads backwards through the body to find the terminal chunk efficiently.
+// Returns "" if not found (e.g. streaming body was truncated before the final chunk).
+func extractFinishReason(body string) string {
+	const key = `"finish_reason"`
+	// Walk backwards: last occurrence wins (terminal SSE chunk).
+	idx := strings.LastIndex(body, key)
+	if idx < 0 {
+		return ""
+	}
+	rest := strings.TrimSpace(body[idx+len(key):])
+	if len(rest) == 0 || rest[0] != ':' {
+		return ""
+	}
+	rest = strings.TrimSpace(rest[1:])
+	if strings.HasPrefix(rest, "null") {
+		return ""
+	}
+	// Value is a quoted string: "stop", "length", "content_filter", etc.
+	if len(rest) == 0 || rest[0] != '"' {
+		return ""
+	}
+	end := strings.IndexByte(rest[1:], '"')
+	if end < 0 {
+		return ""
+	}
+	return rest[1 : end+1]
 }
 
 func saveFailedEvent(log *RequestLog) {

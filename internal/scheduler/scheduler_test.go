@@ -19,7 +19,7 @@ func TestPickAvailableSelectsLowestCost(t *testing.T) {
 		models.RAPIWithPlatform{ID: 1, Alias: "expensive", BaseCost: 10},
 		models.RAPIWithPlatform{ID: 2, Alias: "cheap", BaseCost: 1},
 	)
-	got, _, err := m.PickAvailable(1, rapis)
+	got, _, err := m.PickAvailable(1, rapis, "")
 	if err != nil {
 		t.Fatalf("PickAvailable: %v", err)
 	}
@@ -36,7 +36,7 @@ func TestPickAvailableTieBreaksByOrderIndex(t *testing.T) {
 		models.RAPIWithPlatform{ID: 1, Alias: "second", BaseCost: 5, OrderIndex: 2},
 		models.RAPIWithPlatform{ID: 2, Alias: "first", BaseCost: 5, OrderIndex: 1},
 	)
-	got, _, err := m.PickAvailable(1, rapis)
+	got, _, err := m.PickAvailable(1, rapis, "")
 	if err != nil {
 		t.Fatalf("PickAvailable: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestPickAvailableSkipsUnavailable(t *testing.T) {
 	// Mark the cheapest RAPI as unavailable
 	m.MarkFailure(1, time.Time{}, "test failure")
 
-	got, _, err := m.PickAvailable(1, rapis)
+	got, _, err := m.PickAvailable(1, rapis, "")
 	if err != nil {
 		t.Fatalf("PickAvailable: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestAllUnavailableReturnsError(t *testing.T) {
 	)
 	m.MarkFailure(1, time.Time{}, "test failure")
 
-	_, nextAvail, err := m.PickAvailable(1, rapis)
+	_, nextAvail, err := m.PickAvailable(1, rapis, "")
 	if !errors.Is(err, ErrAllRAPIUnavailable) {
 		t.Fatalf("err = %v, want ErrAllRAPIUnavailable", err)
 	}
@@ -164,7 +164,7 @@ func TestRecordRequestUpdatesCounters(t *testing.T) {
 	m.RecordRequest(1, 200)
 
 	m.mu.Lock()
-	c := counters[1]
+	c := m.counters[1]
 	minReqs := c.minute.reqs
 	minToks := c.minute.toks
 	m.mu.Unlock()
@@ -191,7 +191,7 @@ func TestHighCostTriggeredByThreshold(t *testing.T) {
 	m.RecordRequest(1, 10)
 
 	// Now RAPI 1's cost should be 100 (high_cost), RAPI 2's is 50 (base_cost)
-	got, _, err := m.PickAvailable(1, rapis)
+	got, _, err := m.PickAvailable(1, rapis, "")
 	if err != nil {
 		t.Fatalf("PickAvailable: %v", err)
 	}
@@ -215,7 +215,7 @@ func TestTimePeriodCostOverride(t *testing.T) {
 		models.RAPIWithPlatform{ID: 2, Alias: "stable", BaseCost: 50},
 	)
 
-	got, _, err := m.PickAvailable(1, rapis)
+	got, _, err := m.PickAvailable(1, rapis, "")
 	if err != nil {
 		t.Fatalf("PickAvailable: %v", err)
 	}
@@ -278,6 +278,49 @@ func TestWaitQueueFull(t *testing.T) {
 	err := m.Wait(context.Background(), 1, time.Now().Add(time.Millisecond))
 	if !errors.Is(err, ErrQueueFull) {
 		t.Fatalf("Wait err = %v, want ErrQueueFull", err)
+	}
+}
+
+func TestPickAvailablePrefersFormat(t *testing.T) {
+	m := NewManager(testConfig())
+	defer m.Close()
+
+	// When OrderIndex differs, order_index always wins over format preference.
+	rapis := testRAPIs(
+		models.RAPIWithPlatform{ID: 1, Alias: "openai-only", BaseCost: 5, OrderIndex: 1, SupportedFormats: `["openai"]`},
+		models.RAPIWithPlatform{ID: 2, Alias: "anthropic-support", BaseCost: 5, OrderIndex: 2, SupportedFormats: `["openai","anthropic"]`},
+	)
+
+	// Without format preference, should pick by order_index (ID 1 has lower OrderIndex)
+	got, _, err := m.PickAvailable(1, rapis, "")
+	if err != nil {
+		t.Fatalf("PickAvailable: %v", err)
+	}
+	if got.ID != 1 {
+		t.Fatalf("without preference: selected RAPI %d, want 1 (lower order_index)", got.ID)
+	}
+
+	// With anthropic preference, order_index still wins: ID 1 has lower OrderIndex even though
+	// ID 2 supports anthropic natively. User-configured order is the primary criterion.
+	got, _, err = m.PickAvailable(1, rapis, "anthropic")
+	if err != nil {
+		t.Fatalf("PickAvailable: %v", err)
+	}
+	if got.ID != 1 {
+		t.Fatalf("with anthropic preference: selected RAPI %d, want 1 (order_index beats format preference)", got.ID)
+	}
+
+	// When OrderIndex is equal, format preference breaks the tie.
+	rapisTied := testRAPIs(
+		models.RAPIWithPlatform{ID: 3, Alias: "openai-only-tied", BaseCost: 5, OrderIndex: 0, SupportedFormats: `["openai"]`},
+		models.RAPIWithPlatform{ID: 4, Alias: "anthropic-support-tied", BaseCost: 5, OrderIndex: 0, SupportedFormats: `["openai","anthropic"]`},
+	)
+	got, _, err = m.PickAvailable(1, rapisTied, "anthropic")
+	if err != nil {
+		t.Fatalf("PickAvailable (tied): %v", err)
+	}
+	if got.ID != 4 {
+		t.Fatalf("with tied order_index and anthropic preference: selected RAPI %d, want 4 (supports anthropic)", got.ID)
 	}
 }
 
