@@ -78,7 +78,7 @@ func validatePlatformInput(p *models.Platform) error {
 	return nil
 }
 
-type WindowsService struct {
+type Service struct {
 	stopCh    chan struct{}
 	doneCh    chan struct{}
 	isRunning bool
@@ -86,7 +86,7 @@ type WindowsService struct {
 }
 
 var (
-	instance       *WindowsService
+	instance       *Service
 	notifySvc      *notify.NotificationService
 	proxyGateway   *gateway.ProxyGateway
 	httpServer     *http.Server
@@ -95,9 +95,9 @@ var (
 	sessionTracker *logger.SessionTracker
 )
 
-func New() *WindowsService {
+func New() *Service {
 	if instance == nil {
-		instance = &WindowsService{
+		instance = &Service{
 			stopCh: make(chan struct{}),
 			doneCh: make(chan struct{}),
 		}
@@ -105,7 +105,7 @@ func New() *WindowsService {
 	return instance
 }
 
-func (s *WindowsService) Run() error {
+func (s *Service) Run() error {
 	s.mu.Lock()
 	if s.isRunning {
 		s.mu.Unlock()
@@ -269,7 +269,7 @@ func (s *WindowsService) Run() error {
 	return nil
 }
 
-func (s *WindowsService) Stop() error {
+func (s *Service) Stop() error {
 	s.mu.Lock()
 	if !s.isRunning {
 		s.mu.Unlock()
@@ -1355,29 +1355,6 @@ func writeJSONError(w http.ResponseWriter, status int, err error) {
 	errResp, _ := json.Marshal(map[string]string{"error": err.Error()})
 	w.WriteHeader(status)
 	w.Write(errResp)
-}
-
-func init() {
-	isService, _ := isWindowsService()
-	if isService {
-		svcMain()
-	}
-}
-
-func isWindowsService() (bool, error) {
-	return false, nil
-}
-
-func svcMain() {
-	service := New()
-	if err := service.Run(); err != nil {
-		log.Fatal(err)
-	}
-}
-
-func IsWindowsService() bool {
-	isSvc, _ := isWindowsService()
-	return isSvc
 }
 
 func parseTime(tStr string) (time.Time, error) {
