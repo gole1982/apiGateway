@@ -10,14 +10,19 @@ import (
 // PlatformKey represents one API key (token) belonging to a Platform.
 // A platform may have multiple keys for load-spreading / failover.
 type PlatformKey struct {
-	ID         int64     `json:"id"`
-	PlatformID int64     `json:"platform_id"`
-	KeyIndex   int       `json:"key_index"` // 0-based ordering within the platform
-	Token      string    `json:"token"`
-	Label      string    `json:"label,omitempty"`
-	Enabled    bool      `json:"enabled"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID             int64     `json:"id"`
+	PlatformID     int64     `json:"platform_id"`
+	KeyIndex       int       `json:"key_index"` // 0-based ordering within the platform
+	Token          string    `json:"token"`
+	Label          string    `json:"label,omitempty"`
+	Enabled        bool      `json:"enabled"`
+	// SessionHeaders is a JSON object of browser request headers captured alongside
+	// the token for webpage-type platforms. Used by the gateway to replay requests
+	// with the full browser session context instead of just injecting Authorization.
+	// Format: {"Authorization":"Bearer sk-...","Cookie":"...","User-Agent":"..."}
+	SessionHeaders string    `json:"session_headers,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // Platform represents an upstream API provider (e.g., OpenAI, Azure, DeepSeek).
@@ -35,6 +40,18 @@ type Platform struct {
 	// CustomHeaders stores platform-level HTTP headers sent with every upstream request
 	// for all RAPIs under this platform. Same JSON format as RAPI.CustomHeaders.
 	CustomHeaders   string    `json:"custom_headers,omitempty"`
+	// PushSecret is an optional shared secret that must be supplied in the
+	// X-Push-Secret request header (or "secret" body field) when a browser
+	// extension calls POST /api/token/push to update this platform's token.
+	// An empty PushSecret disables the check (any caller on localhost may push).
+	PushSecret      string    `json:"push_secret,omitempty"`
+	// WebpageDomain is the hostname of the chat webpage (e.g. "chat.openai.com").
+	// Used when token_type is "webpage": the browser extension monitors this domain,
+	// intercepts outgoing LLM chat requests, and pushes the captured auth token.
+	WebpageDomain   string    `json:"webpage_domain,omitempty"`
+	// IsDynamic marks browser-session / webpage platforms (vs static API-key platforms).
+	// When true (or WebpageDomain is set), upstream calls replay captured session headers.
+	IsDynamic       bool      `json:"is_dynamic"`
 	LastTokenFetch  time.Time `json:"last_token_fetch"`
 	Enabled         bool      `json:"enabled"`
 	Available       bool      `json:"available"`
@@ -105,6 +122,10 @@ type RAPIWithPlatform struct {
 	URLAutoComplete       bool      `json:"url_auto_complete"`
 	Token                 string    `json:"token"`
 	LastTokenFetch        time.Time `json:"last_token_fetch"`
+	// IsWebpage is true when this RAPI belongs to a webpage-type (browser-intercepted) platform.
+	IsWebpage             bool      `json:"is_webpage,omitempty"`
+	// WebpageDomain is the chat domain for this platform (e.g. "chat.openai.com").
+	WebpageDomain         string    `json:"webpage_domain,omitempty"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
 

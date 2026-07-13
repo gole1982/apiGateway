@@ -801,70 +801,122 @@
         .chain-visualizer {
             display: flex;
             flex-direction: column;
-            gap: 12px;
+            gap: 8px;
             margin: 20px 0;
-            padding: 20px;
+            padding: 16px;
             background: rgba(0, 0, 0, 0.2);
             border-radius: 12px;
             border: 1px solid rgba(255, 255, 255, 0.03);
-            min-height: 100px;
+            min-height: 80px;
         }
         .chain-visual-item {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 12px 18px;
+            padding: 10px 14px;
             background: rgba(56, 189, 248, 0.03);
             border: 1px solid var(--border-glow);
             border-left: 4px solid var(--color-primary);
             border-radius: 8px;
-            transition: all 0.2s ease;
+            transition: border-color 0.15s, background 0.15s, opacity 0.15s;
+            cursor: grab;
+            user-select: none;
         }
+        .chain-visual-item:active { cursor: grabbing; }
         .chain-visual-item.inactive {
             border-color: rgba(100, 116, 139, 0.1);
             border-left-color: var(--text-muted);
             background: rgba(0, 0, 0, 0.1);
             opacity: 0.6;
         }
-        .chain-visual-item:hover {
-            transform: translateX(3px);
-            border-color: rgba(56, 189, 248, 0.35);
+        .chain-visual-item.drag-over {
+            border-color: var(--color-primary);
+            background: rgba(56, 189, 248, 0.08);
+        }
+        .chain-visual-item.dragging {
+            opacity: 0.35;
         }
         .chain-node-info {
             display: flex;
             align-items: center;
-            gap: 12px;
+            gap: 10px;
+            flex: 1;
+            min-width: 0;
         }
+        .chain-drag-handle {
+            display: flex;
+            align-items: center;
+            color: var(--text-muted);
+            flex-shrink: 0;
+            opacity: 0.5;
+        }
+        .chain-drag-handle svg { width: 14px; height: 14px; }
         .chain-index {
             background: var(--bg-solid-light);
             color: var(--color-primary);
-            width: 24px;
-            height: 24px;
+            width: 22px;
+            height: 22px;
             border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 0.78rem;
+            font-size: 0.75rem;
             font-weight: 700;
             font-family: var(--font-mono);
             border: 1px solid var(--border-glow);
+            flex-shrink: 0;
         }
+        .chain-node-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
         .chain-node-name {
             font-weight: 600;
-            font-size: 0.95rem;
+            font-size: 0.92rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .chain-node-platform {
+            font-size: 0.75rem;
+            color: var(--color-primary);
+            background: rgba(56,189,248,0.08);
+            border: 1px solid rgba(56,189,248,0.15);
+            border-radius: 4px;
+            padding: 0px 5px;
+            font-family: var(--font-mono);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            display: inline-block;
+            max-width: 140px;
         }
         .chain-node-cost {
             font-family: var(--font-mono);
-            font-size: 0.8rem;
-            color: var(--text-secondary);
-            padding: 2px 8px;
+            font-size: 0.77rem;
+            color: var(--text-muted);
+            padding: 1px 6px;
             background: rgba(255, 255, 255, 0.03);
             border-radius: 4px;
+            flex-shrink: 0;
         }
         .chain-node-actions {
             display: flex;
             align-items: center;
             gap: 6px;
+            flex-shrink: 0;
+        }
+        /* Draggable cards */
+        .card-drag-enabled {
+            cursor: grab;
+        }
+        .card-drag-enabled:active {
+            cursor: grabbing;
+        }
+        .card-drag-enabled.dragging {
+            opacity: 0.35;
+            transform: scale(0.98);
+        }
+        .card-drag-enabled.drag-over-card {
+            outline: 2px solid var(--color-primary);
+            outline-offset: 2px;
         }
 
         /* OBSERVABILITY HUB LAYOUT */
@@ -1567,46 +1619,72 @@
                     </div>
                     <button class="btn btn-primary" @click="openPlatformModal(null)">+ 添加平台</button>
                 </div>
-                <div class="platforms-container">
-                    <div v-for="plat in filteredPlatforms" :key="plat.id" class="glass-card platform-card">
+                <div class="platforms-container" id="platforms-grid">
+                    <div v-for="plat in filteredPlatforms" :key="plat.id" class="glass-card platform-card card-drag-enabled"
+                         draggable="true"
+                         @dragstart="onCardDragStart($event, 'platforms', plat.id)"
+                         @dragover.prevent="onCardDragOver($event)"
+                         @dragleave="onCardDragLeave($event)"
+                         @drop="onCardDrop($event, 'platforms', plat.id)"
+                         @dragend="onCardDragEnd($event)">
 
                         <!-- 行1：名称 + 类型徽章 -->
                         <div class="platform-header">
                             <div class="platform-meta" style="min-width:0;flex:1;gap:6px;">
                                 <span class="platform-name">{{ plat.name }}</span>
-                                <!-- 静态：锁 🔒 蓝色；动态：闪电 ⚡ 橙色 -->
+                                <!-- API：锁 🔒 蓝色；网页：闪电 ⚡ 橙色 -->
                                 <span class="platform-type" :class="plat.is_dynamic ? 'type-dynamic' : 'type-static'">
                                     <svg v-if="!plat.is_dynamic" style="width:10px;height:10px;flex-shrink:0;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
                                     <svg v-else style="width:10px;height:10px;flex-shrink:0;" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
-                                    {{ plat.is_dynamic ? 'API 推送' : '固定密钥' }}
+                                    {{ plat.is_dynamic ? '网页' : 'API' }}
                                 </span>
                             </div>
                         </div>
 
-                        <!-- 行2：备注 -->
+                        <!-- 行2：备注 / 域名 -->
                         <div class="platform-url" style="color:var(--text-muted);font-style:italic;" :title="plat.base_url">
-                            {{ plat.notes || plat.base_url }}
+                            <template v-if="plat.is_dynamic && plat.webpage_domain">
+                                <span style="font-style:normal;font-family:var(--font-mono);font-size:0.8rem;color:var(--color-secondary);">{{ plat.webpage_domain }}</span>
+                                <span v-if="plat.notes" style="margin-left:6px;">— {{ plat.notes }}</span>
+                            </template>
+                            <template v-else>{{ plat.notes || plat.base_url }}</template>
                         </div>
 
                         <!-- 行3：两个徽章 -->
                         <div class="platform-badges">
-                            <!-- 静态：密钥数 → 点击打开密钥管理 -->
+                            <!-- API令牌：密钥数 → 点击打开密钥管理 -->
                             <button v-if="!plat.is_dynamic"
                                     class="plat-badge plat-badge-key"
                                     @click="openKeysModal(plat)">
                                 <svg style="width:12px;height:12px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8" cy="15" r="4"/><path d="M12 15h8M16 11v8"/></svg>
                                 {{ (plat._keys && plat._keys.length) || 0 }} 个密钥
                             </button>
-                            <!-- 动态：令牌状态按钮，点击查看当前令牌 -->
-                            <button v-else class="plat-badge plat-badge-time"
-                                    :style="(plat._tokenStatus && plat._tokenStatus.has_token) ? 'cursor:pointer;' : 'cursor:default;opacity:0.6;'"
-                                    @click="(plat._tokenStatus && plat._tokenStatus.has_token) && peekPlatformToken(plat)"
-                                    :title="(plat._tokenStatus && plat._tokenStatus.has_token) ? '点击查看当前令牌' : '尚未推送令牌'">
-                                <svg style="width:12px;height:12px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
-                                {{ (plat._tokenStatus && plat._tokenStatus.has_token) ? tokenCountdown(plat._tokenStatus.expires_at) : '未推送' }}
-                            </button>
-                            <!-- 模型数 → 点击打开模型发现 -->
-                            <button class="plat-badge plat-badge-model"
+                            <!-- 网页令牌：就绪状态 -->
+                            <span v-else
+                                  class="plat-badge"
+                                  :style="(plat._tokenStatus && plat._tokenStatus.has_token)
+                                    ? 'background:rgba(34,197,94,0.12);color:var(--color-success);border-color:rgba(34,197,94,0.3);'
+                                    : 'background:rgba(239,68,68,0.08);color:var(--color-danger);border-color:rgba(239,68,68,0.25);opacity:0.85;'"
+                                  :title="(plat._tokenStatus && plat._tokenStatus.has_token) ? '浏览器会话已就绪，网关可接管' : '等待用户在浏览器打开对话页面'">
+                                <svg style="width:12px;height:12px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M9 12l2 2 4-4"/></svg>
+                                {{ (plat._tokenStatus && plat._tokenStatus.has_token) ? '已就绪' : '未就绪' }}
+                            </span>
+                            <!-- 网页令牌：格式可复用性徽章（仅当已就绪且检测过时显示） -->
+                            <span v-if="plat.is_dynamic && plat._tokenStatus && plat._tokenStatus.has_token && plat._tokenStatus.reusable_status !== undefined && plat._tokenStatus.reusable_status !== -1"
+                                  class="plat-badge"
+                                  :style="plat._tokenStatus.reusable_status === 1
+                                    ? 'background:rgba(34,197,94,0.10);color:var(--color-success);border-color:rgba(34,197,94,0.25);'
+                                    : 'background:rgba(245,158,11,0.12);color:var(--color-warning);border-color:rgba(245,158,11,0.3);'"
+                                  :title="plat._tokenStatus.reusable_status === 1
+                                    ? '请求格式为标准 OpenAI 兼容，网关可直接接管代理'
+                                    : '请求格式为平台私有协议，网关无法接管（仅供参考，不影响令牌捕获）\n原因：' + (plat._tokenStatus.reusable_reasons || []).join('；')">
+                                <svg v-if="plat._tokenStatus.reusable_status === 1" style="width:11px;height:11px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                                <svg v-else style="width:11px;height:11px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                                {{ plat._tokenStatus.reusable_status === 1 ? '格式兼容' : '私有协议' }}
+                            </span>
+                            <!-- 模型数 → API令牌平台可点击打开模型发现；网页平台不显示（只有1个固定 webpage 模型） -->
+                            <button v-if="!plat.is_dynamic"
+                                    class="plat-badge plat-badge-model"
                                     @click="fetchPlatformModels(plat)">
                                 <svg style="width:12px;height:12px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
                                 {{ getPlatformRapiCount(plat.id) }} 个模型
@@ -1619,7 +1697,8 @@
                                 <svg style="width:13px;height:13px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
                             </button>
                             <button class="btn btn-secondary btn-sm" @click="openPlatformModal(plat)">修改配置</button>
-                            <button class="btn btn-secondary btn-sm" :disabled="plat._detecting" @click="detectPlatformFormats(plat)" title="向此平台发送探针，检测所有模型的协议兼容性">
+                            <!-- 协议检测只对 API 令牌平台有意义 -->
+                            <button v-if="!plat.is_dynamic" class="btn btn-secondary btn-sm" :disabled="plat._detecting" @click="detectPlatformFormats(plat)" title="向此平台发送探针，检测所有模型的协议兼容性">
                                 <svg v-if="!plat._detecting" style="width:12px;height:12px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/><path d="M11 8v6M8 11h6"/></svg>
                                 <svg v-else style="width:12px;height:12px;animation:spin 1s linear infinite;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
                                 协议检测
@@ -1643,17 +1722,30 @@
                     <button class="btn btn-primary" @click="openRapiModal(null)">+ 添加模型</button>
                 </div>
 
-                <div class="platforms-container">
-                    <div v-for="rapi in filteredRapis" :key="rapi.id" class="glass-card platform-card">
+                <div class="platforms-container" id="rapis-grid">
+                    <div v-for="rapi in filteredRapis" :key="rapi.id" class="glass-card platform-card card-drag-enabled"
+                         draggable="true"
+                         @dragstart="onCardDragStart($event, 'rapis', rapi.id)"
+                         @dragover.prevent="onCardDragOver($event)"
+                         @dragleave="onCardDragLeave($event)"
+                         @drop="onCardDrop($event, 'rapis', rapi.id)"
+                         @dragend="onCardDragEnd($event)">
 
                         <!-- 行1：别名 + 平台 badge + 状态 toggle -->
                         <div class="platform-header">
                             <div class="platform-meta" style="min-width:0;flex:1;gap:6px;">
-                                <span class="platform-name">{{ rapi.alias }}</span>
-                                <span class="platform-type type-static" style="max-width:100px;overflow:hidden;text-overflow:ellipsis;">
-                                    {{ getPlatformName(rapi.platform_id) }}
-                                </span>
-                            </div>
+                                    <span class="platform-name">{{ rapi.alias }}</span>
+                                    <span class="platform-type type-static" style="max-width:100px;overflow:hidden;text-overflow:ellipsis;">
+                                        {{ getPlatformName(rapi.platform_id) }}
+                                    </span>
+                                    <!-- 网页型 RAPI 就绪状态徽章 -->
+                                    <span v-if="rapi.is_webpage"
+                                          :style="rapi.available
+                                            ? 'display:inline-flex;align-items:center;gap:3px;font-size:0.72rem;padding:1px 7px;border-radius:20px;font-weight:600;background:rgba(34,197,94,0.12);color:var(--color-success);border:1px solid rgba(34,197,94,0.3);'
+                                            : 'display:inline-flex;align-items:center;gap:3px;font-size:0.72rem;padding:1px 7px;border-radius:20px;font-weight:600;background:rgba(239,68,68,0.08);color:var(--color-danger);border:1px solid rgba(239,68,68,0.25);'">
+                                        {{ rapi.available ? '已就绪' : '未就绪' }}
+                                    </span>
+                                </div>
                             <button class="plat-toggle" :class="rapi.enabled ? 'on' : 'off'" @click="toggleRapi(rapi)">
                                 <span class="plat-toggle-dot"></span>
                                 {{ rapi.enabled ? '运行中' : '已停用' }}
@@ -1665,12 +1757,12 @@
                             {{ rapi.notes || rapi.model }}
                         </div>
 
-                        <!-- 平台级下线告警 -->
+                        <!-- 不可用告警 -->
                         <div v-if="!rapi.available"
                              style="display:flex;align-items:center;gap:6px;font-size:0.78rem;color:var(--color-danger);background:rgba(244,63,94,0.08);border:1px solid rgba(244,63,94,0.2);border-radius:8px;padding:7px 10px;"
-                             :title="rapi.unavailable_reason || '平台级失效（如 403/402），需手动恢复'">
+                             :title="rapi.unavailable_reason || (rapi.is_webpage ? '等待浏览器会话就绪' : '平台级失效（如 403/402），需手动恢复')">
                             <svg style="width:12px;height:12px;flex-shrink:0;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-                            <span style="font-weight:600;">平台级下线</span>
+                            <span style="font-weight:600;">{{ rapi.is_webpage ? '会话未就绪' : '平台级下线' }}</span>
                             <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:160px;color:var(--text-muted);">{{ rapi.unavailable_reason }}</span>
                         </div>
 
@@ -1705,13 +1797,15 @@
                             <button class="btn btn-danger btn-sm btn-icon" @click="deleteRapi(rapi)" title="删除">
                                 <svg style="width:13px;height:13px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
                             </button>
-                            <button v-if="!rapi.available" class="btn btn-sm btn-success" @click="restoreRapi(rapi)" title="从平台级下线状态恢复">恢复上线</button>
-                            <button class="btn btn-secondary btn-sm" @click="openRapiModal(rapi)">修改</button>
+                            <!-- 恢复上线：只对非网页型 RAPI 显示（网页型由浏览器会话自动恢复） -->
+                            <button v-if="!rapi.available && !rapi.is_webpage" class="btn btn-sm btn-success" @click="restoreRapi(rapi)" title="从平台级下线状态恢复">恢复上线</button>
+                            <!-- 网页型 RAPI 不允许手动编辑（由平台自动管理） -->
+                            <button v-if="!rapi.is_webpage" class="btn btn-secondary btn-sm" @click="openRapiModal(rapi)">修改</button>
                             <button class="btn btn-secondary btn-sm" @click="openAddToLapiModal(rapi)" title="将此模型加入某个 LAPI 的路由链末尾">
                                 <svg style="width:12px;height:12px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
                                 添加到
                             </button>
-                            <button class="btn btn-secondary btn-sm" style="flex:1;justify-content:center;" :disabled="rapi._testing" @click="testRapiFormats(rapi)">
+                            <button v-if="!rapi.is_webpage" class="btn btn-secondary btn-sm" style="flex:1;justify-content:center;" :disabled="rapi._testing" @click="testRapiFormats(rapi)">
                                 <svg style="width:12px;height:12px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
                                 测试连通
                             </button>
@@ -1729,8 +1823,14 @@
                     </div>
                     <button class="btn btn-primary" @click="openLapiModal(null)">+ 创建接口</button>
                 </div>
-                <div class="platforms-container">
-                    <div v-for="lapi in filteredLapis" :key="lapi.id" class="glass-card platform-card">
+                <div class="platforms-container" id="lapis-grid">
+                    <div v-for="lapi in filteredLapis" :key="lapi.id" class="glass-card platform-card card-drag-enabled"
+                         draggable="true"
+                         @dragstart="onCardDragStart($event, 'lapis', lapi.id)"
+                         @dragover.prevent="onCardDragOver($event)"
+                         @dragleave="onCardDragLeave($event)"
+                         @drop="onCardDrop($event, 'lapis', lapi.id)"
+                         @dragend="onCardDragEnd($event)">
 
                         <!-- 行1：接口名称 -->
                         <div class="platform-header">
@@ -1744,11 +1844,41 @@
                             {{ lapi.notes }}
                         </div>
 
-                        <!-- 行3：有效 RAPI 数量，点击进入路由编排 -->
-                        <div class="platform-badges">
+                        <!-- 行3：有效/失效计数 + 当前第一备选 model -->
+                        <div style="cursor:pointer;" @click="editLapiRoutes(lapi)" title="点击编排路由链">
+                            <!-- 计数行 -->
+                            <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;font-size:0.82rem;font-family:var(--font-mono);">
+                                <span :style="{ color: lapi._rapis && lapi._rapis.filter(r => r.enabled && r.available).length > 0 ? 'var(--color-success)' : 'var(--text-muted)', fontWeight: 600 }">
+                                    ● 有效 {{ lapi._rapis ? lapi._rapis.filter(r => r.enabled && r.available).length : 0 }}
+                                </span>
+                                <span v-if="lapi._rapis && lapi._rapis.filter(r => !r.enabled || !r.available).length > 0"
+                                      style="color:var(--color-danger);font-weight:600;">
+                                    ● 失效 {{ lapi._rapis.filter(r => !r.enabled || !r.available).length }}
+                                </span>
+                                <span v-if="!lapi._rapis || lapi._rapis.length === 0" style="color:var(--text-muted);">暂无节点</span>
+                            </div>
+                            <!-- 当前第一备选（链中首个 enabled && available 的节点） -->
+                            <template v-if="lapi._rapis && lapi._rapis.find(r => r.enabled && r.available)">
+                                <div style="display:flex;align-items:center;gap:6px;padding:4px 8px;border-radius:5px;background:rgba(16,185,129,0.05);border:1px solid rgba(16,185,129,0.15);">
+                                    <svg style="width:10px;height:10px;flex-shrink:0;color:var(--color-success);" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
+                                    <span style="font-family:var(--font-mono);font-size:0.82rem;font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-primary);">{{ lapi._rapis.find(r => r.enabled && r.available).alias }}</span>
+                                    <span style="font-size:0.69rem;color:var(--color-primary);background:rgba(56,189,248,0.08);border:1px solid rgba(56,189,248,0.15);border-radius:3px;padding:0 5px;font-family:var(--font-mono);flex-shrink:0;max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ getPlatformName(lapi._rapis.find(r => r.enabled && r.available).platform_id) }}</span>
+                                </div>
+                            </template>
+                            <div v-else-if="lapi._rapis && lapi._rapis.length > 0"
+                                 style="font-size:0.8rem;color:var(--color-danger);padding:4px 0;">
+                                全部节点失效，链路不可用
+                            </div>
+                            <div v-else style="font-size:0.8rem;color:var(--text-muted);padding:4px 0;">
+                                暂无编排模型，点击此处添加 →
+                            </div>
+                        </div>
+
+                        <!-- 行4：快捷按钮 -->
+                        <div class="platform-badges" style="margin-top:4px;">
                             <button class="plat-badge plat-badge-model" @click="editLapiRoutes(lapi)">
                                 <svg style="width:12px;height:12px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
-                                {{ (lapi._rapis ? lapi._rapis.filter(r => r.enabled).length : 0) }} 个有效模型
+                                编排路由链
                             </button>
                             <button class="plat-badge plat-badge-key" @click="openLapiModal(lapi)">
                                 <svg style="width:12px;height:12px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
@@ -1926,47 +2056,26 @@
                             </div>
                         </div>
 
-                        <!-- 令牌类型选择器 -->
+                        <!-- ═══ URL 字段 ═══ -->
                         <div class="form-group" style="margin-top:4px;">
-                            <label style="margin-bottom:10px;display:block;font-weight:600;color:var(--text-primary);">令牌类型</label>
-                            <div style="display:flex;gap:10px;">
-                                <label style="flex:1;display:flex;align-items:center;gap:10px;padding:12px 16px;border-radius:10px;cursor:pointer;border:1px solid;"
-                                       :style="{ borderColor: !platformModal.form.is_dynamic ? 'var(--color-primary)' : 'rgba(255,255,255,0.1)', background: !platformModal.form.is_dynamic ? 'rgba(56,189,248,0.08)' : 'transparent' }">
-                                    <input type="radio" :value="false" v-model="platformModal.form.is_dynamic" style="accent-color:var(--color-primary);">
-                                    <span>
-                                        <strong style="display:block;font-size:0.9rem;">静态令牌</strong>
-                                        <small style="color:var(--text-secondary);">固定 API Key 列表，网关轮换使用</small>
-                                    </span>
-                                </label>
-                                <label style="flex:1;display:flex;align-items:center;gap:10px;padding:12px 16px;border-radius:10px;cursor:pointer;border:1px solid;"
-                                       :style="{ borderColor: platformModal.form.is_dynamic ? 'var(--color-secondary)' : 'rgba(255,255,255,0.1)', background: platformModal.form.is_dynamic ? 'rgba(168,85,247,0.08)' : 'transparent' }">
-                                    <input type="radio" :value="true" v-model="platformModal.form.is_dynamic" style="accent-color:var(--color-secondary);">
-                                    <span>
-                                        <strong style="display:block;font-size:0.9rem;">动态令牌</strong>
-                                        <small style="color:var(--text-secondary);">由外部应用通过 API 端点推送 Token</small>
-                                    </span>
+                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                                <label style="margin:0;">基础 Base URL</label>
+                                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.82rem;color:var(--text-secondary);">
+                                    <input type="checkbox" v-model="platformModal.form.url_auto_complete" style="accent-color:var(--color-primary);">
+                                    <span>自动补全路径 <code style="font-size:0.78rem;color:var(--color-primary);">/v1/chat/completions</code></span>
                                 </label>
                             </div>
+                            <input type="text" class="form-control"
+                                   :placeholder="platformModal.form.url_auto_complete ? 'https://api.openai.com/v1' : 'https://api.openai.com/v1/chat/completions'"
+                                   v-model="platformModal.form.base_url"
+                                   maxlength="512" autocomplete="off" spellcheck="false">
+                            <small v-if="!platformModal.form.url_auto_complete" style="color:var(--color-warning);font-size:0.77rem;margin-top:3px;display:block;">
+                                ⚠ 未勾选自动补全时，URL 将原样发送，请确保已包含完整路径
+                            </small>
                         </div>
 
-                        <!-- ═══ 静态令牌区 ═══ -->
-                        <div v-if="!platformModal.form.is_dynamic" style="margin-top:16px;">
-                            <!-- URL 在静态区域 -->
-                            <div class="form-group">
-                                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                                    <label style="margin:0;">基础 Base URL</label>
-                                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.82rem;color:var(--text-secondary);">
-                                        <input type="checkbox" v-model="platformModal.form.url_auto_complete" style="accent-color:var(--color-primary);">
-                                        <span>自动补全路径 <code style="font-size:0.78rem;color:var(--color-primary);">/v1/chat/completions</code></span>
-                                    </label>
-                                </div>
-                                <input type="text" class="form-control" :placeholder="platformModal.form.url_auto_complete ? 'https://api.openai.com/v1' : 'https://api.openai.com/v1/chat/completions'"
-                                       v-model="platformModal.form.base_url"
-                                       maxlength="512" autocomplete="off" spellcheck="false">
-                                <small v-if="!platformModal.form.url_auto_complete" style="color:var(--color-warning);font-size:0.77rem;margin-top:3px;display:block;">
-                                    ⚠ 未勾选自动补全时，URL 将原样发送，请确保已包含完整路径
-                                </small>
-                            </div>
+                        <!-- ═══ API 密钥区 ═══ -->
+                        <div style="margin-top:16px;">
                             <!-- 密钥列表 -->
                             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
                                 <label style="font-weight:600;">API 密钥列表</label>
@@ -2017,93 +2126,6 @@
                             </div>
                         </div>
 
-                        <!-- ═══ 动态令牌区（API 推送模式）═══ -->
-                        <div v-if="platformModal.form.is_dynamic" style="margin-top:16px;">
-                            <!-- URL -->
-                            <div class="form-group">
-                                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                                    <label style="margin:0;">基础 Base URL</label>
-                                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.82rem;color:var(--text-secondary);">
-                                        <input type="checkbox" v-model="platformModal.form.url_auto_complete" style="accent-color:var(--color-primary);">
-                                        <span>自动补全路径 <code style="font-size:0.78rem;color:var(--color-primary);">/v1/chat/completions</code></span>
-                                    </label>
-                                </div>
-                                <input type="text" class="form-control" :placeholder="platformModal.form.url_auto_complete ? 'https://api.openai.com/v1' : 'https://api.openai.com/v1/chat/completions'"
-                                       v-model="platformModal.form.base_url"
-                                       maxlength="512" autocomplete="off" spellcheck="false">
-                                <small v-if="!platformModal.form.url_auto_complete" style="color:var(--color-warning);font-size:0.77rem;margin-top:3px;display:block;">
-                                    ⚠ 未勾选自动补全时，URL 将原样发送，请确保已包含完整路径
-                                </small>
-                            </div>
-
-                            <!-- 推送端点信息（新建时不可用提示，已有 ID 时直接展示） -->
-                            <div style="background:rgba(34,197,94,0.06);border:1px solid rgba(34,197,94,0.25);border-radius:8px;padding:14px 16px;font-size:0.83rem;line-height:1.9;">
-                                <div style="font-weight:600;color:var(--color-success);margin-bottom:10px;">动态令牌 · API 推送模式</div>
-
-                                <!-- 新建中（尚无 id）：提示先保存 -->
-                                <div v-if="!platformModal.form.id" style="color:var(--text-muted);font-size:0.81rem;padding:8px 0;">
-                                    保存后将自动分配平台 ID，推送端点即可在此查看。
-                                </div>
-
-                                <!-- 已有 id：显示端点 -->
-                                <div v-else>
-                                    <div style="color:var(--text-secondary);margin-bottom:6px;">外部应用通过以下端点推送令牌：</div>
-                                    <div style="background:rgba(0,0,0,0.3);border-radius:6px;padding:8px 12px;font-family:var(--font-mono);font-size:0.82rem;display:flex;align-items:center;gap:8px;margin-bottom:6px;">
-                                        <span style="color:var(--color-primary);flex-shrink:0;">POST</span>
-                                        <span style="flex:1;color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">/api/platforms/push-token/{{ platformModal.form.id }}</span>
-                                        <button class="btn btn-secondary btn-sm" style="font-size:0.76rem;padding:2px 8px;white-space:nowrap;" @click="copyPushEndpoint">复制</button>
-                                    </div>
-                                    <div style="color:var(--text-muted);font-size:0.78rem;">
-                                        请求体：<code style="color:var(--text-secondary);">{"token": "your-token-value"}</code>
-                                        &nbsp;·&nbsp; 成功返回 <code style="color:var(--color-success);">202 Accepted</code>
-                                    </div>
-                                </div>
-
-                                <!-- 令牌状态 -->
-                                <div v-if="platformModal.form.id" style="margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.06);">
-                                    <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:6px;">当前令牌状态</div>
-                                    <div v-if="platformModal.tokenStatus && platformModal.tokenStatus.has_token" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
-                                        <span :style="{ fontWeight:'600', color: platformModal.tokenStatus.valid ? 'var(--color-success)' : 'var(--color-danger)' }">
-                                            {{ platformModal.tokenStatus.valid ? '✓ 有效' : '✗ 已过期' }}
-                                        </span>
-                                        <span style="color:var(--text-muted);font-size:0.79rem;">
-                                            上次推送：{{ formatSecondsSince(platformModal.tokenStatus.seconds_since_push) }}前
-                                        </span>
-                                        <span style="color:var(--text-muted);font-size:0.79rem;">
-                                            到期：{{ formatExpiry(platformModal.tokenStatus.expires_at) }}
-                                        </span>
-                                    </div>
-                                    <div v-else style="color:var(--color-warning);font-size:0.82rem;">
-                                        ⏳ 尚未收到令牌推送
-                                    </div>
-                                </div>
-
-                                <div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.06);color:var(--color-warning);font-size:0.79rem;">
-                                    ⚠ 令牌仅存于内存，网关重启后需重新推送。有效期 55 分钟。
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- 平台级公共 Headers -->
-                        <div style="margin-top:20px;padding-top:16px;border-top:1px solid rgba(255,255,255,0.06);">
-                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-                                <label style="font-weight:600;font-size:0.9rem;">平台级公共 HTTP Headers
-                                    <span style="font-weight:400;font-size:0.78rem;color:var(--text-muted);margin-left:8px;">对此平台下所有模型生效，可被模型级 Headers 覆盖</span>
-                                </label>
-                                <button class="btn btn-secondary btn-sm" @click="platformModal.headers.push({key:'',value:''})">+ 添加</button>
-                            </div>
-                            <div v-if="platformModal.headers.length === 0" style="color:var(--text-muted);font-size:0.84rem;margin-bottom:4px;">暂无公共头，点击"添加"配置。</div>
-                            <div v-for="(h, idx) in platformModal.headers" :key="idx"
-                                 style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:center;margin-bottom:8px;">
-                                <input type="text" class="form-control" placeholder="Header 名 (如 X-Org-ID)" v-model="h.key"
-                                       style="font-family:var(--font-mono);font-size:0.85rem;">
-                                <input type="text" class="form-control" placeholder="值 (如 org-123 或 {{uuid}})" v-model="h.value"
-                                       style="font-family:var(--font-mono);font-size:0.85rem;">
-                                <button class="btn btn-danger btn-sm btn-icon" @click="platformModal.headers.splice(idx,1)">
-                                    <svg style="width:13px;height:13px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-                                </button>
-                            </div>
-                        </div>
                     </div>
                     <div class="modal-footer">
                         <button class="btn btn-secondary" @click="closePlatformModal">取消</button>
@@ -2371,16 +2393,27 @@
                         </p>
                         
                         <div class="chain-visualizer">
-                            <div v-for="(item, idx) in lapiRoutesModal.chain" :key="item.id" class="chain-visual-item">
+                            <div v-for="(item, idx) in lapiRoutesModal.chain" :key="item.id"
+                                 class="chain-visual-item"
+                                 draggable="true"
+                                 @dragstart="onChainDragStart($event, idx)"
+                                 @dragover.prevent="onChainDragOver($event, idx)"
+                                 @dragleave="onChainDragLeave($event)"
+                                 @drop="onChainDrop($event, idx)"
+                                 @dragend="onChainDragEnd($event)">
+                                <div class="chain-drag-handle">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="5" r="1" fill="currentColor"/><circle cx="15" cy="5" r="1" fill="currentColor"/><circle cx="9" cy="12" r="1" fill="currentColor"/><circle cx="15" cy="12" r="1" fill="currentColor"/><circle cx="9" cy="19" r="1" fill="currentColor"/><circle cx="15" cy="19" r="1" fill="currentColor"/></svg>
+                                </div>
                                 <div class="chain-node-info">
                                     <div class="chain-index">{{ idx + 1 }}</div>
-                                    <span class="chain-node-name">{{ item.alias }}</span>
-                                    <span class="chain-node-cost">基础 Cost 权重: {{ item.base_cost }}</span>
+                                    <div class="chain-node-text">
+                                        <span class="chain-node-name">{{ item.alias }}</span>
+                                        <span class="chain-node-platform">{{ getPlatformName(item.platform_id) }}</span>
+                                    </div>
+                                    <span class="chain-node-cost">Cost {{ item.base_cost }}</span>
                                 </div>
                                 <div class="chain-node-actions">
-                                    <button class="btn btn-secondary btn-sm btn-icon" :disabled="idx === 0" @click="moveRouteUp(idx)" title="上移">▲</button>
-                                    <button class="btn btn-secondary btn-sm btn-icon" :disabled="idx === lapiRoutesModal.chain.length - 1" @click="moveRouteDown(idx)" title="下移">▼</button>
-                                    <button class="btn btn-danger btn-sm btn-icon" @click="removeRoute(idx)" title="移除">✕</button>
+                                    <button class="btn btn-danger btn-sm btn-icon" @click.stop="removeRoute(idx)" title="移除">✕</button>
                                 </div>
                             </div>
                             <div v-if="lapiRoutesModal.chain.length === 0" style="text-align:center;color:var(--text-muted);font-size:0.85rem;padding:20px 0;">
@@ -2396,9 +2429,12 @@
                                     @click="quickAddToChain(r)"
                                     class="rapi-quick-btn"
                                     :class="{ 'rapi-quick-btn-match': r._score > 0 }"
-                                    :title="`[${getPlatformName(r.platform_id)}] ${r.model} · Cost ${r.base_cost}`">
-                                    <span style="font-family:var(--font-mono);font-size:0.8rem;">{{ r.alias }}</span>
-                                    <span v-if="r._score > 0" style="font-size:0.7rem;opacity:0.65;margin-left:3px;">●</span>
+                                    :title="`${r.model} · Cost ${r.base_cost}`">
+                                    <span style="display:flex;flex-direction:column;align-items:flex-start;gap:1px;">
+                                        <span style="font-family:var(--font-mono);font-size:0.8rem;line-height:1.2;">{{ r.alias }}</span>
+                                        <span style="font-size:0.69rem;color:var(--color-primary);opacity:0.85;line-height:1.2;font-family:var(--font-mono);">{{ getPlatformName(r.platform_id) }}</span>
+                                    </span>
+                                    <span v-if="r._score > 0" style="font-size:0.7rem;opacity:0.65;margin-left:4px;align-self:center;">●</span>
                                 </button>
                             </div>
                             <div v-else style="text-align:center;color:var(--text-muted);font-size:0.84rem;padding:8px 0;">
@@ -2599,7 +2635,7 @@
                 const platformModal = reactive({
                     show: false,
                     item: null,
-                    form: { name: '', base_url: '', url_auto_complete: true, notes: '', is_dynamic: false, dynamic_mode: 'api', script_content: '', script_lang: 'js', refresh_interval_sec: 0 },
+                    form: { name: '', base_url: '', url_auto_complete: true, notes: '', is_dynamic: false, dynamic_mode: 'api', script_content: '', script_lang: 'js', refresh_interval_sec: 0, webpage_domain: '' },
                     headers: [],      // platform-level custom headers staging list
                     inlineKeys: [],   // staging list for static token keys (not yet persisted)
                     newToken: '',
@@ -2884,10 +2920,12 @@
                         const r = await fetch('/api/platforms');
                         if (r.ok) {
                             const list = await r.json();
-                            // Load keys (static) or token status (api-push) for each platform in parallel.
+                            // Load keys (static) or token status (webpage/api-push) for each platform in parallel.
+                            // Webpage platforms (webpage_domain set) and api-push platforms (is_dynamic+dynamic_mode=api)
+                            // both use the token-status endpoint; static key platforms load their key list.
                             await Promise.all(list.map(async (p) => {
                                 try {
-                                    if (p.is_dynamic && p.dynamic_mode === 'api') {
+                                    if (p.webpage_domain || (p.is_dynamic && p.dynamic_mode === 'api')) {
                                         const sr = await fetch(`/api/platforms/token-status/${p.id}`);
                                         p._tokenStatus = sr.ok ? await sr.json() : null;
                                         p._keys = [];
@@ -3124,19 +3162,20 @@
                             base_url: item.base_url,
                             url_auto_complete: item.url_auto_complete !== false,
                             notes: item.notes || '',
-                            is_dynamic: item.is_dynamic || false,
+                            is_dynamic: !!(item.is_dynamic || item.webpage_domain),
                             dynamic_mode: item.dynamic_mode || 'api',
                             script_content: item.script_content || '',
                             script_lang: item.script_lang || 'js',
                             refresh_interval_sec: item.refresh_interval_sec || 0,
                             enabled: item.enabled,
-                            available: item.available
+                            available: item.available,
+                            webpage_domain: item.webpage_domain || ''
                         };
                         try {
                             platformModal.headers = item.custom_headers && item.custom_headers !== ''
                                 ? JSON.parse(item.custom_headers) : [];
                         } catch (_) { platformModal.headers = []; }
-                        if (!item.is_dynamic) {
+                        if (!item.is_dynamic && !item.webpage_domain) {
                             try {
                                 const kr = await fetch(`/api/platforms/${item.id}/keys`);
                                 platformModal.inlineKeys = kr.ok ? (await kr.json()) : [];
@@ -3145,14 +3184,14 @@
                             }
                         } else {
                             platformModal.inlineKeys = [];
-                            // Load push status for API-push platforms
+                            // Load push/session status for API-push and webpage platforms
                             try {
                                 const sr = await fetch(`/api/platforms/token-status/${item.id}`);
                                 platformModal.tokenStatus = sr.ok ? await sr.json() : null;
                             } catch (e) {}
                         }
                     } else {
-                        platformModal.form = { name: '', base_url: '', url_auto_complete: true, notes: '', is_dynamic: false, dynamic_mode: 'api', script_content: '', script_lang: 'js', refresh_interval_sec: 0, enabled: true, available: true };
+                        platformModal.form = { name: '', base_url: '', url_auto_complete: true, notes: '', is_dynamic: false, dynamic_mode: 'api', script_content: '', script_lang: 'js', refresh_interval_sec: 0, enabled: true, available: true, webpage_domain: '' };
                         platformModal.headers = [];
                         platformModal.inlineKeys = [];
                     }
@@ -3209,10 +3248,11 @@
 
                 // Copy push-token endpoint URL to clipboard
                 const copyPushEndpoint = () => {
-                    const id = platformModal.form.id || '';
-                    const url = `${location.origin}/api/platforms/push-token/${id}`;
-                    navigator.clipboard.writeText(url).then(() => {
-                        showToast('已复制', '推送端点已复制到剪贴板', 'success');
+                    const domain = platformModal.form.webpage_domain || '';
+                    const url = `${location.origin}/api/token/push`;
+                    const body = `{"domain":"${domain}","token":"<YOUR_TOKEN>"}`;
+                    navigator.clipboard.writeText(`${url}\n${body}`).then(() => {
+                        showToast('已复制', '推送端点及请求体模板已复制到剪贴板', 'success');
                     }).catch(() => {
                         showToast('复制失败', '请手动复制端点 URL', 'error');
                     });
@@ -3288,30 +3328,11 @@
                         showToast('验证失败', 'Base URL 必须以 http:// 或 https:// 开头', 'error');
                         return;
                     }
-                    if (form.is_dynamic && form.dynamic_mode !== 'api') {
-                        if (!form.script_lang || (form.script_lang !== 'js' && form.script_lang !== 'ts')) {
-                            showToast('验证失败', '请选择脚本语言（Node.js 或 ts-node）', 'error');
-                            return;
-                        }
-                        if (!form.script_content || !form.script_content.trim()) {
-                            showToast('验证失败', '脚本内容不能为空', 'error');
-                            return;
-                        }
-                        if (form.script_content.length > 65536) {
-                            showToast('验证失败', '脚本内容超过最大允许大小 (64 KiB)', 'error');
-                            return;
-                        }
-                        const interval = parseInt(form.refresh_interval_sec, 10);
-                        if (isNaN(interval) || interval < 0 || interval > 86400) {
-                            showToast('验证失败', '刷新间隔必须在 0～86400 秒之间', 'error');
-                            return;
-                        }
-                    }
+                    // Always API mode — force is_dynamic off before sending
+                    form.is_dynamic = false;
 
-                    // Serialize platform-level headers into form before sending.
-                    form.custom_headers = JSON.stringify(
-                        platformModal.headers.filter(h => h.key && h.key.trim() !== '')
-                    );
+                    // No platform-level custom headers in API mode
+                    form.custom_headers = '[]';
 
                     try {
                         const r = await fetch('/api/platforms', {
@@ -3626,16 +3647,14 @@
 
                 const moveRouteUp = (idx) => {
                     if (idx <= 0) return;
-                    const temp = lapiRoutesModal.chain[idx];
-                    lapiRoutesModal.chain[idx] = lapiRoutesModal.chain[idx - 1];
-                    lapiRoutesModal.chain[idx - 1] = temp;
+                    const chain = lapiRoutesModal.chain;
+                    [chain[idx], chain[idx - 1]] = [chain[idx - 1], chain[idx]];
                 };
 
                 const moveRouteDown = (idx) => {
                     if (idx >= lapiRoutesModal.chain.length - 1) return;
-                    const temp = lapiRoutesModal.chain[idx];
-                    lapiRoutesModal.chain[idx] = lapiRoutesModal.chain[idx + 1];
-                    lapiRoutesModal.chain[idx + 1] = temp;
+                    const chain = lapiRoutesModal.chain;
+                    [chain[idx], chain[idx + 1]] = [chain[idx + 1], chain[idx]];
                 };
 
                 const removeRoute = (idx) => {
@@ -3655,6 +3674,91 @@
                     if (!lapiRoutesModal.chain.some(x => x.id === rapi.id)) {
                         lapiRoutesModal.chain.push(rapi);
                     }
+                };
+
+                // ── CHAIN DRAG-AND-DROP ─────────────────────────────────
+                let chainDragIdx = ref(-1);
+
+                const onChainDragStart = (evt, idx) => {
+                    chainDragIdx.value = idx;
+                    evt.currentTarget.classList.add('dragging');
+                    evt.dataTransfer.effectAllowed = 'move';
+                };
+                const onChainDragOver = (evt, idx) => {
+                    if (chainDragIdx.value === idx) return;
+                    evt.currentTarget.classList.add('drag-over');
+                };
+                const onChainDragLeave = (evt) => {
+                    evt.currentTarget.classList.remove('drag-over');
+                };
+                const onChainDrop = async (evt, toIdx) => {
+                    evt.currentTarget.classList.remove('drag-over');
+                    const fromIdx = chainDragIdx.value;
+                    if (fromIdx === -1 || fromIdx === toIdx) return;
+                    const chain = lapiRoutesModal.chain;
+                    const moved = chain.splice(fromIdx, 1)[0];
+                    chain.splice(toIdx, 0, moved);
+                    chainDragIdx.value = -1;
+                    // Auto-save new order
+                    if (lapiRoutesModal.lapi) {
+                        try {
+                            await fetch(`/api/lapis/${lapiRoutesModal.lapi.id}/rapis`, {
+                                method: 'PUT',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(chain.map(x => x.id))
+                            });
+                        } catch (e) {}
+                    }
+                };
+                const onChainDragEnd = (evt) => {
+                    evt.currentTarget.classList.remove('dragging');
+                    chainDragIdx.value = -1;
+                    document.querySelectorAll('.chain-visual-item.drag-over').forEach(el => el.classList.remove('drag-over'));
+                };
+
+                // ── CARD GRID DRAG-AND-DROP ──────────────────────────────
+                // Stores: { type: 'platforms'|'rapis'|'lapis', id: number }
+                let cardDrag = ref({ type: '', id: -1 });
+
+                const onCardDragStart = (evt, type, id) => {
+                    cardDrag.value = { type, id };
+                    evt.currentTarget.classList.add('dragging');
+                    evt.dataTransfer.effectAllowed = 'move';
+                };
+                const onCardDragOver = (evt) => {
+                    evt.currentTarget.classList.add('drag-over-card');
+                };
+                const onCardDragLeave = (evt) => {
+                    evt.currentTarget.classList.remove('drag-over-card');
+                };
+                const onCardDrop = async (evt, type, toId) => {
+                    evt.currentTarget.classList.remove('drag-over-card');
+                    const { type: fromType, id: fromId } = cardDrag.value;
+                    if (fromType !== type || fromId === toId || fromId === -1) return;
+                    const list = type === 'platforms' ? platforms : type === 'rapis' ? rapis : lapis;
+                    const arr = list.value;
+                    const fromIdx = arr.findIndex(x => x.id === fromId);
+                    const toIdx   = arr.findIndex(x => x.id === toId);
+                    if (fromIdx === -1 || toIdx === -1) return;
+                    const moved = arr.splice(fromIdx, 1)[0];
+                    arr.splice(toIdx, 0, moved);
+                    cardDrag.value = { type: '', id: -1 };
+                    // Persist order — lapis display order is UI-only (no server endpoint needed)
+                    if (type === 'platforms' || type === 'rapis') {
+                        const endpoint = type === 'platforms' ? '/api/platforms/reorder' : '/api/rapis/reorder';
+                        try {
+                            await fetch(endpoint, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(arr.map(x => x.id))
+                            });
+                        } catch (e) {}
+                    }
+                };
+                const onCardDragEnd = (evt) => {
+                    evt.currentTarget.classList.remove('dragging');
+                    cardDrag.value = { type: '', id: -1 };
+                    document.querySelectorAll('.drag-over-card').forEach(el => el.classList.remove('drag-over-card'));
                 };
 
                 // ADD-TO-LAPI MODAL
@@ -4104,6 +4208,8 @@
                     headersModal, openHeadersModal, closeHeadersModal, saveHeaders,
                     importWizard, closeImportWizard, importSelectedModels, addManualModel,
                     lapiRoutesModal, editLapiRoutes, closeLapiRoutesModal, moveRouteUp, moveRouteDown, removeRoute, addRouteToChain, quickAddToChain, saveLapiRoutes,
+                    onChainDragStart, onChainDragOver, onChainDragLeave, onChainDrop, onChainDragEnd,
+                    onCardDragStart, onCardDragOver, onCardDragLeave, onCardDrop, onCardDragEnd,
                     addToLapiModal, openAddToLapiModal, closeAddToLapiModal, confirmAddToLapi,
                     lapiModal, openLapiModal, closeLapiModal, saveLapi, deleteLapi, toggleLapi,
                     

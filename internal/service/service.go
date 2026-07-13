@@ -265,6 +265,11 @@ func (s *Service) Run() error {
 	httpServer.Shutdown(shutdownCtx)
 	webServer.Shutdown(shutdownCtx)
 
+	// Flush in-flight request logs so the last requests before shutdown are not lost.
+	if logInstance != nil {
+		logInstance.Stop()
+	}
+
 	close(s.doneCh)
 	return nil
 }
@@ -560,6 +565,12 @@ func createWebHandler() http.Handler {
 				writeJSONError(w, 500, err)
 				return
 			}
+			// Webpage platforms: auto-create the canonical "webpage" RAPI (available=false until token pushed).
+			if p.WebpageDomain != "" {
+				if _, err := db.Get().EnsureWebpageRAPI(p.ID); err != nil {
+					log.Printf("[API] EnsureWebpageRAPI failed platform_id=%d: %v", p.ID, err)
+				}
+			}
 			data, _ := json.Marshal(p)
 			w.Write(data)
 
@@ -576,6 +587,12 @@ func createWebHandler() http.Handler {
 			if err := db.Get().UpdatePlatform(&p); err != nil {
 				writeJSONError(w, 500, err)
 				return
+			}
+			// Ensure the webpage RAPI exists after update (idempotent).
+			if p.WebpageDomain != "" {
+				if _, err := db.Get().EnsureWebpageRAPI(p.ID); err != nil {
+					log.Printf("[API] EnsureWebpageRAPI failed platform_id=%d: %v", p.ID, err)
+				}
 			}
 			w.Write([]byte(`{"success":true}`))
 
@@ -874,6 +891,43 @@ func createWebHandler() http.Handler {
 		default:
 			http.Error(w, `{"error":"method not allowed"}`, 405)
 		}
+	})
+
+	// Sort-order endpoints
+	mux.HandleFunc("/api/platforms/reorder", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"error":"method not allowed"}`, 405)
+			return
+		}
+		var ids []int64
+		if err := json.NewDecoder(r.Body).Decode(&ids); err != nil {
+			http.Error(w, `{"error":"invalid json"}`, 400)
+			return
+		}
+		if err := db.Get().SetPlatformSortOrder(ids); err != nil {
+			writeJSONError(w, 500, err)
+			return
+		}
+		w.Write([]byte(`{"success":true}`))
+	})
+
+	mux.HandleFunc("/api/rapis/reorder", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"error":"method not allowed"}`, 405)
+			return
+		}
+		var ids []int64
+		if err := json.NewDecoder(r.Body).Decode(&ids); err != nil {
+			http.Error(w, `{"error":"invalid json"}`, 400)
+			return
+		}
+		if err := db.Get().SetRAPISortOrder(ids); err != nil {
+			writeJSONError(w, 500, err)
+			return
+		}
+		w.Write([]byte(`{"success":true}`))
 	})
 
 	// LAPI endpoints
@@ -1342,6 +1396,196 @@ func createWebHandler() http.Handler {
 			return
 		}
 		w.Write([]byte(`{"success":true}`))
+	})
+
+	// Browser-push token endpoint — POST /api/token/push
+	//
+	// Allows a browser extension or local userscript to push a freshly-captured
+	// token/cookie to the gateway after the user logs in manually. The gateway
+	// immediately writes the new token to platform_keys (key_index=0) so that
+	// the next upstream request picks it up automatically — zero manual config.
+	//
+	// Request body (JSON):
+	//   { "platform_id": 3, "token": "sk-xxx..." }
+	//
+	// Optional per-platform push secret (set PushSecret on the Platform):
+	//   Supply it either as the "secret" body field or the X-Push-Secret header.
+	//   When PushSecret is empty (default) any local caller may push without auth.
+	//
+	// Response:
+	//   200 {"success":true,"platform":"<name>"}
+	//   400 {"error":"..."} — bad request / auth failure
+	//   404 {"error":"platform not found"}
+	//   500 {"error":"..."}
+	mux.HandleFunc("/api/token/push", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"error":"method not allowed"}`, 405)
+			return
+		}
+
+		var req struct {
+			// PlatformID is the numeric platform ID (legacy / manual config).
+			PlatformID     int64       `json:"platform_id"`
+			// Domain is the webpage_domain string (e.g. "abc.ai"). When set, the gateway
+			// looks up the platform by domain so extensions never need to know the numeric ID.
+			// If both are provided, platform_id takes precedence.
+			Domain         string      `json:"domain"`
+			Token          string      `json:"token"`
+			Secret         string      `json:"secret"`
+			SessionHeaders string      `json:"session_headers"`
+			Reusable       *bool       `json:"reusable"`
+			Reasons        []string    `json:"reasons"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, `{"error":"invalid json"}`, 400)
+			return
+		}
+		// token is required UNLESS this is a probe-only push (reusable=false with reasons,
+		// used by the browser extension to report platform incompatibility without a token).
+		isProbeOnly := req.Token == "" && req.Reusable != nil && !*req.Reusable && len(req.Reasons) > 0
+		if req.Token == "" && !isProbeOnly {
+			http.Error(w, `{"error":"token is required"}`, 400)
+			return
+		}
+
+		// Resolve platform: by ID first, then by webpage domain.
+		var platform *models.Platform
+		var resolveErr error
+		if req.PlatformID != 0 {
+			platform, resolveErr = db.Get().GetPlatformByID(req.PlatformID)
+		} else if req.Domain != "" {
+			platform, resolveErr = db.Get().GetPlatformByWebpageDomain(req.Domain)
+		} else {
+			http.Error(w, `{"error":"platform_id or domain is required"}`, 400)
+			return
+		}
+		if resolveErr != nil {
+			writeJSONError(w, 404, fmt.Errorf("platform not found"))
+			return
+		}
+		// Use the resolved platform's ID for all subsequent operations.
+		req.PlatformID = platform.ID
+
+		// Check push secret when the platform has one configured.
+		if platform.PushSecret != "" {
+			supplied := req.Secret
+			if supplied == "" {
+				supplied = r.Header.Get("X-Push-Secret")
+			}
+			if supplied != platform.PushSecret {
+				http.Error(w, `{"error":"invalid push secret"}`, 400)
+				return
+			}
+		}
+
+		// Convert reusable bool pointer to int status (-1=unknown, 0=false, 1=true)
+		reusableStatus := -1
+		if req.Reusable != nil {
+			if *req.Reusable {
+				reusableStatus = 1
+			} else {
+				reusableStatus = 0
+			}
+		}
+		reasonsJSON := "[]"
+		if len(req.Reasons) > 0 {
+			if b, jErr := json.Marshal(req.Reasons); jErr == nil {
+				reasonsJSON = string(b)
+			}
+		}
+
+		if isProbeOnly {
+			// Probe-only: only persist reusability verdict, do not touch token or RAPI state.
+			if dbErr := db.Get().UpdatePlatformReusability(req.PlatformID, reusableStatus, reasonsJSON); dbErr != nil {
+				log.Printf("[PUSH] probe UpdatePlatformReusability failed platform_id=%d: %v", req.PlatformID, dbErr)
+			}
+		} else {
+			if err := db.Get().UpdatePlatformTokenWithHeaders(req.PlatformID, req.Token, req.SessionHeaders, reusableStatus, reasonsJSON); err != nil {
+				writeJSONError(w, 500, err)
+				return
+			}
+			// For webpage platforms: mark the webpage RAPI as ready (available=true).
+			if platform.WebpageDomain != "" {
+				if dbErr := db.Get().SetWebpageRAPIReady(req.PlatformID, true); dbErr != nil {
+					log.Printf("[PUSH] SetWebpageRAPIReady failed platform_id=%d: %v", req.PlatformID, dbErr)
+				}
+				if proxyGateway != nil {
+					rapis, _ := db.Get().GetRAPIsByPlatform(req.PlatformID)
+					for _, ra := range rapis {
+						if ra.Alias == "webpage" {
+							proxyGateway.RevalidateRAPI(ra.ID)
+						}
+					}
+				}
+			}
+		}
+
+		reusableLabel := "unknown"
+		if reusableStatus == 1 {
+			reusableLabel = "reusable"
+		} else if reusableStatus == 0 {
+			reusableLabel = "not-reusable"
+		}
+		log.Printf("[PUSH] platform_id=%d name=%s probe=%v reusable=%s", req.PlatformID, platform.Name, isProbeOnly, reusableLabel)
+		resp, _ := json.Marshal(map[string]interface{}{
+			"success":  true,
+			"platform": platform.Name,
+		})
+		w.Write(resp)
+	})
+
+	// Token status endpoint — GET /api/platforms/token-status/{id}
+	// Returns has_token, valid, seconds_since_push, and reusability info for a platform.
+	mux.HandleFunc("/api/platforms/token-status/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodGet {
+			http.Error(w, `{"error":"method not allowed"}`, 405)
+			return
+		}
+		idStr := strings.TrimPrefix(r.URL.Path, "/api/platforms/token-status/")
+		var platformID int64
+		fmt.Sscanf(idStr, "%d", &platformID)
+		if platformID == 0 {
+			http.Error(w, `{"error":"invalid platform id"}`, 400)
+			return
+		}
+		status, err := db.Get().GetPlatformTokenStatus(platformID)
+		if err != nil {
+			writeJSONError(w, 500, err)
+			return
+		}
+		data, _ := json.Marshal(status)
+		w.Write(data)
+	})
+
+	// Peek token endpoint — GET /api/platforms/peek-token/{id}
+	// Returns the current decrypted token for a platform (for admin display only).
+	mux.HandleFunc("/api/platforms/peek-token/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodGet {
+			http.Error(w, `{"error":"method not allowed"}`, 405)
+			return
+		}
+		idStr := strings.TrimPrefix(r.URL.Path, "/api/platforms/peek-token/")
+		var platformID int64
+		fmt.Sscanf(idStr, "%d", &platformID)
+		if platformID == 0 {
+			http.Error(w, `{"error":"invalid platform id"}`, 400)
+			return
+		}
+		platform, err := db.Get().GetPlatformByID(platformID)
+		if err != nil {
+			writeJSONError(w, 404, fmt.Errorf("platform not found"))
+			return
+		}
+		hasToken := platform.Token != ""
+		resp := map[string]interface{}{
+			"has_token": hasToken,
+			"token":     platform.Token,
+		}
+		data, _ := json.Marshal(resp)
+		w.Write(data)
 	})
 
 	return mux

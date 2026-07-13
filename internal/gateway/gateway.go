@@ -31,6 +31,9 @@ type ProxyGateway struct {
 	log            *logger.Logger
 	sessionTracker *logger.SessionTracker
 	scheduler      *scheduler.Manager
+	// responseTimeout is applied to non-streaming upstream requests only.
+	// Streaming responses intentionally have no body deadline (client ctx is the bound).
+	responseTimeout time.Duration
 }
 
 // NewProxyGateway creates a gateway with default timeouts.
@@ -69,20 +72,27 @@ func NewProxyGatewayWithConfig(
 			KeepAlive: 30 * time.Second,
 		}).DialContext,
 	}
+	respTimeout := time.Duration(responseTimeoutSec) * time.Second
+	if respTimeout <= 0 {
+		respTimeout = 300 * time.Second
+	}
+
 	return &ProxyGateway{
 		db: db.Get(),
 		// http.Client.Timeout = 0: no global deadline.
 		// Dial+TLS are bounded by the Transport's DialContext and TLSHandshakeTimeout.
 		// Streaming body reads are intentionally unlimited — the client connection
 		// context (r.Context()) acts as the natural upper bound.
+		// Non-streaming requests use responseTimeout via a per-request context.
 		httpClient: &http.Client{
 			Timeout:   0,
 			Transport: transport,
 		},
-		notifyService:  notifyService,
-		log:            log,
-		sessionTracker: sessionTracker,
-		scheduler:      scheduler.NewManager(schedulerCfg),
+		notifyService:   notifyService,
+		log:             log,
+		sessionTracker:  sessionTracker,
+		scheduler:       scheduler.NewManager(schedulerCfg),
+		responseTimeout: respTimeout,
 	}
 }
 
@@ -287,6 +297,51 @@ func (g *ProxyGateway) tryKeyForRAPI(
 		keys = []models.PlatformKey{syntheticKey}
 	}
 
+	// Webpage RAPIs: use the captured session headers directly (full browser session replay).
+	// The token is the Bearer token extracted from the browser's chat request; session_headers
+	// carries the full set of headers the browser sent, allowing the gateway to impersonate
+	// the browser session rather than just injecting Authorization.
+	if rapi.IsWebpage {
+		key, _, err := g.scheduler.PickAvailableKey(keys)
+		if err != nil {
+			return nil, 0, scheduler.ErrAllKeysUnavailable
+		}
+		resp, _, _, doErr := g.doWebpageRequest(ctx, rapi, effectiveURL, upstreamBody, key, requestID, retryCount)
+		if doErr != nil {
+			isTimeout := isTimeoutError(doErr)
+			g.scheduler.MarkKeyFailure(key.ID, time.Time{}, doErr.Error(), isTimeout)
+			return nil, 0, doErr
+		}
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			g.scheduler.MarkKeySuccess(key.ID)
+			return resp, key.ID, nil
+		}
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		resp.Body.Close()
+		log.Printf("[ERR]  webpage rapi=%s status=%d body=%s", rapi.Alias, resp.StatusCode, string(errBody))
+		if g.log != nil {
+			g.log.RecordError(requestID,
+				fmt.Sprintf("webpage rapi=%s upstream %d: %s", rapi.Alias, resp.StatusCode, string(errBody)),
+				"UPSTREAM_RESPONSE")
+		}
+		// On 401: session expired → mark RAPI unavailable so it shows "未就绪".
+		if resp.StatusCode == http.StatusUnauthorized {
+			reason := fmt.Sprintf("[会话过期] upstream 401: %s", string(errBody))
+			g.db.SetRAPIUnavailableWithReason(rapi.ID, false, reason)
+			g.scheduler.MarkKeyPlatformFailure(key.ID, "401 session expired")
+			if g.notifyService != nil {
+				g.notifyService.PublishAsync(
+					fmt.Sprintf("网页平台 %s 会话已过期（401），请重新在浏览器开始对话", rapi.PlatformName),
+					"网页会话过期",
+				)
+			}
+		} else {
+			retryAt := scheduler.RetryAt(resp.Header, time.Time{})
+			g.scheduler.MarkKeyFailure(key.ID, retryAt, fmt.Sprintf("upstream %d: %s", resp.StatusCode, string(errBody)))
+		}
+		return nil, 0, fmt.Errorf("upstream %d", resp.StatusCode)
+	}
+
 	for {
 		key, _, err := g.scheduler.PickAvailableKey(keys)
 		if err != nil {
@@ -339,10 +394,12 @@ func (g *ProxyGateway) tryKeyForRAPI(
 			if g.log != nil {
 				g.log.RecordError(requestID, reason, "UPSTREAM_RESPONSE")
 			}
-			g.notifyService.PublishAsync(
-				fmt.Sprintf("RAPI %s [%s] Key #%d 认证失败（401），已自动禁用，请检查 API Key 是否有效", rapi.Alias, rapi.PlatformName, key.KeyIndex),
-				"Key 认证失败",
-			)
+			if g.notifyService != nil {
+				g.notifyService.PublishAsync(
+					fmt.Sprintf("RAPI %s [%s] Key #%d 认证失败（401），已自动禁用，请检查 API Key 是否有效", rapi.Alias, rapi.PlatformName, key.KeyIndex),
+					"Key 认证失败",
+				)
+			}
 			continue
 
 		case failurePlatform:
@@ -359,10 +416,12 @@ func (g *ProxyGateway) tryKeyForRAPI(
 			if g.log != nil {
 				g.log.RecordError(requestID, reason, "UPSTREAM_RESPONSE")
 			}
-			g.notifyService.PublishAsync(
-				fmt.Sprintf("RAPI %s [%s] 平台失效（%d），已自动下线，请检查账号状态后手动恢复", rapi.Alias, rapi.PlatformName, resp.StatusCode),
-				"RAPI 平台失效",
-			)
+			if g.notifyService != nil {
+				g.notifyService.PublishAsync(
+					fmt.Sprintf("RAPI %s [%s] 平台失效（%d），已自动下线，请检查账号状态后手动恢复", rapi.Alias, rapi.PlatformName, resp.StatusCode),
+					"RAPI 平台失效",
+				)
+			}
 			return nil, 0, fmt.Errorf("%s", reason)
 
 		default: // failureSession
@@ -464,7 +523,9 @@ func (g *ProxyGateway) handleStreamingRequest(w http.ResponseWriter, r *http.Req
 				if g.log != nil {
 					g.log.RecordError(requestID, "Model "+rapi.Alias+" ["+rapi.PlatformName+"] failed: "+err.Error(), "UPSTREAM_RESPONSE")
 				}
-				g.notifyService.PublishAsync(fmt.Sprintf("RAPI %s failed: %v", rapi.Alias, err), "RAPI Error")
+				if g.notifyService != nil {
+					g.notifyService.PublishAsync(fmt.Sprintf("RAPI %s failed: %v", rapi.Alias, err), "RAPI Error")
+				}
 			}
 			retryCount++
 			continue
@@ -482,7 +543,9 @@ func (g *ProxyGateway) handleStreamingRequest(w http.ResponseWriter, r *http.Req
 		// Bug 8.5: record to persistent DB metrics.
 		g.db.RecordRequest(rapi.ID, lapi.ID, resp.StatusCode, latencyMs, tokensUsed)
 
-		g.notifyService.PublishAsync(fmt.Sprintf("Streaming from %s", rapi.Alias), "Active Route")
+		if g.notifyService != nil {
+			g.notifyService.PublishAsync(fmt.Sprintf("Streaming from %s", rapi.Alias), "Active Route")
+		}
 
 		// Bug 8.1: target format is already set correctly; no intermediate OpenAI step.
 		needsConversion := targetFormat != clientFormat
@@ -549,6 +612,15 @@ func (g *ProxyGateway) handleNonStreamingRequest(w http.ResponseWriter, r *http.
 	retryCount := 0
 	estimatedTokens := scheduler.EstimateCost(req)
 
+	// Bound non-streaming upstream work so slow backends cannot hang the client forever.
+	// Streaming uses the client connection context only (see handleStreamingRequest).
+	reqCtx := r.Context()
+	if g.responseTimeout > 0 {
+		var cancel context.CancelFunc
+		reqCtx, cancel = context.WithTimeout(r.Context(), g.responseTimeout)
+		defer cancel()
+	}
+
 	for {
 		rapi, waitUntil, err := g.scheduler.PickAvailable(lapi.ID, rapis, clientFormat)
 		if err != nil {
@@ -564,7 +636,7 @@ func (g *ProxyGateway) handleNonStreamingRequest(w http.ResponseWriter, r *http.
 					return fallbackUsed, http.StatusServiceUnavailable
 				}
 				log.Printf("[WAIT] all RAPI unavailable, waiting until %v (attempt %d)", waitUntil.Format("15:04:05"), retryCount)
-				if waitErr := g.scheduler.Wait(r.Context(), lapi.ID, waitUntil); waitErr != nil {
+				if waitErr := g.scheduler.Wait(reqCtx, lapi.ID, waitUntil); waitErr != nil {
 					log.Printf("[FAIL] lapi=%s wait exhausted: %v", lapi.Alias, waitErr)
 					http.Error(w, fmt.Sprintf(`{"error":{"message":"%s","type":"service_unavailable"}}`, waitErr.Error()), http.StatusServiceUnavailable)
 					if g.log != nil {
@@ -606,7 +678,7 @@ func (g *ProxyGateway) handleNonStreamingRequest(w http.ResponseWriter, r *http.
 		}
 
 		startTime := time.Now()
-		resp, keyID, err := g.tryKeyForRAPI(r.Context(), rapi, effectiveURL, upstreamBody, requestID, retryCount, targetFormat)
+		resp, keyID, err := g.tryKeyForRAPI(reqCtx, rapi, effectiveURL, upstreamBody, requestID, retryCount, targetFormat)
 		latencyMs := int(time.Since(startTime).Milliseconds())
 
 		if err != nil {
@@ -732,6 +804,68 @@ func (g *ProxyGateway) doUpstreamRequest(ctx context.Context, rapi models.RAPIWi
 			}
 		}
 		g.log.RecordUpstreamSent(requestID, fmt.Sprintf("%s [%s]", rapi.Alias, rapi.PlatformName), url, headers, string(body), retryCount)
+	}
+
+	resp, err := g.httpClient.Do(upstreamReq)
+	if err != nil {
+		return nil, 0, nil, err
+	}
+	return resp, resp.StatusCode, nil, nil
+}
+
+// doWebpageRequest builds and executes an upstream HTTP request in "browser replay" mode.
+// Instead of a clean API call with just Authorization injected, it replays the full set of
+// browser session headers that were captured and pushed by the browser extension. This allows
+// the gateway to impersonate the user's active browser session against the platform's chat API.
+//
+// key.SessionHeaders is a JSON object: {"Authorization":"Bearer sk-...","Cookie":"...","User-Agent":"..."}.
+// The body is the gateway-built request body (converted to OpenAI or target format).
+// The URL is the platform's configured base_url (webpage platforms set url_auto_complete=false
+// so the stored URL is the verbatim chat API endpoint captured from the browser).
+func (g *ProxyGateway) doWebpageRequest(ctx context.Context, rapi models.RAPIWithPlatform, url string, body []byte, key models.PlatformKey, requestID string, retryCount int) (*http.Response, int, []byte, error) {
+	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(body))
+	if err != nil {
+		return nil, 0, nil, err
+	}
+	upstreamReq.Header.Set("Content-Type", "application/json")
+	upstreamReq.Header.Set("Accept-Encoding", "identity")
+
+	// Apply captured browser session headers, overriding defaults where applicable.
+	// This replays the full browser context: cookies, user-agent, origin, referer, etc.
+	if key.SessionHeaders != "" {
+		var sessionHdrs map[string]string
+		if jsonErr := json.Unmarshal([]byte(key.SessionHeaders), &sessionHdrs); jsonErr == nil {
+			for k, v := range sessionHdrs {
+				if strings.TrimSpace(k) != "" {
+					upstreamReq.Header.Set(k, v)
+				}
+			}
+		}
+	} else if key.Token != "" {
+		// Fallback: if session headers were not captured, use the token as a plain Bearer header.
+		upstreamReq.Header.Set("Authorization", "Bearer "+key.Token)
+	}
+
+	// Apply platform-level custom headers last (can override session headers if needed).
+	if rapi.PlatformCustomHeaders != "" {
+		var headers []customHeader
+		if jsonErr := json.Unmarshal([]byte(rapi.PlatformCustomHeaders), &headers); jsonErr == nil {
+			for _, h := range headers {
+				if strings.TrimSpace(h.Key) != "" {
+					upstreamReq.Header.Set(h.Key, expandHeaderValue(h.Value))
+				}
+			}
+		}
+	}
+
+	if g.log != nil {
+		hdrs := make(map[string]string)
+		for k, v := range upstreamReq.Header {
+			if len(v) > 0 {
+				hdrs[k] = logger.SanitizeKey(v[0])
+			}
+		}
+		g.log.RecordUpstreamSent(requestID, fmt.Sprintf("%s [%s] (webpage)", rapi.Alias, rapi.PlatformName), url, hdrs, string(body), retryCount)
 	}
 
 	resp, err := g.httpClient.Do(upstreamReq)

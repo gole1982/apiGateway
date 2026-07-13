@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"path/filepath"
@@ -48,6 +49,12 @@ func Init() error {
 	// access and eliminates "database is locked" errors entirely.
 	conn.SetMaxOpenConns(1)
 
+	// WAL improves concurrent read/write behaviour and reduces lock contention with
+	// the request logger writing request_logs while the proxy also updates metrics.
+	if _, err = conn.Exec("PRAGMA journal_mode=WAL"); err != nil {
+		log.Printf("[DB] warning: could not enable WAL mode: %v", err)
+	}
+
 	// Enable foreign key enforcement (SQLite defaults to OFF)
 	if _, err = conn.Exec("PRAGMA foreign_keys = ON"); err != nil {
 		return fmt.Errorf("enable foreign keys: %w", err)
@@ -66,6 +73,8 @@ func Init() error {
 			enabled INTEGER NOT NULL DEFAULT 1,
 			available INTEGER NOT NULL DEFAULT 1,
 			notes TEXT NOT NULL DEFAULT '',
+			webpage_domain TEXT NOT NULL DEFAULT '',
+			is_dynamic INTEGER NOT NULL DEFAULT 0,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);
@@ -77,6 +86,11 @@ func Init() error {
 			token TEXT NOT NULL DEFAULT '',
 			label TEXT NOT NULL DEFAULT '',
 			enabled INTEGER NOT NULL DEFAULT 1,
+			session_headers TEXT NOT NULL DEFAULT '',
+			-- reusable_status: -1=unknown, 0=not-reusable, 1=reusable (set by browser push)
+			reusable_status INTEGER NOT NULL DEFAULT -1,
+			-- reusable_reasons: JSON array of reason strings (empty when reusable)
+			reusable_reasons TEXT NOT NULL DEFAULT '[]',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (platform_id) REFERENCES platform(id) ON DELETE CASCADE,
@@ -180,6 +194,8 @@ func Init() error {
 		return err
 	}
 
+	// Migration: add sort_order columns to platform and rapi tables
+	instance.migrateAddSortOrderColumns()
 	// Migration: add enabled/available columns if missing
 	instance.migrateAddStatusColumns()
 	instance.migrateAddCostColumns()
@@ -203,6 +219,16 @@ func Init() error {
 	instance.migrateAddLAPINotesColumn()
 	// Migration: add custom_headers column to platform table
 	instance.migrateAddPlatformCustomHeadersColumn()
+	// Migration: add push_secret column to platform table
+	instance.migrateAddPlatformPushSecretColumn()
+	// Migration: add webpage_domain column to platform table
+	instance.migrateAddPlatformWebpageDomainColumn()
+	// Migration: add is_dynamic column + backfill from webpage_domain
+	instance.migrateAddPlatformIsDynamicColumn()
+	// Migration: add session_headers column to platform_keys table
+	instance.migrateAddPlatformKeySessionHeadersColumn()
+	// Migration: add reusable_status/reusable_reasons columns to platform_keys table
+	instance.migrateAddPlatformKeyReusabilityColumns()
 	// Migration: change rapi.alias uniqueness from global to per-platform
 	if err := instance.migrateRAPIUniqueAliasToPerPlatform(); err != nil {
 		return fmt.Errorf("migrateRAPIUniqueAliasToPerPlatform: %w", err)
@@ -555,8 +581,9 @@ func (db *DB) GetPlatforms() ([]models.Platform, error) {
 
 	rows, err := db.conn.Query(`
 		SELECT id, name, base_url, url_auto_complete, token,
-		       last_token_fetch, enabled, available, notes, custom_headers, created_at, updated_at
-		FROM platform ORDER BY id ASC
+		       last_token_fetch, enabled, available, notes, custom_headers, push_secret, webpage_domain,
+		       COALESCE(is_dynamic, 0), created_at, updated_at
+		FROM platform ORDER BY sort_order ASC, id ASC
 	`)
 	if err != nil {
 		return nil, err
@@ -566,13 +593,14 @@ func (db *DB) GetPlatforms() ([]models.Platform, error) {
 	platforms := make([]models.Platform, 0)
 	for rows.Next() {
 		var p models.Platform
-		var enabled, available, urlAutoComplete sql.NullInt64
+		var enabled, available, urlAutoComplete, isDynamic sql.NullInt64
 		var lastFetch, created, updated sql.NullTime
-		var notes, customHeaders sql.NullString
+		var notes, customHeaders, pushSecret, webpageDomain sql.NullString
 
 		var encToken string
 		err := rows.Scan(&p.ID, &p.Name, &p.BaseURL, &urlAutoComplete, &encToken,
-			&lastFetch, &enabled, &available, &notes, &customHeaders, &created, &updated)
+			&lastFetch, &enabled, &available, &notes, &customHeaders, &pushSecret, &webpageDomain,
+			&isDynamic, &created, &updated)
 		if err != nil {
 			return nil, err
 		}
@@ -585,6 +613,10 @@ func (db *DB) GetPlatforms() ([]models.Platform, error) {
 		p.Available = available.Int64 != 0
 		p.Notes = notes.String
 		p.CustomHeaders = customHeaders.String
+		p.PushSecret = pushSecret.String
+		p.WebpageDomain = webpageDomain.String
+		// Webpage domain implies dynamic/session platform even if the flag was never persisted.
+		p.IsDynamic = isDynamic.Int64 != 0 || p.WebpageDomain != ""
 		if lastFetch.Valid {
 			p.LastTokenFetch = lastFetch.Time
 		}
@@ -605,17 +637,20 @@ func (db *DB) GetPlatformByID(id int64) (*models.Platform, error) {
 	defer db.mu.RUnlock()
 
 	var p models.Platform
-	var enabled, available, urlAutoComplete sql.NullInt64
+	var enabled, available, urlAutoComplete, isDynamic sql.NullInt64
 	var lastFetch, created, updated sql.NullTime
-	var notes, customHeaders sql.NullString
+	var notes, customHeaders, pushSecret sql.NullString
 
 	var encToken string
+	var webpageDomainVal sql.NullString
 	err := db.conn.QueryRow(`
 		SELECT id, name, base_url, url_auto_complete, token,
-		       last_token_fetch, enabled, available, notes, custom_headers, created_at, updated_at
+		       last_token_fetch, enabled, available, notes, custom_headers, push_secret, webpage_domain,
+		       COALESCE(is_dynamic, 0), created_at, updated_at
 		FROM platform WHERE id = ?
 	`, id).Scan(&p.ID, &p.Name, &p.BaseURL, &urlAutoComplete, &encToken,
-		&lastFetch, &enabled, &available, &notes, &customHeaders, &created, &updated)
+		&lastFetch, &enabled, &available, &notes, &customHeaders, &pushSecret, &webpageDomainVal,
+		&isDynamic, &created, &updated)
 
 	if err != nil {
 		return nil, err
@@ -629,6 +664,9 @@ func (db *DB) GetPlatformByID(id int64) (*models.Platform, error) {
 	p.Available = available.Int64 != 0
 	p.Notes = notes.String
 	p.CustomHeaders = customHeaders.String
+	p.PushSecret = pushSecret.String
+	p.WebpageDomain = webpageDomainVal.String
+	p.IsDynamic = isDynamic.Int64 != 0 || p.WebpageDomain != ""
 	if lastFetch.Valid {
 		p.LastTokenFetch = lastFetch.Time
 	}
@@ -642,6 +680,54 @@ func (db *DB) GetPlatformByID(id int64) (*models.Platform, error) {
 	return &p, nil
 }
 
+// GetPlatformByWebpageDomain finds the first platform whose webpage_domain matches the given
+// hostname (exact match). Used by the token-push endpoint so extensions can identify a
+// platform by domain string rather than numeric ID.
+func (db *DB) GetPlatformByWebpageDomain(domain string) (*models.Platform, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	var p models.Platform
+	var enabled, available, urlAutoComplete, isDynamic sql.NullInt64
+	var lastFetch, created, updated sql.NullTime
+	var notes, customHeaders, pushSecret sql.NullString
+	var encToken string
+	var webpageDomainVal sql.NullString
+
+	err := db.conn.QueryRow(`
+		SELECT id, name, base_url, url_auto_complete, token,
+		       last_token_fetch, enabled, available, notes, custom_headers, push_secret, webpage_domain,
+		       COALESCE(is_dynamic, 0), created_at, updated_at
+		FROM platform WHERE webpage_domain = ? LIMIT 1
+	`, domain).Scan(&p.ID, &p.Name, &p.BaseURL, &urlAutoComplete, &encToken,
+		&lastFetch, &enabled, &available, &notes, &customHeaders, &pushSecret, &webpageDomainVal,
+		&isDynamic, &created, &updated)
+	if err != nil {
+		return nil, err
+	}
+	if p.Token, err = crypto.Decrypt(encToken); err != nil {
+		return nil, fmt.Errorf("decrypt platform %d token: %w", p.ID, err)
+	}
+	p.URLAutoComplete = urlAutoComplete.Int64 != 0
+	p.Enabled = enabled.Int64 != 0
+	p.Available = available.Int64 != 0
+	p.Notes = notes.String
+	p.CustomHeaders = customHeaders.String
+	p.PushSecret = pushSecret.String
+	p.WebpageDomain = webpageDomainVal.String
+	p.IsDynamic = isDynamic.Int64 != 0 || p.WebpageDomain != ""
+	if lastFetch.Valid {
+		p.LastTokenFetch = lastFetch.Time
+	}
+	if created.Valid {
+		p.CreatedAt = created.Time
+	}
+	if updated.Valid {
+		p.UpdatedAt = updated.Time
+	}
+	return &p, nil
+}
+
 func (db *DB) CreatePlatform(p *models.Platform) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -651,10 +737,15 @@ func (db *DB) CreatePlatform(p *models.Platform) error {
 		return fmt.Errorf("encrypt token: %w", err)
 	}
 
+	// Webpage domain always implies a dynamic (browser-session) platform.
+	if p.WebpageDomain != "" {
+		p.IsDynamic = true
+	}
+
 	result, err := db.conn.Exec(`
-		INSERT INTO platform (name, base_url, url_auto_complete, token, last_token_fetch, enabled, available, notes, custom_headers)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, p.Name, p.BaseURL, boolToInt(p.URLAutoComplete), encToken, time.Now(), boolToInt(p.Enabled), boolToInt(p.Available), p.Notes, p.CustomHeaders)
+		INSERT INTO platform (name, base_url, url_auto_complete, token, last_token_fetch, enabled, available, notes, custom_headers, push_secret, webpage_domain, is_dynamic)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, p.Name, p.BaseURL, boolToInt(p.URLAutoComplete), encToken, time.Now(), boolToInt(p.Enabled), boolToInt(p.Available), p.Notes, p.CustomHeaders, p.PushSecret, p.WebpageDomain, boolToInt(p.IsDynamic))
 
 	if err != nil {
 		return err
@@ -677,10 +768,15 @@ func (db *DB) UpdatePlatform(p *models.Platform) error {
 		return fmt.Errorf("encrypt token: %w", err)
 	}
 
+	// Webpage domain always implies a dynamic (browser-session) platform.
+	if p.WebpageDomain != "" {
+		p.IsDynamic = true
+	}
+
 	_, err = db.conn.Exec(`
-		UPDATE platform SET name = ?, base_url = ?, url_auto_complete = ?, token = ?, enabled = ?, available = ?, notes = ?, custom_headers = ?, updated_at = CURRENT_TIMESTAMP
+		UPDATE platform SET name = ?, base_url = ?, url_auto_complete = ?, token = ?, enabled = ?, available = ?, notes = ?, custom_headers = ?, push_secret = ?, webpage_domain = ?, is_dynamic = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?
-	`, p.Name, p.BaseURL, boolToInt(p.URLAutoComplete), encToken, boolToInt(p.Enabled), boolToInt(p.Available), p.Notes, p.CustomHeaders, p.ID)
+	`, p.Name, p.BaseURL, boolToInt(p.URLAutoComplete), encToken, boolToInt(p.Enabled), boolToInt(p.Available), p.Notes, p.CustomHeaders, p.PushSecret, p.WebpageDomain, boolToInt(p.IsDynamic), p.ID)
 
 	return err
 }
@@ -717,12 +813,25 @@ func (db *DB) DeletePlatform(id int64) error {
 }
 
 func (db *DB) UpdatePlatformToken(id int64, token string) error {
+	return db.UpdatePlatformTokenWithHeaders(id, token, "", -1, "[]")
+}
+
+// UpdatePlatformTokenWithHeaders persists the pushed token, the captured browser session
+// headers, and the reusability verdict for the primary key (key_index=0) of the given platform.
+// sessionHeadersJSON may be empty, in which case only the token is updated.
+// reusableStatus: -1=unknown, 0=not-reusable, 1=reusable.
+// reusableReasonsJSON: JSON array string (empty array if reusable).
+func (db *DB) UpdatePlatformTokenWithHeaders(id int64, token string, sessionHeadersJSON string, reusableStatus int, reusableReasonsJSON string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
 	encToken, err := crypto.Encrypt(token)
 	if err != nil {
 		return fmt.Errorf("encrypt token: %w", err)
+	}
+
+	if reusableReasonsJSON == "" {
+		reusableReasonsJSON = "[]"
 	}
 
 	now := time.Now()
@@ -734,19 +843,149 @@ func (db *DB) UpdatePlatformToken(id int64, token string) error {
 		return err
 	}
 
-	// Upsert key_index=0 so the gateway key-scheduler always has a row to work with
-	// even if this platform was created before platform_keys existed.
+	// Upsert key_index=0 so the gateway key-scheduler always has a row to work with.
 	if token != "" {
 		if _, upsertErr := db.conn.Exec(`
-			INSERT INTO platform_keys (platform_id, key_index, token, label, enabled)
-			VALUES (?, 0, ?, 'dynamic', 1)
-			ON CONFLICT(platform_id, key_index) DO UPDATE SET token=excluded.token, updated_at=CURRENT_TIMESTAMP
-		`, id, encToken); upsertErr != nil {
+			INSERT INTO platform_keys (platform_id, key_index, token, label, enabled, session_headers, reusable_status, reusable_reasons)
+			VALUES (?, 0, ?, 'dynamic', 1, ?, ?, ?)
+			ON CONFLICT(platform_id, key_index) DO UPDATE SET
+				token=excluded.token,
+				session_headers=excluded.session_headers,
+				reusable_status=excluded.reusable_status,
+				reusable_reasons=excluded.reusable_reasons,
+				updated_at=CURRENT_TIMESTAMP
+		`, id, encToken, sessionHeadersJSON, reusableStatus, reusableReasonsJSON); upsertErr != nil {
 			return fmt.Errorf("upsert platform key failed: %w", upsertErr)
 		}
 	}
 
 	return nil
+}
+
+// PlatformTokenStatus holds the push status for a webpage/api-push platform.
+type PlatformTokenStatus struct {
+	HasToken         bool    `json:"has_token"`
+	Valid            bool    `json:"valid"`           // true if token is non-empty and not expired
+	SecondsSincePush float64 `json:"seconds_since_push"`
+	ExpiresAt        string  `json:"expires_at,omitempty"`
+	// Reusability — set by browser extension analysis
+	ReusableStatus  int      `json:"reusable_status"` // -1=unknown, 0=not-reusable, 1=reusable
+	ReusableReasons []string `json:"reusable_reasons"`
+}
+
+// GetPlatformTokenStatus returns push status + reusability info for the key_index=0 key
+// of the given platform. Returns nil if no key exists.
+func (db *DB) GetPlatformTokenStatus(platformID int64) (*PlatformTokenStatus, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	var encToken string
+	var reusableStatus sql.NullInt64
+	var reusableReasons sql.NullString
+	var updatedAt sql.NullTime
+
+	err := db.conn.QueryRow(`
+		SELECT token, reusable_status, reusable_reasons, updated_at
+		FROM platform_keys WHERE platform_id = ? AND key_index = 0
+	`, platformID).Scan(&encToken, &reusableStatus, &reusableReasons, &updatedAt)
+	if err == sql.ErrNoRows {
+		return &PlatformTokenStatus{HasToken: false}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	token, _ := crypto.Decrypt(encToken)
+	hasToken := token != ""
+
+	status := &PlatformTokenStatus{
+		HasToken:        hasToken,
+		Valid:           hasToken,
+		ReusableStatus:  int(reusableStatus.Int64),
+		ReusableReasons: []string{},
+	}
+	if !reusableStatus.Valid {
+		status.ReusableStatus = -1
+	}
+
+	if reusableReasons.Valid && reusableReasons.String != "" && reusableReasons.String != "[]" {
+		// Parse JSON array — ignore error, worst case reasons stays as []
+		_ = json.Unmarshal([]byte(reusableReasons.String), &status.ReusableReasons)
+	}
+
+	if updatedAt.Valid {
+		status.SecondsSincePush = time.Since(updatedAt.Time).Seconds()
+	}
+
+	return status, nil
+}
+
+// UpdatePlatformReusability updates only the reusable_status and reusable_reasons columns
+// on the key_index=0 row for the given platform. Used by probe-only pushes from the
+// browser extension where the platform is detected as incompatible before any token is captured.
+// If no key row exists yet, it creates a placeholder row with an empty token.
+func (db *DB) UpdatePlatformReusability(platformID int64, reusableStatus int, reusableReasonsJSON string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	if reusableReasonsJSON == "" {
+		reusableReasonsJSON = "[]"
+	}
+	_, err := db.conn.Exec(`
+		INSERT INTO platform_keys (platform_id, key_index, token, label, enabled, session_headers, reusable_status, reusable_reasons)
+		VALUES (?, 0, '', 'dynamic', 1, '', ?, ?)
+		ON CONFLICT(platform_id, key_index) DO UPDATE SET
+			reusable_status=excluded.reusable_status,
+			reusable_reasons=excluded.reusable_reasons,
+			updated_at=CURRENT_TIMESTAMP
+	`, platformID, reusableStatus, reusableReasonsJSON)
+	return err
+}
+
+// EnsureWebpageRAPI creates (or retrieves) the canonical webpage RAPI for a platform.
+// Webpage platforms have exactly one RAPI with alias="webpage" and model="webpage".
+// available=false until the browser pushes a token (session not yet ready).
+// Returns the RAPI ID.
+func (db *DB) EnsureWebpageRAPI(platformID int64) (int64, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	var rapiID int64
+	err := db.conn.QueryRow(
+		"SELECT id FROM rapi WHERE platform_id = ? AND alias = 'webpage' LIMIT 1", platformID,
+	).Scan(&rapiID)
+	if err == nil {
+		return rapiID, nil // already exists
+	}
+
+	// Create it — disabled (not ready) until the browser session is active.
+	result, err := db.conn.Exec(`
+		INSERT INTO rapi (alias, model, notes, platform_id, enabled, available, unavailable_reason,
+		                  base_cost, high_cost, supported_formats, custom_headers, time_period_rules)
+		VALUES ('webpage', 'webpage', '网页会话模型（浏览器截取）', ?, 1, 0, '等待用户在浏览器打开对话页面并开始与 LLM 对话',
+		        0, 0, '["openai"]', '', '')
+	`, platformID)
+	if err != nil {
+		return 0, fmt.Errorf("create webpage rapi: %w", err)
+	}
+	id, err := result.LastInsertId()
+	return id, err
+}
+
+// SetWebpageRAPIReady marks the webpage RAPI as available (ready) or not, updating the reason message.
+func (db *DB) SetWebpageRAPIReady(platformID int64, ready bool) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	reason := ""
+	if !ready {
+		reason = "等待用户在浏览器打开对话页面并开始与 LLM 对话"
+	}
+	_, err := db.conn.Exec(`
+		UPDATE rapi SET available = ?, unavailable_reason = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE platform_id = ? AND alias = 'webpage'
+	`, boolToInt(ready), reason, platformID)
+	return err
 }
 
 // ============ RAPI Operations ============
@@ -759,10 +998,11 @@ func (db *DB) GetRAPIs() ([]models.RAPIWithPlatform, error) {
 		SELECT r.id, r.alias, r.model, r.platform_id, r.enabled, r.available, r.unavailable_reason,
 		       r.base_cost, r.high_cost, r.rpm_limit, r.rph_limit, r.rpd_limit, r.tpm_limit, r.tph_limit, r.tpd_limit, r.time_period_rules, r.created_at, r.updated_at,
 		       p.name, p.base_url, p.token, p.last_token_fetch,
-		       0 AS order_index, r.supported_formats, r.custom_headers, p.url_auto_complete, r.notes, p.custom_headers
+		       0 AS order_index, r.supported_formats, r.custom_headers, p.url_auto_complete, r.notes, p.custom_headers,
+		       COALESCE(p.is_dynamic, 0), COALESCE(p.webpage_domain, '')
 		FROM rapi r
 		LEFT JOIN platform p ON r.platform_id = p.id
-		ORDER BY r.id ASC
+		ORDER BY r.sort_order ASC, r.id ASC
 	`)
 }
 
@@ -774,7 +1014,8 @@ func (db *DB) GetRAPIByID(id int64) (*models.RAPIWithPlatform, error) {
 		SELECT r.id, r.alias, r.model, r.platform_id, r.enabled, r.available, r.unavailable_reason,
 		       r.base_cost, r.high_cost, r.rpm_limit, r.rph_limit, r.rpd_limit, r.tpm_limit, r.tph_limit, r.tpd_limit, r.time_period_rules, r.created_at, r.updated_at,
 		       p.name, p.base_url, p.token, p.last_token_fetch,
-		       0 AS order_index, r.supported_formats, r.custom_headers, p.url_auto_complete, r.notes, p.custom_headers
+		       0 AS order_index, r.supported_formats, r.custom_headers, p.url_auto_complete, r.notes, p.custom_headers,
+		       COALESCE(p.is_dynamic, 0), COALESCE(p.webpage_domain, '')
 		FROM rapi r
 		LEFT JOIN platform p ON r.platform_id = p.id
 		WHERE r.id = ?
@@ -798,14 +1039,15 @@ func (db *DB) queryRAPIsWithPlatform(query string, args ...interface{}) ([]model
 	rapis := make([]models.RAPIWithPlatform, 0)
 	for rows.Next() {
 		var r models.RAPIWithPlatform
-		var rEnabled, rAvailable, urlAutoComplete sql.NullInt64
+		var rEnabled, rAvailable, urlAutoComplete, isDynamic sql.NullInt64
 		var lastFetch, created, updated sql.NullTime
-		var pName, pURL, pToken sql.NullString
+		var pName, pURL, pToken, webpageDomain sql.NullString
 		var timePeriodRules, supportedFormats, customHeaders, unavailableReason, notes, platformCustomHeaders sql.NullString
 
 		err := rows.Scan(&r.ID, &r.Alias, &r.Model, &r.PlatformID, &rEnabled, &rAvailable, &unavailableReason,
 			&r.BaseCost, &r.HighCost, &r.RPMLimit, &r.RPHLimit, &r.RPDLimit, &r.TPMLimit, &r.TPHLimit, &r.TPDLimit, &timePeriodRules, &created, &updated,
-			&pName, &pURL, &pToken, &lastFetch, &r.OrderIndex, &supportedFormats, &customHeaders, &urlAutoComplete, &notes, &platformCustomHeaders)
+			&pName, &pURL, &pToken, &lastFetch, &r.OrderIndex, &supportedFormats, &customHeaders, &urlAutoComplete, &notes, &platformCustomHeaders,
+			&isDynamic, &webpageDomain)
 		if err != nil {
 			return nil, err
 		}
@@ -821,6 +1063,10 @@ func (db *DB) queryRAPIsWithPlatform(query string, args ...interface{}) ([]model
 		r.PlatformCustomHeaders = platformCustomHeaders.String
 		r.PlatformName = pName.String
 		r.BaseURL = pURL.String
+		r.WebpageDomain = webpageDomain.String
+		// Webpage platforms are identified by is_dynamic OR a configured webpage_domain.
+		// Relying on is_dynamic alone breaks existing platforms where only webpage_domain was saved.
+		r.IsWebpage = isDynamic.Int64 != 0 || r.WebpageDomain != ""
 		decToken, decErr := crypto.Decrypt(pToken.String)
 		if decErr != nil {
 			return nil, fmt.Errorf("decrypt rapi %d platform token: %w", r.ID, decErr)
@@ -978,7 +1224,8 @@ func (db *DB) GetEnabledRAPIsForLAPI(lapiID int64) ([]models.RAPIWithPlatform, e
 		SELECT r.id, r.alias, r.model, r.platform_id, r.enabled, r.available, r.unavailable_reason,
 		       r.base_cost, r.high_cost, r.rpm_limit, r.rph_limit, r.rpd_limit, r.tpm_limit, r.tph_limit, r.tpd_limit, r.time_period_rules, r.created_at, r.updated_at,
 		       p.name, p.base_url, p.token, p.last_token_fetch,
-		       o.order_index, r.supported_formats, r.custom_headers, p.url_auto_complete, r.notes, p.custom_headers
+		       o.order_index, r.supported_formats, r.custom_headers, p.url_auto_complete, r.notes, p.custom_headers,
+		       COALESCE(p.is_dynamic, 0), COALESCE(p.webpage_domain, '')
 		FROM rapi r
 		LEFT JOIN platform p ON r.platform_id = p.id
 		INNER JOIN lapi_rapi_order o ON r.id = o.rapi_id
@@ -1032,7 +1279,8 @@ func (db *DB) GetRAPIsByPlatform(platformID int64) ([]models.RAPIWithPlatform, e
 		SELECT r.id, r.alias, r.model, r.platform_id, r.enabled, r.available, r.unavailable_reason,
 		       r.base_cost, r.high_cost, r.rpm_limit, r.rph_limit, r.rpd_limit, r.tpm_limit, r.tph_limit, r.tpd_limit, r.time_period_rules, r.created_at, r.updated_at,
 		       p.name, p.base_url, p.token, p.last_token_fetch,
-		       0 AS order_index, r.supported_formats, r.custom_headers, p.url_auto_complete, r.notes, p.custom_headers
+		       0 AS order_index, r.supported_formats, r.custom_headers, p.url_auto_complete, r.notes, p.custom_headers,
+		       COALESCE(p.is_dynamic, 0), COALESCE(p.webpage_domain, '')
 		FROM rapi r
 		LEFT JOIN platform p ON r.platform_id = p.id
 		WHERE r.platform_id = ?
@@ -1172,7 +1420,8 @@ func (db *DB) GetRAPIsForLAPI(lapiID int64) ([]models.RAPIWithPlatform, error) {
 		SELECT r.id, r.alias, r.model, r.platform_id, r.enabled, r.available, r.unavailable_reason,
 		       r.base_cost, r.high_cost, r.rpm_limit, r.rph_limit, r.rpd_limit, r.tpm_limit, r.tph_limit, r.tpd_limit, r.time_period_rules, r.created_at, r.updated_at,
 		       p.name, p.base_url, p.token, p.last_token_fetch,
-		       o.order_index, r.supported_formats, r.custom_headers, p.url_auto_complete, r.notes, p.custom_headers
+		       o.order_index, r.supported_formats, r.custom_headers, p.url_auto_complete, r.notes, p.custom_headers,
+		       COALESCE(p.is_dynamic, 0), COALESCE(p.webpage_domain, '')
 		FROM rapi r
 		LEFT JOIN platform p ON r.platform_id = p.id
 		INNER JOIN lapi_rapi_order o ON r.id = o.rapi_id
@@ -1241,7 +1490,7 @@ func (db *DB) GetPlatformKeys(platformID int64) ([]models.PlatformKey, error) {
 	defer db.mu.RUnlock()
 
 	rows, err := db.conn.Query(`
-		SELECT id, platform_id, key_index, token, label, enabled, created_at, updated_at
+		SELECT id, platform_id, key_index, token, label, enabled, session_headers, created_at, updated_at
 		FROM platform_keys WHERE platform_id = ? ORDER BY key_index ASC
 	`, platformID)
 	if err != nil {
@@ -1254,8 +1503,9 @@ func (db *DB) GetPlatformKeys(platformID int64) ([]models.PlatformKey, error) {
 		var k models.PlatformKey
 		var encToken string
 		var enabled sql.NullInt64
+		var sessionHeaders sql.NullString
 		var created, updated sql.NullTime
-		if err := rows.Scan(&k.ID, &k.PlatformID, &k.KeyIndex, &encToken, &k.Label, &enabled, &created, &updated); err != nil {
+		if err := rows.Scan(&k.ID, &k.PlatformID, &k.KeyIndex, &encToken, &k.Label, &enabled, &sessionHeaders, &created, &updated); err != nil {
 			return nil, err
 		}
 		var decErr error
@@ -1263,6 +1513,7 @@ func (db *DB) GetPlatformKeys(platformID int64) ([]models.PlatformKey, error) {
 			return nil, fmt.Errorf("decrypt platform_key %d: %w", k.ID, decErr)
 		}
 		k.Enabled = enabled.Int64 != 0
+		k.SessionHeaders = sessionHeaders.String
 		if created.Valid {
 			k.CreatedAt = created.Time
 		}
@@ -1834,7 +2085,50 @@ func (db *DB) migrateAddPlatformCustomHeadersColumn() {
 	}
 }
 
+func (db *DB) migrateAddPlatformPushSecretColumn() {
+	var count int
+	row := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('platform') WHERE name='push_secret'`)
+	if row.Scan(&count) == nil && count == 0 {
+		db.conn.Exec(`ALTER TABLE platform ADD COLUMN push_secret TEXT NOT NULL DEFAULT ''`)
+	}
+}
 
+func (db *DB) migrateAddPlatformWebpageDomainColumn() {
+	var count int
+	row := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('platform') WHERE name='webpage_domain'`)
+	if row.Scan(&count) == nil && count == 0 {
+		db.conn.Exec(`ALTER TABLE platform ADD COLUMN webpage_domain TEXT NOT NULL DEFAULT ''`)
+	}
+}
+
+// migrateAddPlatformIsDynamicColumn ensures platform.is_dynamic exists and backfills it
+// for rows that already have a webpage_domain (those must be treated as webpage platforms).
+func (db *DB) migrateAddPlatformIsDynamicColumn() {
+	var count int
+	row := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('platform') WHERE name='is_dynamic'`)
+	if row.Scan(&count) == nil && count == 0 {
+		db.conn.Exec(`ALTER TABLE platform ADD COLUMN is_dynamic INTEGER NOT NULL DEFAULT 0`)
+	}
+	// Backfill: any platform with a non-empty webpage_domain is a browser-session platform.
+	db.conn.Exec(`UPDATE platform SET is_dynamic = 1 WHERE COALESCE(webpage_domain, '') != '' AND COALESCE(is_dynamic, 0) = 0`)
+}
+
+func (db *DB) migrateAddPlatformKeySessionHeadersColumn() {
+	var count int
+	row := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('platform_keys') WHERE name='session_headers'`)
+	if row.Scan(&count) == nil && count == 0 {
+		db.conn.Exec(`ALTER TABLE platform_keys ADD COLUMN session_headers TEXT NOT NULL DEFAULT ''`)
+	}
+}
+
+func (db *DB) migrateAddPlatformKeyReusabilityColumns() {
+	var count int
+	row := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('platform_keys') WHERE name='reusable_status'`)
+	if row.Scan(&count) == nil && count == 0 {
+		db.conn.Exec(`ALTER TABLE platform_keys ADD COLUMN reusable_status INTEGER NOT NULL DEFAULT -1`)
+		db.conn.Exec(`ALTER TABLE platform_keys ADD COLUMN reusable_reasons TEXT NOT NULL DEFAULT '[]'`)
+	}
+}
 
 func (db *DB) migrateAddLAPINotesColumn() {
 	var count int
@@ -2019,4 +2313,64 @@ func (db *DB) migrateEncryptTokens() error {
 	}
 
 	return nil
+}
+
+// migrateAddSortOrderColumns adds sort_order column to platform and rapi tables if missing,
+// and initialises existing rows with their current id order.
+func (db *DB) migrateAddSortOrderColumns() {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	for _, tbl := range []string{"platform", "rapi"} {
+		row := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name='sort_order'`, tbl)
+		var cnt int
+		if err := row.Scan(&cnt); err != nil || cnt > 0 {
+			continue // already exists
+		}
+		if _, err := db.conn.Exec(`ALTER TABLE ` + tbl + ` ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0`); err != nil {
+			log.Printf("[DB] migrateAddSortOrderColumns %s: %v", tbl, err)
+			continue
+		}
+		// Initialise sort_order = rowid so existing rows keep their original order
+		if _, err := db.conn.Exec(`UPDATE ` + tbl + ` SET sort_order = id`); err != nil {
+			log.Printf("[DB] migrateAddSortOrderColumns init %s: %v", tbl, err)
+		}
+	}
+}
+
+// SetPlatformSortOrder persists a new display order for platforms.
+// ids must contain every platform id; each receives order index = its position in the slice.
+func (db *DB) SetPlatformSortOrder(ids []int64) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return err
+	}
+	for i, id := range ids {
+		if _, err := tx.Exec(`UPDATE platform SET sort_order = ? WHERE id = ?`, i, id); err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// SetRAPISortOrder persists a new display order for rapis.
+func (db *DB) SetRAPISortOrder(ids []int64) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return err
+	}
+	for i, id := range ids {
+		if _, err := tx.Exec(`UPDATE rapi SET sort_order = ? WHERE id = ?`, i, id); err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
 }

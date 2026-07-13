@@ -52,8 +52,11 @@ func (l *Logger) Start() {
 }
 
 func (l *Logger) Stop() {
-	l.cancel()
+	// 1) Close the queue so the worker drains remaining events and exits.
+	// 2) Cancel context so the cleanup goroutine exits.
+	// 3) Wait for both. Order matters: cancel alone would not drain the queue.
 	close(l.eventQueue)
+	l.cancel()
 	l.wg.Wait()
 }
 
@@ -172,6 +175,7 @@ func (w *LogWorker) run() {
 		select {
 		case event, ok := <-w.logger.eventQueue:
 			if !ok {
+				// Queue closed: drain is complete; flush and exit.
 				w.flushBatch()
 				return
 			}
@@ -180,10 +184,6 @@ func (w *LogWorker) run() {
 		case <-w.timer.C:
 			w.flushBatch()
 			w.resetTimer()
-
-		case <-w.logger.ctx.Done():
-			w.flushBatch()
-			return
 		}
 	}
 }
@@ -197,12 +197,19 @@ func (w *LogWorker) resetTimer() {
 
 func (w *LogWorker) addToBatch(event LogEvent) {
 	w.batchMu.Lock()
-	defer w.batchMu.Unlock()
-
 	w.batch = append(w.batch, event)
+	var toFlush []LogEvent
 	if len(w.batch) >= w.logger.config.BatchSize {
-		go w.flushBatch()
+		// Take ownership of the current batch under the lock so no events are lost.
+		// Previously this used `go flushBatch()` + immediate batch reset, which raced
+		// and silently dropped every batch that hit BatchSize.
+		toFlush = w.batch
 		w.batch = make([]LogEvent, 0, w.logger.config.BatchSize)
+	}
+	w.batchMu.Unlock()
+
+	if toFlush != nil {
+		w.persistBatch(toFlush)
 	}
 }
 
@@ -213,17 +220,18 @@ func (w *LogWorker) flushBatch() {
 		return
 	}
 
-	batch := make([]LogEvent, len(w.batch))
-	copy(batch, w.batch)
+	batch := w.batch
 	w.batch = make([]LogEvent, 0, w.logger.config.BatchSize)
 	w.batchMu.Unlock()
 
-	if w.logger.Storage != nil {
-		w.persistBatch(batch)
-	}
+	w.persistBatch(batch)
 }
 
 func (w *LogWorker) persistBatch(batch []LogEvent) {
+	if w.logger.Storage == nil || len(batch) == 0 {
+		return
+	}
+
 	requestLogs := make(map[string]*RequestLog)
 
 	// First pass: accumulate all events into RequestLog structs.
@@ -238,25 +246,27 @@ func (w *LogWorker) persistBatch(batch []LogEvent) {
 			}
 			requestLogs[event.RequestID] = log
 		}
+		if event.SessionID != "" && log.SessionID == "" {
+			log.SessionID = event.SessionID
+		}
 		w.updateRequestLog(log, event)
 	}
 
 	// Second pass: upsert the parent request_log row first, then append child events.
 	// This order is required because log_events has a FK referencing request_logs(id).
+	// Keep status="pending" for intermediate batches (REQUEST_RECEIVED / UPSTREAM_*) so
+	// the dashboard does not show incomplete requests as completed.
 	for _, log := range requestLogs {
-		if log.Status == "pending" {
-			log.Status = "completed"
-			log.CompletedAt = time.Now()
-		}
 		if err := w.logger.Storage.SaveRequestLog(log); err != nil {
 			saveFailedEvent(log)
 			continue
 		}
 	}
 
-	if w.logger.Storage != nil {
-		for _, event := range batch {
-			w.logger.Storage.AppendEvent(event.RequestID, &event)
+	for _, event := range batch {
+		if err := w.logger.Storage.AppendEvent(event.RequestID, &event); err != nil {
+			// Child event failure is non-fatal; parent row already has the fields.
+			_ = err
 		}
 	}
 }

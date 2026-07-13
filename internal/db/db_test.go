@@ -43,16 +43,14 @@ func setupTestDB(t *testing.T) *DB {
 			base_url TEXT NOT NULL,
 			url_auto_complete INTEGER NOT NULL DEFAULT 1,
 			token TEXT NOT NULL DEFAULT '',
-			is_dynamic INTEGER NOT NULL DEFAULT 0,
-			dynamic_mode TEXT NOT NULL DEFAULT '',
-			script_content TEXT NOT NULL DEFAULT '',
-			script_lang TEXT NOT NULL DEFAULT '',
-			refresh_interval_sec INTEGER NOT NULL DEFAULT 0,
 			last_token_fetch DATETIME,
 			enabled INTEGER NOT NULL DEFAULT 1,
 			available INTEGER NOT NULL DEFAULT 1,
 			notes TEXT NOT NULL DEFAULT '',
 			custom_headers TEXT NOT NULL DEFAULT '',
+			push_secret TEXT NOT NULL DEFAULT '',
+			webpage_domain TEXT NOT NULL DEFAULT '',
+			is_dynamic INTEGER NOT NULL DEFAULT 0,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);
@@ -105,6 +103,9 @@ func setupTestDB(t *testing.T) *DB {
 			token TEXT NOT NULL DEFAULT '',
 			label TEXT NOT NULL DEFAULT '',
 			enabled INTEGER NOT NULL DEFAULT 1,
+			session_headers TEXT NOT NULL DEFAULT '',
+			reusable_status INTEGER NOT NULL DEFAULT -1,
+			reusable_reasons TEXT NOT NULL DEFAULT '[]',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (platform_id) REFERENCES platform(id) ON DELETE CASCADE,
@@ -565,6 +566,50 @@ func TestRAPISameAliasOnDifferentPlatforms(t *testing.T) {
 	r3 := &models.RAPI{Alias: "glm-5.2", Model: "glm-5.2-dup", PlatformID: p1.ID}
 	if err := db.CreateRAPI(r3); err == nil {
 		t.Error("CreateRAPI with duplicate (platform_id, alias) should have failed but did not")
+	}
+}
+
+// TestWebpagePlatformIsDynamicAndIsWebpage verifies that webpage platforms persist
+// is_dynamic and that RAPIs under them are marked IsWebpage for gateway routing.
+func TestWebpagePlatformIsDynamicAndIsWebpage(t *testing.T) {
+	db := setupTestDB(t)
+
+	p := &models.Platform{
+		Name:            "arena-web",
+		BaseURL:         "https://arena.ai/agent",
+		WebpageDomain:   "arena.ai/agent",
+		URLAutoComplete: false,
+		Enabled:         true,
+		Available:       true,
+	}
+	if err := db.CreatePlatform(p); err != nil {
+		t.Fatalf("CreatePlatform: %v", err)
+	}
+	got, err := db.GetPlatformByID(p.ID)
+	if err != nil {
+		t.Fatalf("GetPlatformByID: %v", err)
+	}
+	if !got.IsDynamic {
+		t.Fatal("expected IsDynamic=true when WebpageDomain is set")
+	}
+
+	r := &models.RAPI{
+		Alias:            "webpage",
+		Model:            "default",
+		PlatformID:       p.ID,
+		Enabled:          true,
+		Available:        true,
+		SupportedFormats: `["openai"]`,
+	}
+	if err := db.CreateRAPI(r); err != nil {
+		t.Fatalf("CreateRAPI: %v", err)
+	}
+	rapis, err := db.GetRAPIsByPlatform(p.ID)
+	if err != nil {
+		t.Fatalf("GetRAPIsByPlatform: %v", err)
+	}
+	if len(rapis) != 1 || !rapis[0].IsWebpage {
+		t.Fatalf("expected IsWebpage=true for webpage platform RAPI, got %+v", rapis)
 	}
 }
 
