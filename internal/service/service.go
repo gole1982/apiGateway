@@ -26,6 +26,7 @@ import (
 	"gateway/internal/models"
 	"gateway/internal/notify"
 	"gateway/internal/scheduler"
+	"gateway/internal/tools"
 )
 
 // ============ Security / Input Validation ============
@@ -151,6 +152,17 @@ func (s *Service) Run() error {
 	schedulerCfg := scheduler.ConfigFromAppConfig(cfg.CooldownSec, cfg.MaxCooldownSec, cfg.RequestMaxWaitSec)
 	proxyGateway = gateway.NewProxyGatewayWithConfig(notifySvc, logInstance, sessionTracker, cfg.DialTimeoutSec, cfg.ResponseTimeoutSec, schedulerCfg)
 
+	// Enable agent tool-calling loop if configured
+	if cfg.AgentEnabled {
+		proxyGateway.SetAgentConfig(tools.AgentConfig{
+			MaxIterations:  cfg.AgentMaxIterations,
+			TotalTimeout:   time.Duration(cfg.AgentTimeoutSec) * time.Second,
+			MaxResultBytes: 8192,
+		})
+		tools.SetShellWhitelist(cfg.AgentShellWhitelist)
+		log.Printf("[INIT] Agent tool-calling enabled (max_iterations=%d, timeout=%ds, shell_whitelist=%v)", cfg.AgentMaxIterations, cfg.AgentTimeoutSec, cfg.AgentShellWhitelist)
+	}
+
 	proxyAddr := fmt.Sprintf("0.0.0.0:%d", cfg.ProxyPort)
 	proxyMux := http.NewServeMux()
 	proxyMux.HandleFunc("/v1/chat/completions", proxyGateway.HandleChatCompletions)
@@ -213,10 +225,12 @@ func (s *Service) Run() error {
 		ConnState:    sessionTracker.OnConnState,
 	}
 
-	webAddr := fmt.Sprintf("0.0.0.0:%d", cfg.WebPort)
+	webAddr := fmt.Sprintf("127.0.0.1:%d", cfg.WebPort)
 	webServer = &http.Server{
-		Addr:    webAddr,
-		Handler: createWebHandler(),
+		Addr:        webAddr,
+		Handler:     createWebHandler(),
+		ReadTimeout: 30 * time.Second,
+		IdleTimeout: 120 * time.Second,
 	}
 
 	errCh := make(chan error, 2)
@@ -250,6 +264,16 @@ func (s *Service) Run() error {
 			db.Get().CleanupOldTrends(120)
 		}
 	}()
+
+	// Startup health recovery: probe every RAPI persisted as unavailable and
+	// restore the ones that respond. Runs async so it never blocks serving.
+	if cfg.RetryOnStartup {
+		go func() {
+			log.Printf("[STARTUP] retrying unhealthy models (concurrency=%d, timeout=%ds)...", cfg.RetryConcurrency, cfg.RetryTimeoutSec)
+			rep := proxyGateway.RecoverUnhealthyRAPIs(context.Background(), cfg.RetryConcurrency, cfg.RetryTimeoutSec)
+			log.Printf("[STARTUP] retry done: probed=%d recovered=%d failed=%d", rep.Probed, len(rep.Recovered), len(rep.Failed))
+		}()
+	}
 
 	log.Println("Gateway service started successfully")
 
@@ -340,6 +364,8 @@ func createWebHandler() http.Handler {
 				return
 			}
 			log.Printf("[API] CreateRAPI success: id=%d alias=%s model=%s platform_id=%d", rapi.ID, rapi.Alias, rapi.Model, rapi.PlatformID)
+			// Auto-map: if model identity matches a LAPI, add to its routing chain
+			autoMapRAPItoLAPI(&rapi)
 			w.Write([]byte(`{"success":true}`))
 
 		case http.MethodPut:
@@ -360,11 +386,35 @@ func createWebHandler() http.Handler {
 
 		case http.MethodDelete:
 			id := r.URL.Query().Get("id")
+			force := r.URL.Query().Get("force") == "true"
 			var rapiID int64
 			fmt.Sscanf(id, "%d", &rapiID)
-			if err := db.Get().DeleteRAPI(rapiID); err != nil {
-				writeJSONError(w, 500, err)
+
+			// State-based delete: active RAPIs cannot be deleted
+			rapiInfo, err := db.Get().GetRAPIByID(rapiID)
+			if err != nil {
+				writeJSONError(w, 404, fmt.Errorf("模型不存在"))
 				return
+			}
+			if rapiInfo.Enabled && rapiInfo.Available {
+				writeJSONError(w, 403, fmt.Errorf("生效状态的模型不能删除，请先禁用"))
+				return
+			}
+
+			if force {
+				// Cascade delete: remove LAPI references + metrics + RAPI
+				if err := db.Get().DeleteRAPICascade(rapiID); err != nil {
+					writeJSONError(w, 500, err)
+					return
+				}
+				proxyGateway.InvalidateRAPI(rapiID)
+			} else {
+				// Non-force: only succeeds if no LAPI references exist
+				if err := db.Get().DeleteRAPI(rapiID); err != nil {
+					writeJSONError(w, 409, err)
+					return
+				}
+				proxyGateway.InvalidateRAPI(rapiID)
 			}
 			w.Write([]byte(`{"success":true}`))
 		}
@@ -450,6 +500,95 @@ func createWebHandler() http.Handler {
 		}
 		proxyGateway.RevalidateRAPI(req.ID)
 		log.Printf("[API] restoreRAPI id=%d", req.ID)
+		w.Write([]byte(`{"success":true}`))
+	})
+
+	// Probe and recover every RAPI currently persisted as unavailable.
+	// Powers the dashboard "retry all unhealthy models" action.
+	mux.HandleFunc("/api/system/retry-unhealthy", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"error":"method not allowed"}`, 405)
+			return
+		}
+		cfg, err := config.Load()
+		if err != nil {
+			cfg = &config.Config{RetryConcurrency: 8, RetryTimeoutSec: 15}
+		}
+		log.Printf("[API] retry-unhealthy triggered")
+		rep := proxyGateway.RecoverUnhealthyRAPIs(r.Context(), cfg.RetryConcurrency, cfg.RetryTimeoutSec)
+		log.Printf("[API] retry-unhealthy done: probed=%d recovered=%d failed=%d", rep.Probed, len(rep.Recovered), len(rep.Failed))
+		json.NewEncoder(w).Encode(rep)
+	})
+
+	// Restore an invalidated platform: re-fetch /v1/models to verify connectivity.
+	// On success: set available=true and revalidate all child RAPIs.
+	mux.HandleFunc("/api/platforms/restore", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"error":"method not allowed"}`, 405)
+			return
+		}
+		var req struct {
+			ID int64 `json:"id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, `{"error":"invalid json"}`, 400)
+			return
+		}
+		platform, err := db.Get().GetPlatformByID(req.ID)
+		if err != nil {
+			writeJSONError(w, 404, fmt.Errorf("platform not found"))
+			return
+		}
+
+		// Build /v1/models URL (same logic as fetch-models)
+		baseURL := platform.BaseURL
+		for _, suffix := range []string{"/v1/chat/completions", "/v1/messages", "/v1/chat", "/v1"} {
+			if len(baseURL) >= len(suffix) && baseURL[len(baseURL)-len(suffix):] == suffix {
+				baseURL = baseURL[:len(baseURL)-len(suffix)]
+				break
+			}
+		}
+		for len(baseURL) > 0 && baseURL[len(baseURL)-1] == '/' {
+			baseURL = baseURL[:len(baseURL)-1]
+		}
+		modelsURL := baseURL + "/v1/models"
+
+		client := &http.Client{Timeout: 15 * time.Second}
+		httpReq, _ := http.NewRequestWithContext(r.Context(), http.MethodGet, modelsURL, nil)
+		fetchToken := platform.Token
+		if keys, err := db.Get().GetPlatformKeys(platform.ID); err == nil && len(keys) > 0 {
+			fetchToken = keys[0].Token
+		}
+		httpReq.Header.Set("Authorization", "Bearer "+fetchToken)
+		httpReq.Header.Set("Content-Type", "application/json")
+
+		log.Printf("[RESTORE] testing platform id=%d via %s", req.ID, modelsURL)
+		resp, err := client.Do(httpReq)
+		if err != nil {
+			writeJSONError(w, 502, fmt.Errorf("连接失败: %v", err))
+			return
+		}
+		defer resp.Body.Close()
+		io.ReadAll(resp.Body) // drain
+
+		if resp.StatusCode != 200 {
+			writeJSONError(w, 502, fmt.Errorf("平台返回 %d，恢复失败", resp.StatusCode))
+			return
+		}
+
+		// Success: restore platform and all child RAPIs
+		if err := db.Get().SetPlatformAvailable(req.ID, true); err != nil {
+			writeJSONError(w, 500, err)
+			return
+		}
+		rapis, _ := db.Get().GetRAPIsByPlatform(req.ID)
+		for _, rapi := range rapis {
+			db.Get().SetRAPIUnavailableWithReason(rapi.ID, true, "")
+			proxyGateway.RevalidateRAPI(rapi.ID)
+		}
+		log.Printf("[RESTORE] platform id=%d restored, %d RAPIs revalidated", req.ID, len(rapis))
 		w.Write([]byte(`{"success":true}`))
 	})
 
@@ -598,11 +737,38 @@ func createWebHandler() http.Handler {
 
 		case http.MethodDelete:
 			id := r.URL.Query().Get("id")
+			force := r.URL.Query().Get("force") == "true"
 			var pID int64
 			fmt.Sscanf(id, "%d", &pID)
-			if err := db.Get().DeletePlatform(pID); err != nil {
-				writeJSONError(w, 500, err)
+
+			// State-based delete: active platforms cannot be deleted
+			platform, err := db.Get().GetPlatformByID(pID)
+			if err != nil {
+				writeJSONError(w, 404, fmt.Errorf("平台不存在"))
 				return
+			}
+			if platform.Enabled && platform.Available {
+				writeJSONError(w, 403, fmt.Errorf("生效状态的平台不能删除，请先禁用"))
+				return
+			}
+
+			if force {
+				// Cascade delete: platform + all child RAPIs + references + keys
+				// Invalidate all child RAPIs in scheduler first
+				rapis, _ := db.Get().GetRAPIsByPlatform(pID)
+				for _, rapi := range rapis {
+					proxyGateway.InvalidateRAPI(rapi.ID)
+				}
+				if err := db.Get().DeletePlatformCascade(pID); err != nil {
+					writeJSONError(w, 500, err)
+					return
+				}
+			} else {
+				// Non-force: only succeeds if no child RAPIs exist
+				if err := db.Get().DeletePlatform(pID); err != nil {
+					writeJSONError(w, 409, err)
+					return
+				}
 			}
 			w.Write([]byte(`{"success":true}`))
 		}
@@ -745,6 +911,7 @@ func createWebHandler() http.Handler {
 				errors = append(errors, fmt.Sprintf("%s: %v", modelName, err))
 				log.Printf("[BATCH] create RAPI failed: %s - %v", modelName, err)
 			} else {
+				autoMapRAPItoLAPI(&rapi)
 				created = append(created, map[string]interface{}{
 					"id":    rapi.ID,
 					"alias": rapi.Alias,
@@ -981,6 +1148,18 @@ func createWebHandler() http.Handler {
 			id := r.URL.Query().Get("id")
 			var lapiID int64
 			fmt.Sscanf(id, "%d", &lapiID)
+
+			// State-based delete: active LAPIs cannot be deleted
+			lapiInfo, err := db.Get().GetLAPIByID(lapiID)
+			if err != nil {
+				writeJSONError(w, 404, fmt.Errorf("路由不存在"))
+				return
+			}
+			if lapiInfo.Enabled {
+				writeJSONError(w, 403, fmt.Errorf("生效状态的路由不能删除，请先禁用"))
+				return
+			}
+
 			if err := db.Get().DeleteLAPI(lapiID); err != nil {
 				writeJSONError(w, 500, err)
 				return
@@ -1193,6 +1372,47 @@ func createWebHandler() http.Handler {
 		w.Write(data)
 	})
 
+	// Insights endpoint — three-layer analysis: health, efficiency, capacity
+	mux.HandleFunc("/api/insights", handleInsights)
+
+	// Analytics: 24h hourly distribution for traffic chart
+	mux.HandleFunc("/api/analytics/hourly", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		days := 7
+		if d := r.URL.Query().Get("days"); d != "" {
+			fmt.Sscanf(d, "%d", &days)
+		}
+		buckets, err := db.Get().GetHourlyDistribution(days)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		// Also return scheduler counters for live utilization
+		snap := proxyGateway.Scheduler().Snapshot()
+		resp := map[string]interface{}{
+			"hourly":   buckets,
+			"counters": snap.Counters,
+		}
+		data, _ := json.Marshal(resp)
+		w.Write(data)
+	})
+
+	// Analytics: daily token trend
+	mux.HandleFunc("/api/analytics/daily", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		days := 7
+		if d := r.URL.Query().Get("days"); d != "" {
+			fmt.Sscanf(d, "%d", &days)
+		}
+		trends, err := db.Get().GetDailyTokenTrend(days)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		data, _ := json.Marshal(trends)
+		w.Write(data)
+	})
+
 	// 状态接口 - 用于Dashboard显示
 	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1286,9 +1506,18 @@ func createWebHandler() http.Handler {
 		id, ch := notifySvc.Subscribe()
 		defer notifySvc.Unsubscribe(id)
 
-		// Send initial keepalive
+		// Send initial keepalive.
 		fmt.Fprintf(w, ": connected\n\n")
 		flusher.Flush()
+
+		// Keepalive ticker: without periodic writes, a silently-dropped TCP connection
+		// (proxy/LB/browser closed without FIN) can leave this goroutine blocked on
+		// r.Context().Done() for minutes. Meanwhile the subscriber stays in
+		// notifySvc.subscribers forever — a memory/connection leak that grows under
+		// realistic browser use. The ping probes the connection and, on write failure,
+		// lets us exit and run the deferred Unsubscribe.
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
 
 		for {
 			select {
@@ -1297,7 +1526,18 @@ func createWebHandler() http.Handler {
 					return
 				}
 				data, _ := json.Marshal(n)
-				fmt.Fprintf(w, "data: %s\n\n", data)
+				// Check write errors: a failed write means the client is gone, so exit
+				// (the deferred Unsubscribe will clean up the subscriber).
+				if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+					return
+				}
+				flusher.Flush()
+			case <-ticker.C:
+				// SSE comment frame — ignored by clients but keeps the connection alive
+				// and detects dead peers via write error.
+				if _, err := fmt.Fprintf(w, ": ping\n\n"); err != nil {
+					return
+				}
 				flusher.Flush()
 			case <-r.Context().Done():
 				return
@@ -1560,7 +1800,7 @@ func createWebHandler() http.Handler {
 	})
 
 	// Peek token endpoint — GET /api/platforms/peek-token/{id}
-	// Returns the current decrypted token for a platform (for admin display only).
+	// Returns a masked preview of the current token for admin display (never the full secret).
 	mux.HandleFunc("/api/platforms/peek-token/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method != http.MethodGet {
@@ -1580,11 +1820,209 @@ func createWebHandler() http.Handler {
 			return
 		}
 		hasToken := platform.Token != ""
+		preview := ""
+		if hasToken {
+			preview = maskToken(platform.Token)
+		}
 		resp := map[string]interface{}{
 			"has_token": hasToken,
-			"token":     platform.Token,
+			"token":     preview,
 		}
 		data, _ := json.Marshal(resp)
+		w.Write(data)
+	})
+
+	// --- Tools (Agent Tool-Calling) CRUD ---
+
+	mux.HandleFunc("/api/tools", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodGet:
+			toolsList, err := db.Get().GetAllTools()
+			if err != nil {
+				writeJSONError(w, 500, err)
+				return
+			}
+			if toolsList == nil {
+				toolsList = make([]db.ToolRecord, 0)
+			}
+			data, _ := json.Marshal(map[string]interface{}{"tools": toolsList})
+			w.Write(data)
+
+		case http.MethodPost:
+			var t db.ToolRecord
+			if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
+				writeJSONError(w, 400, fmt.Errorf("invalid JSON: %v", err))
+				return
+			}
+			if t.Name == "" {
+				writeJSONError(w, 400, fmt.Errorf("name is required"))
+				return
+			}
+			if t.ExecutorType == "" {
+				t.ExecutorType = "http"
+			}
+			if t.TimeoutMs <= 0 {
+				t.TimeoutMs = 30000
+			}
+			if t.Parameters == "" {
+				t.Parameters = "{}"
+			}
+			if t.ExecutorConfig == "" {
+				t.ExecutorConfig = "{}"
+			}
+			if err := db.Get().CreateTool(&t); err != nil {
+				if strings.Contains(err.Error(), "UNIQUE") {
+					writeJSONError(w, 409, fmt.Errorf("tool name already exists: %s", t.Name))
+					return
+				}
+				writeJSONError(w, 500, err)
+				return
+			}
+			tools.GetRegistry().Reload()
+			w.WriteHeader(201)
+			data, _ := json.Marshal(t)
+			w.Write(data)
+
+		default:
+			http.Error(w, `{"error":"method not allowed"}`, 405)
+		}
+	})
+
+	mux.HandleFunc("/api/tools/toggle", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"error":"method not allowed"}`, 405)
+			return
+		}
+		var req struct {
+			ID      int64 `json:"id"`
+			Enabled bool  `json:"enabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSONError(w, 400, err)
+			return
+		}
+		if err := db.Get().ToggleTool(req.ID, req.Enabled); err != nil {
+			writeJSONError(w, 500, err)
+			return
+		}
+		tools.GetRegistry().Reload()
+		w.Write([]byte(`{"ok":true}`))
+	})
+
+	mux.HandleFunc("/api/tools/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		idStr := strings.TrimPrefix(r.URL.Path, "/api/tools/")
+		var id int64
+		fmt.Sscanf(idStr, "%d", &id)
+		if id == 0 {
+			writeJSONError(w, 400, fmt.Errorf("invalid tool id"))
+			return
+		}
+
+		switch r.Method {
+		case http.MethodGet:
+			t, err := db.Get().GetToolByID(id)
+			if err != nil {
+				writeJSONError(w, 404, fmt.Errorf("tool not found"))
+				return
+			}
+			data, _ := json.Marshal(t)
+			w.Write(data)
+
+		case http.MethodPut:
+			var t db.ToolRecord
+			if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
+				writeJSONError(w, 400, err)
+				return
+			}
+			t.ID = id
+			if t.TimeoutMs <= 0 {
+				t.TimeoutMs = 30000
+			}
+			if err := db.Get().UpdateTool(&t); err != nil {
+				writeJSONError(w, 500, err)
+				return
+			}
+			tools.GetRegistry().Reload()
+			w.Write([]byte(`{"ok":true}`))
+
+		case http.MethodDelete:
+			if err := db.Get().DeleteTool(id); err != nil {
+				writeJSONError(w, 500, err)
+				return
+			}
+			tools.GetRegistry().Reload()
+			w.Write([]byte(`{"ok":true}`))
+
+		default:
+			http.Error(w, `{"error":"method not allowed"}`, 405)
+		}
+	})
+
+	// POST /api/tools/test — execute a tool with given arguments and return result
+	mux.HandleFunc("/api/tools/test", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"error":"method not allowed"}`, 405)
+			return
+		}
+		var req struct {
+			ToolName  string                 `json:"tool_name"`
+			Arguments map[string]interface{} `json:"arguments"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSONError(w, 400, fmt.Errorf("invalid JSON: %v", err))
+			return
+		}
+		if req.ToolName == "" {
+			writeJSONError(w, 400, fmt.Errorf("tool_name is required"))
+			return
+		}
+		tool, err := tools.GetRegistry().Get(req.ToolName)
+		if err != nil {
+			writeJSONError(w, 404, fmt.Errorf("tool not found: %s", req.ToolName))
+			return
+		}
+		executor, err := tools.NewExecutor(tool)
+		if err != nil {
+			writeJSONError(w, 400, err)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), time.Duration(tool.TimeoutMs)*time.Millisecond)
+		defer cancel()
+		start := time.Now()
+		result, execErr := executor.Execute(ctx, tool, req.Arguments)
+		durationMs := int(time.Since(start).Milliseconds())
+		resp := map[string]interface{}{
+			"success":     execErr == nil,
+			"result":      result,
+			"duration_ms": durationMs,
+		}
+		if execErr != nil {
+			resp["error"] = execErr.Error()
+		}
+		data, _ := json.Marshal(resp)
+		w.Write(data)
+	})
+
+	// GET /api/tools/logs — recent tool execution logs
+	mux.HandleFunc("/api/tools/logs", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodGet {
+			http.Error(w, `{"error":"method not allowed"}`, 405)
+			return
+		}
+		logs, err := db.Get().GetToolExecutionLogs(50)
+		if err != nil {
+			writeJSONError(w, 500, err)
+			return
+		}
+		if logs == nil {
+			logs = make([]db.ToolLogRecord, 0)
+		}
+		data, _ := json.Marshal(map[string]interface{}{"logs": logs})
 		w.Write(data)
 	})
 
@@ -1594,11 +2032,51 @@ func createWebHandler() http.Handler {
 //go:embed dashboard.html
 var dashboardHTML string
 
+// autoMapRAPItoLAPI checks if a newly created RAPI's model identity (series, model_name, version)
+// matches an existing LAPI. If so, the RAPI is automatically appended to that LAPI's routing chain.
+func autoMapRAPItoLAPI(rapi *models.RAPI) {
+	if rapi.Series == "" && rapi.ModelName == "" && rapi.Version == "" {
+		return // No identity to match
+	}
+	lapi, err := db.Get().FindLAPIByModelIdentity(rapi.Series, rapi.ModelName, rapi.Version)
+	if err != nil || lapi == nil {
+		return // No matching LAPI
+	}
+	// Get current routing chain and check for duplicates
+	existing, err := db.Get().GetLAPIRAPIMapping(lapi.ID)
+	if err != nil {
+		return
+	}
+	for _, id := range existing {
+		if id == rapi.ID {
+			return // Already in the chain
+		}
+	}
+	// Append to the end of the chain
+	existing = append(existing, rapi.ID)
+	if err := db.Get().SetLAPIRAPIOrder(lapi.ID, existing); err != nil {
+		log.Printf("[AUTO-MAP] failed to add rapi=%d to lapi=%s: %v", rapi.ID, lapi.Alias, err)
+		return
+	}
+	log.Printf("[AUTO-MAP] rapi=%s (series=%s name=%s ver=%s) auto-added to lapi=%s",
+		rapi.Alias, rapi.Series, rapi.ModelName, rapi.Version, lapi.Alias)
+}
+
 func writeJSONError(w http.ResponseWriter, status int, err error) {
 	w.Header().Set("Content-Type", "application/json")
 	errResp, _ := json.Marshal(map[string]string{"error": err.Error()})
 	w.WriteHeader(status)
 	w.Write(errResp)
+}
+
+// maskToken returns a masked preview of a token for safe display.
+// Shows the first 8 and last 4 characters with "***" in between.
+// Short tokens (≤12 chars) are fully masked.
+func maskToken(token string) string {
+	if len(token) <= 12 {
+		return "***"
+	}
+	return token[:8] + "***" + token[len(token)-4:]
 }
 
 func parseTime(tStr string) (time.Time, error) {

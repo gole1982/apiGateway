@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,6 +23,7 @@ import (
 	"gateway/internal/models"
 	"gateway/internal/notify"
 	"gateway/internal/scheduler"
+	"gateway/internal/tools"
 )
 
 type ProxyGateway struct {
@@ -34,6 +36,8 @@ type ProxyGateway struct {
 	// responseTimeout is applied to non-streaming upstream requests only.
 	// Streaming responses intentionally have no body deadline (client ctx is the bound).
 	responseTimeout time.Duration
+	// agentConfig controls the tool-calling agent loop (nil = agent disabled).
+	agentConfig *tools.AgentConfig
 }
 
 // NewProxyGateway creates a gateway with default timeouts.
@@ -108,6 +112,197 @@ func (g *ProxyGateway) InvalidateRAPI(rapiID int64) {
 // enabled=true or available=true to the DB.
 func (g *ProxyGateway) RevalidateRAPI(rapiID int64) {
 	g.scheduler.RevalidateRAPI(rapiID)
+}
+
+// RetryItem records the outcome of probing one previously-unavailable RAPI.
+type RetryItem struct {
+	ID         int64  `json:"id"`
+	Alias      string `json:"alias"`
+	Platform   string `json:"platform"`
+	Reason     string `json:"reason,omitempty"` // for failed items: why it stayed unavailable
+	DurationMs int64  `json:"duration_ms"`
+}
+
+// RetryReport is the aggregate result of a startup / on-demand health pass.
+type RetryReport struct {
+	Probed    int         `json:"probed"`
+	Recovered []RetryItem `json:"recovered"`
+	Failed    []RetryItem `json:"failed"`
+}
+
+// RecoverUnhealthyRAPIs probes every RAPI persisted as unavailable and, for
+// each that responds, clears the unavailable state and revalidates it in the
+// scheduler. Probes run concurrently up to `concurrency`. perProbeTimeout
+// bounds each individual probe. Platform-level failures (platform.available=0)
+// are recovered first via /v1/models; only their still-unavailable children are
+// probed individually afterwards.
+//
+// The returned report is safe to surface to the dashboard.
+func (g *ProxyGateway) RecoverUnhealthyRAPIs(ctx context.Context, concurrency, perProbeTimeoutSec int) *RetryReport {
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	perProbeTimeout := time.Duration(perProbeTimeoutSec) * time.Second
+	if perProbeTimeout <= 0 {
+		perProbeTimeout = 15 * time.Second
+	}
+
+	report := &RetryReport{}
+	probeClient := &http.Client{Timeout: perProbeTimeout}
+
+	// 1) Recover platform-level failures first (mirror /api/platforms/restore).
+	platforms, _ := g.db.GetPlatforms()
+	var failedPlatformIDs []int64
+	for _, p := range platforms {
+		if !p.Enabled || p.Available {
+			continue
+		}
+		start := time.Now()
+		if ok, reason := g.probePlatform(ctx, p, probeClient); ok {
+			g.db.SetPlatformAvailable(p.ID, true)
+			log.Printf("[RECOVER] platform %s(id=%d) restored (%dms)", p.Name, p.ID, time.Since(start).Milliseconds())
+		} else {
+			failedPlatformIDs = append(failedPlatformIDs, p.ID)
+			log.Printf("[RECOVER] platform %s(id=%d) still failing: %s", p.Name, p.ID, reason)
+		}
+	}
+	failedPlatform := make(map[int64]bool, len(failedPlatformIDs))
+	for _, id := range failedPlatformIDs {
+		failedPlatform[id] = true
+	}
+
+	// 2) Collect RAPIs still unavailable.
+	rapis, _ := g.db.GetRAPIs()
+	var unhealthy []models.RAPIWithPlatform
+	for _, r := range rapis {
+		if r.Enabled && !r.Available && !r.IsWebpage {
+			unhealthy = append(unhealthy, r)
+		}
+	}
+	report.Probed = len(unhealthy)
+	if len(unhealthy) == 0 {
+		return report
+	}
+
+	// 3) Probe concurrently.
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	for _, rapi := range unhealthy {
+		wg.Add(1)
+		go func(r models.RAPIWithPlatform) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			item := RetryItem{
+				ID:       r.ID,
+				Alias:    r.Alias,
+				Platform: r.PlatformName,
+			}
+			start := time.Now()
+
+			// If the owning platform itself is still failing, skip per-RAPI probe
+			// — its unavailable state reflects the platform, not the model.
+			if failedPlatform[r.PlatformID] {
+				item.Reason = "platform unavailable"
+				item.DurationMs = time.Since(start).Milliseconds()
+				mu.Lock()
+				report.Failed = append(report.Failed, item)
+				mu.Unlock()
+				return
+			}
+
+			probeCtx, cancel := context.WithTimeout(ctx, perProbeTimeout)
+			defer cancel()
+
+			results := apiformat.DetectFormats(probeCtx, r.BaseURL, r.Model, r.Token, probeClient)
+			anySupported := false
+			var supported []apiformat.APIFormat
+			for _, res := range results {
+				if res.Supported {
+					anySupported = true
+					supported = append(supported, res.Format)
+				}
+			}
+			item.DurationMs = time.Since(start).Milliseconds()
+
+			if !anySupported {
+				item.Reason = "no supported format responded"
+				mu.Lock()
+				report.Failed = append(report.Failed, item)
+				mu.Unlock()
+				log.Printf("[RECOVER] rapi %s(id=%d) still failing (%dms)", r.Alias, r.ID, item.DurationMs)
+				return
+			}
+
+			// Recovered: clear unavailable state, refresh formats, revalidate.
+			g.db.SetRAPIUnavailableWithReason(r.ID, true, "")
+			if len(supported) > 0 {
+				g.db.UpdateRAPIFormats(r.ID, apiformat.FormatsToJSON(supported))
+			}
+			g.RevalidateRAPI(r.ID)
+			mu.Lock()
+			report.Recovered = append(report.Recovered, item)
+			mu.Unlock()
+			log.Printf("[RECOVER] rapi %s(id=%d) restored (%dms)", r.Alias, r.ID, item.DurationMs)
+		}(rapi)
+	}
+	wg.Wait()
+	return report
+}
+
+// probePlatform mirrors the connectivity check of /api/platforms/restore: it
+// issues GET {baseURL}/v1/models with the platform token (or its first key) and
+// reports success on HTTP 200. Returns (ok, reason).
+func (g *ProxyGateway) probePlatform(ctx context.Context, p models.Platform, client *http.Client) (bool, string) {
+	baseURL := p.BaseURL
+	for _, suffix := range []string{"/v1/chat/completions", "/v1/messages", "/v1/chat", "/v1"} {
+		if len(baseURL) >= len(suffix) && baseURL[len(baseURL)-len(suffix):] == suffix {
+			baseURL = baseURL[:len(baseURL)-len(suffix)]
+			break
+		}
+	}
+	for len(baseURL) > 0 && baseURL[len(baseURL)-1] == '/' {
+		baseURL = baseURL[:len(baseURL)-1]
+	}
+	modelsURL := baseURL + "/v1/models"
+
+	token := p.Token
+	if keys, err := g.db.GetPlatformKeys(p.ID); err == nil && len(keys) > 0 {
+		token = keys[0].Token
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, modelsURL, nil)
+	if err != nil {
+		return false, err.Error()
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, err.Error()
+	}
+	defer resp.Body.Close()
+	io.ReadAll(resp.Body)
+
+	if resp.StatusCode != 200 {
+		return false, fmt.Sprintf("platform returned %d", resp.StatusCode)
+	}
+	return true, ""
+}
+
+
+// Scheduler returns the underlying scheduler Manager for read-only inspection.
+func (g *ProxyGateway) Scheduler() *scheduler.Manager {
+	return g.scheduler
+}
+
+// SetAgentConfig enables the agent tool-calling loop with the given configuration.
+func (g *ProxyGateway) SetAgentConfig(cfg tools.AgentConfig) {
+	g.agentConfig = &cfg
 }
 
 func (g *ProxyGateway) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
@@ -192,6 +387,21 @@ func (g *ProxyGateway) HandleChatCompletions(w http.ResponseWriter, r *http.Requ
 	isStream := req.Stream
 	if clientFormat == apiformat.FormatGemini && strings.HasSuffix(r.URL.Path, ":streamGenerateContent") {
 		isStream = true
+		// Gemini clients signal streaming via the URL suffix, not the JSON body. When we
+		// forward to an OpenAI/Anthropic-format RAPI, the upstream needs "stream":true in
+		// the body or it will return a single (non-SSE) JSON completion, which the gateway
+		// then tries to stream back → corruption/hang. Inject it into the canonical body
+		// so ConvertRequest propagates it to the target format.
+		if !req.Stream {
+			var cb map[string]interface{}
+			if json.Unmarshal(canonicalBody, &cb) == nil {
+				cb["stream"] = true
+				if out, mErr := json.Marshal(cb); mErr == nil {
+					canonicalBody = out
+					req.Stream = true
+				}
+			}
+		}
 	}
 
 	modelName := req.Model
@@ -241,10 +451,16 @@ func (g *ProxyGateway) HandleChatCompletions(w http.ResponseWriter, r *http.Requ
 		g.log.RecordRoutingDecision(requestID, lapi.Alias, rapiAliases)
 	}
 
+	// Agent mode: intercept requests with tools and handle the tool-call loop internally.
+	if g.agentConfig != nil && !isStream && isAgentMode(canonicalBody) {
+		g.handleAgentRequest(w, r, canonicalBody, &req, requestID, startTime)
+		return
+	}
+
 	if isStream {
-		fallbackUsed, clientStatusCode = g.handleStreamingRequest(w, r, canonicalBody, &req, lapi, rapis, requestID, sessionID, string(clientFormat))
+		fallbackUsed, clientStatusCode = g.handleStreamingRequest(w, r, body, canonicalBody, &req, lapi, rapis, requestID, sessionID, string(clientFormat))
 	} else {
-		fallbackUsed, clientStatusCode = g.handleNonStreamingRequest(w, r, canonicalBody, &req, lapi, rapis, requestID, sessionID, string(clientFormat))
+		fallbackUsed, clientStatusCode = g.handleNonStreamingRequest(w, r, body, canonicalBody, &req, lapi, rapis, requestID, sessionID, string(clientFormat))
 	}
 
 	g.db.RecordTrend(lapi.ID)
@@ -396,7 +612,7 @@ func (g *ProxyGateway) tryKeyForRAPI(
 			}
 			if g.notifyService != nil {
 				g.notifyService.PublishAsync(
-					fmt.Sprintf("RAPI %s [%s] Key #%d 认证失败（401），已自动禁用，请检查 API Key 是否有效", rapi.Alias, rapi.PlatformName, key.KeyIndex),
+					fmt.Sprintf("模型 %s [%s] Key #%d 认证失败（401），已自动禁用，请检查 API Key 是否有效", rapi.Alias, rapi.PlatformName, key.KeyIndex),
 					"Key 认证失败",
 				)
 			}
@@ -418,8 +634,8 @@ func (g *ProxyGateway) tryKeyForRAPI(
 			}
 			if g.notifyService != nil {
 				g.notifyService.PublishAsync(
-					fmt.Sprintf("RAPI %s [%s] 平台失效（%d），已自动下线，请检查账号状态后手动恢复", rapi.Alias, rapi.PlatformName, resp.StatusCode),
-					"RAPI 平台失效",
+					fmt.Sprintf("模型 %s [%s] 平台失效（%d），已自动标记失效，请检查账号状态后点击重试恢复", rapi.Alias, rapi.PlatformName, resp.StatusCode),
+					"模型平台失效",
 				)
 			}
 			return nil, 0, fmt.Errorf("%s", reason)
@@ -434,7 +650,7 @@ func (g *ProxyGateway) tryKeyForRAPI(
 }
 
 // handleStreamingRequest handles streaming (SSE) requests with full error absorption.
-func (g *ProxyGateway) handleStreamingRequest(w http.ResponseWriter, r *http.Request, canonicalBody []byte, req *models.ProxyRequest, lapi *models.LAPI, rapis []models.RAPIWithPlatform, requestID string, sessionID string, clientFormat string) (bool, int) {
+func (g *ProxyGateway) handleStreamingRequest(w http.ResponseWriter, r *http.Request, originalBody []byte, canonicalBody []byte, req *models.ProxyRequest, lapi *models.LAPI, rapis []models.RAPIWithPlatform, requestID string, sessionID string, clientFormat string) (bool, int) {
 	fallbackUsed := false
 	retryCount := 0
 	estimatedTokens := scheduler.EstimateCost(req)
@@ -501,7 +717,17 @@ func (g *ProxyGateway) handleStreamingRequest(w http.ResponseWriter, r *http.Req
 		}
 
 		// Bug 8.1: Convert canonical (OpenAI) body directly to target format in one step.
-		upstreamBody, convErr := apiformat.ConvertRequest(canonicalBody, apiformat.FormatOpenAI, apiformat.APIFormat(targetFormat), rapi.Model)
+		// Optimization: when client format matches target format, skip the lossy
+		// canonical round-trip and just replace the model field in the original body.
+		// Use ReplaceModelField (lossless json decode/encode) rather than byte-level
+		// substitution, which corrupts content containing "model":"X" substrings.
+		var upstreamBody []byte
+		var convErr error
+		if targetFormat == clientFormat {
+			upstreamBody = apiformat.ReplaceModelField(originalBody, rapi.Model)
+		} else {
+			upstreamBody, convErr = apiformat.ConvertRequest(canonicalBody, apiformat.FormatOpenAI, apiformat.APIFormat(targetFormat), rapi.Model)
+		}
 		if convErr != nil {
 			log.Printf("[ERR] rapi=%s convert error: %v", rapi.Alias, convErr)
 			g.scheduler.MarkFailure(rapi.ID, time.Time{}, "convert error: "+convErr.Error())
@@ -513,6 +739,8 @@ func (g *ProxyGateway) handleStreamingRequest(w http.ResponseWriter, r *http.Req
 		latencyMs := int(time.Since(startTime).Milliseconds())
 
 		if err != nil {
+			// Count failed request toward rate limit counters (0 tokens — unknown).
+			g.scheduler.RecordRequest(rapi.ID, 0)
 			if errors.Is(err, scheduler.ErrAllKeysUnavailable) {
 				// All keys exhausted — mark RAPI failed too.
 				g.scheduler.MarkFailure(rapi.ID, time.Time{}, "all keys unavailable")
@@ -524,7 +752,7 @@ func (g *ProxyGateway) handleStreamingRequest(w http.ResponseWriter, r *http.Req
 					g.log.RecordError(requestID, "Model "+rapi.Alias+" ["+rapi.PlatformName+"] failed: "+err.Error(), "UPSTREAM_RESPONSE")
 				}
 				if g.notifyService != nil {
-					g.notifyService.PublishAsync(fmt.Sprintf("RAPI %s failed: %v", rapi.Alias, err), "RAPI Error")
+					g.notifyService.PublishAsync(fmt.Sprintf("模型 %s 请求失败: %v", rapi.Alias, err), "模型错误")
 				}
 			}
 			retryCount++
@@ -562,6 +790,12 @@ func (g *ProxyGateway) handleStreamingRequest(w http.ResponseWriter, r *http.Req
 			for {
 				n, readErr := teeBody.Read(buf)
 				if n > 0 {
+					// Check if client has disconnected before writing.
+					if r.Context().Err() != nil {
+						log.Printf("[INFO] client disconnected during stream, stopping")
+						resp.Body.Close()
+						return fallbackUsed, http.StatusOK
+					}
 					responseCommitted = true
 					w.Write(buf[:n])
 					flusher.Flush()
@@ -578,6 +812,12 @@ func (g *ProxyGateway) handleStreamingRequest(w http.ResponseWriter, r *http.Req
 				log.Printf("[ERR] stream convert error: %v", err)
 				// Bug 8.4: drain remaining body to avoid leaking the connection.
 				io.Copy(io.Discard, teeBody)
+				// If the converter had already flushed one or more data: frames to the
+				// client before erroring, the HTTP response is committed: we CANNOT retry
+				// against another RAPI, otherwise a second stream's message_start/deltas
+				// would be appended to the same response → cross-stream contamination.
+				// Only retry when literally zero frames were written.
+				responseCommitted = converter.Written() > 0
 			} else if converter.Written() > 0 {
 				// Only mark as committed when at least one SSE frame reached the client.
 				// Written()==0 means the upstream sent an empty or all-skipped stream;
@@ -607,7 +847,7 @@ func (g *ProxyGateway) handleStreamingRequest(w http.ResponseWriter, r *http.Req
 }
 
 // handleNonStreamingRequest handles non-streaming requests with full error absorption.
-func (g *ProxyGateway) handleNonStreamingRequest(w http.ResponseWriter, r *http.Request, canonicalBody []byte, req *models.ProxyRequest, lapi *models.LAPI, rapis []models.RAPIWithPlatform, requestID string, sessionID string, clientFormat string) (bool, int) {
+func (g *ProxyGateway) handleNonStreamingRequest(w http.ResponseWriter, r *http.Request, originalBody []byte, canonicalBody []byte, req *models.ProxyRequest, lapi *models.LAPI, rapis []models.RAPIWithPlatform, requestID string, sessionID string, clientFormat string) (bool, int) {
 	fallbackUsed := false
 	retryCount := 0
 	estimatedTokens := scheduler.EstimateCost(req)
@@ -670,7 +910,17 @@ func (g *ProxyGateway) handleNonStreamingRequest(w http.ResponseWriter, r *http.
 		}
 
 		// Bug 8.1: Convert canonical (OpenAI) body directly to target format.
-		upstreamBody, convErr := apiformat.ConvertRequest(canonicalBody, apiformat.FormatOpenAI, apiformat.APIFormat(targetFormat), rapi.Model)
+		// Optimization: when client format matches target format, skip the lossy
+		// canonical round-trip and just replace the model field in the original body.
+		// Use ReplaceModelField (lossless json decode/encode) rather than byte-level
+		// substitution, which corrupts content containing "model":"X" substrings.
+		var upstreamBody []byte
+		var convErr error
+		if targetFormat == clientFormat {
+			upstreamBody = apiformat.ReplaceModelField(originalBody, rapi.Model)
+		} else {
+			upstreamBody, convErr = apiformat.ConvertRequest(canonicalBody, apiformat.FormatOpenAI, apiformat.APIFormat(targetFormat), rapi.Model)
+		}
 		if convErr != nil {
 			log.Printf("[ERR] rapi=%s convert error: %v", rapi.Alias, convErr)
 			g.scheduler.MarkFailure(rapi.ID, time.Time{}, "convert error: "+convErr.Error())
@@ -682,6 +932,8 @@ func (g *ProxyGateway) handleNonStreamingRequest(w http.ResponseWriter, r *http.
 		latencyMs := int(time.Since(startTime).Milliseconds())
 
 		if err != nil {
+			// Count failed request toward rate limit counters (0 tokens — unknown).
+			g.scheduler.RecordRequest(rapi.ID, 0)
 			if errors.Is(err, scheduler.ErrAllKeysUnavailable) {
 				g.scheduler.MarkFailure(rapi.ID, time.Time{}, "all keys unavailable")
 			} else {
@@ -883,7 +1135,14 @@ func (g *ProxyGateway) sendErrorStream(w http.ResponseWriter, flusher http.Flush
 			"code":    "failover_exhausted",
 		},
 	})
-	w.Write(errorResp)
+	// The handler has already set Content-Type: text/event-stream, so the error MUST be
+	// framed as an SSE data: event. A bare JSON object (no data: prefix, no \n\n) is not
+	// parseable by SSE clients — e.g. Anthropic clients expect event:/data: framing and
+	// would raise "invalid character '{'" on the raw JSON.
+	if _, err := fmt.Fprintf(w, "data: %s\n\n", errorResp); err != nil {
+		log.Printf("[WARN] sendErrorStream: write failed: %v", err)
+		return
+	}
 	flusher.Flush()
 }
 
@@ -917,18 +1176,7 @@ func pickTargetFormat(rapi models.RAPIWithPlatform, clientFormat string) string 
 	return "openai" // fallback
 }
 
-func replaceModelInBody(body []byte, oldModel, newModel string) ([]byte, error) {
-	oldPattern := fmt.Sprintf(`"model":"%s"`, oldModel)
-	newPattern := fmt.Sprintf(`"model":"%s"`, newModel)
-	result := bytes.ReplaceAll(body, []byte(oldPattern), []byte(newPattern))
-
-	oldPatternSpace := fmt.Sprintf(`"model": "%s"`, oldModel)
-	newPatternSpace := fmt.Sprintf(`"model": "%s"`, newModel)
-	result = bytes.ReplaceAll(result, []byte(oldPatternSpace), []byte(newPatternSpace))
-
-	return result, nil
-}
-
+// respHeaders returns a flat string map of the first value for each response header.
 func respHeaders(resp *http.Response) map[string]string {
 	headers := make(map[string]string)
 	for k, v := range resp.Header {
@@ -1015,4 +1263,267 @@ func (lw *limitedWriter) Write(p []byte) (int, error) {
 		p = p[:remaining]
 	}
 	return lw.w.Write(p)
+}
+
+// isAgentMode determines whether the request should enter the agent tool-calling loop.
+// Returns true if body contains "agent_mode": true, OR contains a non-empty "tools" array
+// and "agent_mode" is not explicitly false.
+func isAgentMode(body []byte) bool {
+	var probe struct {
+		AgentMode *bool                    `json:"agent_mode"`
+		Tools     []map[string]interface{} `json:"tools"`
+		ToolNames []string                 `json:"tool_names"`
+	}
+	if err := json.Unmarshal(body, &probe); err != nil {
+		return false
+	}
+	// Explicit agent_mode: true
+	if probe.AgentMode != nil && *probe.AgentMode {
+		return true
+	}
+	// Explicit agent_mode: false → never enter agent loop
+	if probe.AgentMode != nil && !*probe.AgentMode {
+		return false
+	}
+	// Implicit: has tools or tool_names → default to agent mode
+	return len(probe.Tools) > 0 || len(probe.ToolNames) > 0
+}
+
+// handleAgentRequest runs the agent tool-calling loop and writes the final response.
+func (g *ProxyGateway) handleAgentRequest(w http.ResponseWriter, r *http.Request, canonicalBody []byte, req *models.ProxyRequest, requestID string, startTime time.Time) {
+	// Parse tools from the request body
+	var bodyMap map[string]interface{}
+	if err := json.Unmarshal(canonicalBody, &bodyMap); err != nil {
+		http.Error(w, `{"error":{"message":"Invalid request body","type":"invalid_request"}}`, http.StatusBadRequest)
+		return
+	}
+
+	// Collect tools: inline definitions + referenced tool_names from registry
+	registry := tools.GetRegistry()
+	var toolsList []map[string]interface{}
+
+	// Inline tools from body
+	if inlineTools, ok := bodyMap["tools"].([]interface{}); ok {
+		for _, t := range inlineTools {
+			if tm, ok := t.(map[string]interface{}); ok {
+				toolsList = append(toolsList, tm)
+			}
+		}
+	}
+
+	// Referenced tool_names from registry
+	if toolNames, ok := bodyMap["tool_names"].([]interface{}); ok {
+		var names []string
+		for _, n := range toolNames {
+			if s, ok := n.(string); ok {
+				names = append(names, s)
+			}
+		}
+		if len(names) > 0 {
+			registered, err := registry.ToOpenAITools(names)
+			if err != nil {
+				http.Error(w, fmt.Sprintf(`{"error":{"message":"%s","type":"invalid_request"}}`, err.Error()), http.StatusBadRequest)
+				return
+			}
+			toolsList = append(toolsList, registered...)
+		}
+	}
+
+	if len(toolsList) == 0 {
+		// No tools resolved — fall through to normal proxy (shouldn't happen if isAgentMode passed)
+		http.Error(w, `{"error":{"message":"No tools available for agent mode","type":"invalid_request"}}`, http.StatusBadRequest)
+		return
+	}
+
+	// Extract messages
+	messages, _ := bodyMap["messages"].([]interface{})
+	if len(messages) == 0 {
+		http.Error(w, `{"error":{"message":"messages is required","type":"invalid_request"}}`, http.StatusBadRequest)
+		return
+	}
+
+	// Create agent loop with ForwardInternal as the forward function
+	loop := tools.NewLoop(registry, *g.agentConfig, g.ForwardInternal)
+
+	log.Printf("[AGENT] starting agent loop: model=%s tools=%d requestID=%s", req.Model, len(toolsList), requestID)
+
+	content, toolLogs, err := loop.Run(r.Context(), messages, toolsList, req.Model)
+
+	// Log tool executions to DB
+	for _, tl := range toolLogs {
+		argsJSON, _ := json.Marshal(tl.Arguments)
+		g.db.LogToolExecution(requestID, tl.Name, string(argsJSON), tl.Result, tl.Error, tl.DurationMs, tl.Iteration)
+	}
+
+	if err != nil && content == "" {
+		log.Printf("[AGENT] loop failed: %v", err)
+		http.Error(w, fmt.Sprintf(`{"error":{"message":"Agent loop failed: %s","type":"agent_error"}}`, err.Error()), http.StatusBadGateway)
+		if g.log != nil {
+			g.log.RecordError(requestID, "Agent loop failed: "+err.Error(), "AGENT_LOOP")
+			g.log.RecordClientResponse(requestID, http.StatusBadGateway, int(time.Since(startTime).Milliseconds()), false)
+		}
+		return
+	}
+
+	// Build standard OpenAI chat completion response
+	respID := "chatcmpl-agent-" + requestID[:8]
+	agentMeta := map[string]interface{}{
+		"iterations": countIterations(toolLogs),
+		"tool_calls": toolLogs,
+	}
+	if err != nil {
+		agentMeta["error"] = err.Error()
+	}
+
+	response := map[string]interface{}{
+		"id":      respID,
+		"object":  "chat.completion",
+		"created": time.Now().Unix(),
+		"model":   req.Model,
+		"choices": []map[string]interface{}{
+			{
+				"index": 0,
+				"message": map[string]interface{}{
+					"role":    "assistant",
+					"content": content,
+				},
+				"finish_reason": "stop",
+			},
+		},
+		"usage": map[string]interface{}{
+			"prompt_tokens":     0,
+			"completion_tokens": 0,
+			"total_tokens":      0,
+		},
+		"_agent_meta": agentMeta,
+	}
+
+	respBytes, _ := json.Marshal(response)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(respBytes)
+
+	log.Printf("[AGENT] completed: model=%s iterations=%d tools_called=%d latency=%dms",
+		req.Model, countIterations(toolLogs), len(toolLogs), time.Since(startTime).Milliseconds())
+
+	if g.log != nil {
+		g.log.RecordClientResponse(requestID, http.StatusOK, int(time.Since(startTime).Milliseconds()), false)
+	}
+}
+
+// countIterations returns the max iteration number from tool logs.
+func countIterations(logs []tools.ToolCallLog) int {
+	max := 0
+	for _, l := range logs {
+		if l.Iteration > max {
+			max = l.Iteration
+		}
+	}
+	return max
+}
+
+// ForwardInternal sends a chat completion request through the normal scheduler/routing
+// pipeline and returns the raw OpenAI-format response body. Used by the agent loop
+// for internal LLM calls (no HTTP ResponseWriter involved).
+func (g *ProxyGateway) ForwardInternal(ctx context.Context, body []byte) ([]byte, error) {
+	var req struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		return nil, fmt.Errorf("parse internal request: %w", err)
+	}
+
+	lapi, err := g.db.GetLAPIByAlias(strings.ToLower(req.Model))
+	if err != nil {
+		return nil, fmt.Errorf("unknown model: %s", req.Model)
+	}
+	if !lapi.Enabled {
+		return nil, fmt.Errorf("model %s is disabled", req.Model)
+	}
+
+	rapis, err := g.db.GetEnabledRAPIsForLAPI(lapi.ID)
+	if err != nil || len(rapis) == 0 {
+		return nil, fmt.Errorf("no backends available for model %s", req.Model)
+	}
+	g.loadKeysForRAPIs(rapis)
+
+	// Try up to len(rapis) times (failover)
+	var lastErr error
+	for attempt := 0; attempt < len(rapis)+2; attempt++ {
+		rapi, waitUntil, err := g.scheduler.PickAvailable(lapi.ID, rapis, "openai")
+		if err != nil {
+			if errors.Is(err, scheduler.ErrAllRAPIUnavailable) && !waitUntil.IsZero() {
+				if waitErr := g.scheduler.Wait(ctx, lapi.ID, waitUntil); waitErr != nil {
+					return nil, fmt.Errorf("all backends unavailable: %w", waitErr)
+				}
+				continue
+			}
+			return nil, fmt.Errorf("no available backend: %w", err)
+		}
+
+		targetFormat := pickTargetFormat(rapi, "openai")
+		var effectiveURL string
+		if rapi.URLAutoComplete {
+			effectiveURL = apiformat.BuildURL(rapi.BaseURL, rapi.Model, apiformat.APIFormat(targetFormat))
+		} else {
+			effectiveURL = strings.TrimRight(rapi.BaseURL, "/")
+		}
+		if effectiveURL == "" {
+			g.scheduler.MarkFailure(rapi.ID, time.Time{}, "invalid url")
+			continue
+		}
+
+		// Convert body to target format
+		var upstreamBody []byte
+		if targetFormat == "openai" {
+			upstreamBody = apiformat.ReplaceModelField(body, rapi.Model)
+		} else {
+			upstreamBody, err = apiformat.ConvertRequest(body, apiformat.FormatOpenAI, apiformat.APIFormat(targetFormat), rapi.Model)
+			if err != nil {
+				g.scheduler.MarkFailure(rapi.ID, time.Time{}, "convert error: "+err.Error())
+				continue
+			}
+		}
+
+		resp, _, err := g.tryKeyForRAPI(ctx, rapi, effectiveURL, upstreamBody, "agent-internal", attempt, targetFormat)
+		if err != nil {
+			g.scheduler.RecordRequest(rapi.ID, 0)
+			g.scheduler.MarkFailure(rapi.ID, time.Time{}, err.Error(), isTimeoutError(err))
+			lastErr = err
+			continue
+		}
+
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		g.scheduler.RecordRequest(rapi.ID, 0)
+		g.scheduler.MarkSuccess(rapi.ID)
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			lastErr = fmt.Errorf("upstream returned %d: %s", resp.StatusCode, string(respBody[:min(len(respBody), 256)]))
+			g.scheduler.MarkFailure(rapi.ID, time.Time{}, lastErr.Error())
+			continue
+		}
+
+		// Convert response back to OpenAI format if needed
+		if targetFormat != "openai" {
+			converted, convErr := apiformat.ConvertResponse(respBody, apiformat.APIFormat(targetFormat), apiformat.FormatOpenAI, req.Model)
+			if convErr != nil {
+				return respBody, nil // return raw if conversion fails
+			}
+			return converted, nil
+		}
+		return respBody, nil
+	}
+
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("all backends exhausted for model %s", req.Model)
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
