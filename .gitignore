@@ -2,5 +2,14 @@
 .gocache/
 *.exe
 *.db
+*.db-shm
+*.db-wal
 logs/
 .traerules
+
+# tooling scratch / probe artifacts
+.zcode*
+*_probe_*.txt
+*.zcodecliexec*
+build_err.txt
+glm_verify.txt
