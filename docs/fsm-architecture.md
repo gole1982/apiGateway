@@ -129,6 +129,18 @@ ClassifyFailure(statusCode) → ScopeSystem (401) / ScopePlatform (402,403,409,4
 命中时，即使状态码是 403/402，也只标记 `failure_type=1`（临时）+ 短冷却，
 额度恢复后自动回归链路——不再需要手动探测。
 
+### 能力失配检测（key×model 能力黑名单）
+
+`IsCapabilityMismatch(body)` 按响应体关键字识别"该 Key 无权访问此模型"类错误：
+英文 `model not found` / `model does not exist` / `no such model` / `invalid
+model` 等，中文 `模型不存在` / `无此模型` / `模型未开通` 等。
+
+命中时（404/400/422/403）不再整 key 冷却，而是落库
+`key_model_blocks(key_id, rapi_id, reason, expires_at)`——只禁用该 (key, model)
+组合，key 继续服务其他模型。TTL 默认 24h（`capability_block_sec` 可配）到期自动
+重试，请求或直测 2xx 自动解除；全池被 block 走硬死判定，原因明确
+"所有 Key 无权访问此模型"。删除 key 时一并清理其全部 block。
+
 ### Store 接口
 
 DB 写全部变成转换副作用：
@@ -150,9 +162,10 @@ gateway / service 不再直接写 DB 状态列，只发事件；实体负责落�
 
 退化为薄层：持有 `map[int64]*entity.RAPI` / `*entity.Key` / `*entity.Platform`。
 
-- 公开 API 原样保留（`PickAvailableKey` / `Mark*` / `InvalidateRAPI` /
-  `RevalidateRAPI` / `Snapshot` / `RecordRequest` / `Wait`），service / insights
-  零改动。
+- 公开 API 原样保留（`PickAvailableKey` / `Mark*` / `RemoveKey` /
+  `InvalidateRAPI` / `RevalidateRAPI` / `Snapshot` / `RecordRequest` / `Wait`），
+  service / insights 零改动。
+- `RemoveKey(keyID)`：key 删除时同步清理 `m.keys` 内存实体，避免残留。
 - `Mark*` 系列只是实体事件的薄封装：`MarkFailure` → `Fire(session_failure)`
   ，`MarkKeyPermanentFailure` → `Fire(permanent_failure)`，以此类推。
 - recovery loop 变薄：只调 `Advance(now)`，让定时转换自动生效。
@@ -160,13 +173,39 @@ gateway / service 不再直接写 DB 状态列，只发事件；实体负责落�
 ## 编排层（internal/gateway）
 
 - 持有 `entity.Store`（dbStore 实现），构造时注入 scheduler。
-- `tryKeyForRAPI`：失败时调 `ClassifyFailure` + `IsRecoverableBillingError`
-  判定，然后调 scheduler 的 `MarkKey*`——状态流转与落库全部下沉到实体。
+- `tryKeyForRAPI`：失败时调 `ClassifyFailure` + `IsRecoverableBillingError` +
+  `IsCapabilityMismatch` 判定——能力失配记入 `key_model_blocks` 黑名单（组合级，
+  不整 key 冷却）；其余走 scheduler 的 `MarkKey*`——状态流转与落库全部下沉到实体。
+  循环内每轮重过滤被 block 的 key，全阻塞直接返回 `ErrAllKeysUnavailable`
+  （避免 block 后空转重试打满上游）。
 - `handleAllKeysUnavailable`：用 `entity.KeysHardDead(keys)` 区分硬死/软冷却，
   发 `all_keys_hard`（落库失效 + 通知）或 `all_keys_soft`（短冷却）。
 - 探测（`RecoverUnhealthyRAPIs`、`probePlatform`）改用 `GetPlatformKeys` 中
   第一个可用 key（`FirstUsableKey`，语义同 `PickAvailableKey`），不再用可能
   为空的平台旧 `rapi.Token` 字段；探测结果驱动 Platform/RAPI 实体恢复。
+- 探测循环提取为 `recoverRAPIs`，并暴露按平台（`RecoverPlatformRAPIs`）与按模型
+  （`RecoverRAPIs`）收窄的入口——添加 Key / 白名单编辑后只探测受影响范围，
+  探测不过的模型保持不可用（不再盲目乐观复活）。
+
+## Key 生命周期管理
+
+Key 的增删改走 `internal/service`（HTTP）→ `internal/db`（持久化）→
+`internal/scheduler`（内存实体）三层，完备性约定：
+
+- **添加**（POST）：`AddPlatformKey` 取 `key_index=max+1`，`AUTOINCREMENT` 保证
+  id 永不复用（RAPI 白名单引用不会错指）；随后自动触发 `RecoverPlatformRAPIs`
+  探测式恢复——此前因 key 全死而不可用的模型只有真正应答才复活。
+- **更新**（PUT `?key_id=N`）：单 key 更新，token 留空 = 保留原值（不回传明文）。
+- **整表替换**（平台弹窗保存）：`SetPlatformKeys` 先按 id（旧客户端按解密 token
+  兜底）匹配保留身份，再按原 id 显式重插——避免 DELETE+INSERT 重建导致 RAPI
+  `key_ids` 白名单失配；失败状态（`failure_type`/原因/时间）跨替换完整保留。
+- **删除**（DELETE）：先 `DetachKeyFromRAPIs` 从所有 `rapi.key_ids` 剥离悬挂引用
+  （否则池静默缩小且 `KeysHardDead(空池)` 回退平台 token，模型静默降级），再删行、
+  调 `Manager.RemoveKey` 清内存实体；响应返回 `removed_from` 受影响模型列表。
+- **直测一键恢复**（`POST /api/rapis/test` + `clear_on_success`）：模型页直测
+  key×model，上游 2xx 时复用 `clearKeyFailureState()`——清 `failure_type`、
+  `MarkKeySuccess` 立即重新入池、`RecoverRAPIs` 复活模型；与平台 key 探测共用同一
+  恢复逻辑。
 
 ## 恢复路径一览
 
@@ -177,6 +216,7 @@ gateway / service 不再直接写 DB 状态列，只发事件；实体负责落�
 | Dashboard「重试全部」`/api/system/retry-unhealthy` | 手动 | ✅ |
 | Dashboard 平台「恢复」`/api/platforms/restore` | 手动 | ✅（用真实 key） |
 | key「探测」`/api/platforms/{id}/keys/{kid}/probe` | 手动 | ✅ |
+| **直测一键恢复**（`/api/rapis/test` + `clear_on_success`） | 模型页直测 2xx | ✅（清失败标记 + 重新入池 + 复活模型） |
 | **添加 Key 后自动重探测**（`RecoverPlatformRAPIs`） | POST/PUT key 后自动 | ✅（仅恢复真正应答的模型） |
 | **白名单编辑后自动重探测**（`RecoverRAPIs`） | RAPI `key_ids` 保存后自动 | ✅ |
 | 定时冷却 + 指数退避 | 运行时自动 | ✅（429/5xx/可恢复计费） |
@@ -190,8 +230,10 @@ gateway / service 不再直接写 DB 状态列，只发事件；实体负责落�
 
 - `internal/fsm/fsm_test.go`：引擎（转换表、Guard、定时转换、副作用死锁）
 - `internal/entity/entity_test.go`：RAPI/Key 全部转换、KeysHardDead、
-  Platform FSM、计费错误判定
+  Platform FSM、计费错误判定、能力失配判定（`TestIsCapabilityMismatch`）
 - `internal/entity/concurrency_test.go`：16 goroutine × 500 次混合事件无死锁
+- `internal/db/db_test.go`：`DetachKeyFromRAPIs`（双引用剥离/单引用置空/幂等）、
+  `key_model_blocks` 读写、analytics 时间戳回归（不可解析旧行不 500）
 - `internal/scheduler/scheduler_test.go`：对外 API 行为回归
 - `internal/gateway/gateway_test.go`：KeysHardDead 集成用例
 
