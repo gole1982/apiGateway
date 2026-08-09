@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -26,7 +25,6 @@ import (
 	"gateway/internal/models"
 	"gateway/internal/notify"
 	"gateway/internal/scheduler"
-	"gateway/internal/tools"
 )
 
 // ============ Security / Input Validation ============
@@ -127,41 +125,43 @@ func (s *Service) Run() error {
 	}
 
 	if err := db.Init(); err != nil {
-		log.Printf("Database init failed: %v", err)
+		logger.DefaultConsole().Error("service", "database init failed", "error", err.Error())
 		return err
 	}
 
 	cfg, err := config.Load()
 	if err != nil {
-		log.Printf("Config load failed: %v", err)
+		// DefaultConsole() lazily sets up a stderr-only structured logger so even
+		// the pre-config-load failure lands as JSON. We keep returning the error
+		// to the caller for its existing shutdown behaviour.
+		logger.DefaultConsole().Error("service", "config load failed", "error", err.Error())
 		return err
 	}
+
+	// Initialise the process-wide structured console logger as early as possible
+	// so every subsequent line (DB init, scheduler, gateway runtime) lands as
+	// JSON Lines with consistent component/level fields. Until this call, early
+	// loggers fall back to the stderr-only default via DefaultConsole().
+	logger.InitConsoleLogger(logger.ConsoleOptions{
+		Level:      logger.ParseLevel(cfg.LogLevel),
+		EnableFile: cfg.LogFile,
+		FilePath:   cfg.LogFilePath,
+	})
 
 	notifySvc = notify.NewNotificationService()
 
 	logConfig := logger.DefaultLogConfig()
 	logStorage := logger.NewLogStorage(db.Get())
 	if err := logStorage.InitTables(); err != nil {
-		log.Printf("Log storage init failed: %v", err)
+		logger.DefaultConsole().Error("service", "log storage init failed", "error", err.Error())
 	}
 	logInstance = logger.NewLogger(logStorage, logConfig)
 	logInstance.Start()
 
 	sessionTracker = logger.NewSessionTracker(logInstance)
 
-	schedulerCfg := scheduler.ConfigFromAppConfig(cfg.CooldownSec, cfg.MaxCooldownSec, cfg.RequestMaxWaitSec)
+	schedulerCfg := scheduler.ConfigFromAppConfig(cfg.CooldownSec, cfg.MaxCooldownSec, cfg.RequestMaxWaitSec, cfg.BillingCooldownSec, cfg.CapabilityBlockSec)
 	proxyGateway = gateway.NewProxyGatewayWithConfig(notifySvc, logInstance, sessionTracker, cfg.DialTimeoutSec, cfg.ResponseTimeoutSec, schedulerCfg)
-
-	// Enable agent tool-calling loop if configured
-	if cfg.AgentEnabled {
-		proxyGateway.SetAgentConfig(tools.AgentConfig{
-			MaxIterations:  cfg.AgentMaxIterations,
-			TotalTimeout:   time.Duration(cfg.AgentTimeoutSec) * time.Second,
-			MaxResultBytes: 8192,
-		})
-		tools.SetShellWhitelist(cfg.AgentShellWhitelist)
-		log.Printf("[INIT] Agent tool-calling enabled (max_iterations=%d, timeout=%ds, shell_whitelist=%v)", cfg.AgentMaxIterations, cfg.AgentTimeoutSec, cfg.AgentShellWhitelist)
-	}
 
 	proxyAddr := fmt.Sprintf("0.0.0.0:%d", cfg.ProxyPort)
 	proxyMux := http.NewServeMux()
@@ -200,7 +200,8 @@ func (s *Service) Run() error {
 	})
 	// Catch-all: return JSON 404 for unregistered paths instead of Go's default plain text 404
 	proxyMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("proxy: unhandled %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
+		logger.DefaultConsole().Info("service", "proxy: unhandled endpoint",
+			"method", r.Method, "path", r.URL.Path, "from", r.RemoteAddr)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
 		fmt.Fprintf(w, `{"error":{"message":"Unknown endpoint: %s %s","type":"invalid_request","code":"unknown_endpoint"}}`, r.Method, r.URL.Path)
@@ -236,7 +237,7 @@ func (s *Service) Run() error {
 	errCh := make(chan error, 2)
 
 	go func() {
-		log.Printf("Proxy server starting on %s", proxyAddr)
+		logger.DefaultConsole().Info("service", "proxy server starting", "addr", proxyAddr)
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			if strings.Contains(err.Error(), "address already in use") {
 				errCh <- fmt.Errorf("Proxy端口 %s 被占用，请先停止占用该端口的程序，或修改配置文件中的proxy_port", proxyAddr)
@@ -247,12 +248,12 @@ func (s *Service) Run() error {
 	}()
 
 	go func() {
-		log.Printf("Web dashboard starting on %s", webAddr)
+		logger.DefaultConsole().Info("service", "web dashboard starting", "addr", webAddr)
 		if err := webServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			if strings.Contains(err.Error(), "address already in use") {
-				log.Printf("警告: Web端口 %s 被占用，Web管理界面不可用，但Proxy服务仍可正常运行", webAddr)
+				logger.DefaultConsole().Warn("service", "Web端口被占用，Web管理界面不可用，但Proxy服务仍可正常运行", "addr", webAddr)
 			} else {
-				log.Printf("Web服务启动失败: %v", err)
+				logger.DefaultConsole().Error("service", "Web服务启动失败", "error", err.Error())
 			}
 		}
 	}()
@@ -269,13 +270,15 @@ func (s *Service) Run() error {
 	// restore the ones that respond. Runs async so it never blocks serving.
 	if cfg.RetryOnStartup {
 		go func() {
-			log.Printf("[STARTUP] retrying unhealthy models (concurrency=%d, timeout=%ds)...", cfg.RetryConcurrency, cfg.RetryTimeoutSec)
+			logger.DefaultConsole().Info("service", "[STARTUP] retrying unhealthy models",
+				"concurrency", cfg.RetryConcurrency, "timeout_sec", cfg.RetryTimeoutSec)
 			rep := proxyGateway.RecoverUnhealthyRAPIs(context.Background(), cfg.RetryConcurrency, cfg.RetryTimeoutSec)
-			log.Printf("[STARTUP] retry done: probed=%d recovered=%d failed=%d", rep.Probed, len(rep.Recovered), len(rep.Failed))
+			logger.DefaultConsole().Info("service", "[STARTUP] retry done",
+				"probed", rep.Probed, "recovered", len(rep.Recovered), "failed", len(rep.Failed))
 		}()
 	}
 
-	log.Println("Gateway service started successfully")
+	logger.DefaultConsole().Info("service", "Gateway service started successfully")
 
 	select {
 	case <-s.stopCh:
@@ -359,11 +362,14 @@ func createWebHandler() http.Handler {
 			rapi.Alias = strings.ToLower(strings.TrimSpace(rapi.Alias))
 			rapi.Model = strings.TrimSpace(rapi.Model)
 			if err := db.Get().CreateRAPI(&rapi); err != nil {
-				log.Printf("[API] CreateRAPI failed: alias=%s platform_id=%d error=%v", rapi.Alias, rapi.PlatformID, err)
+				logger.DefaultConsole().Error("service", "[API] CreateRAPI failed",
+					"alias", rapi.Alias, "platform_id", rapi.PlatformID, "error", err.Error())
 				writeJSONError(w, 500, err)
 				return
 			}
-			log.Printf("[API] CreateRAPI success: id=%d alias=%s model=%s platform_id=%d", rapi.ID, rapi.Alias, rapi.Model, rapi.PlatformID)
+			logger.DefaultConsole().Info("service", "[API] CreateRAPI success",
+				"id", rapi.ID, "alias", rapi.Alias, "model", rapi.Model, "platform_id", rapi.PlatformID)
+			db.Get().AddChangeLog("rapi", "create", rapi.ID, rapi.Alias, rapi.Model)
 			// Auto-map: if model identity matches a LAPI, add to its routing chain
 			autoMapRAPItoLAPI(&rapi)
 			w.Write([]byte(`{"success":true}`))
@@ -378,15 +384,35 @@ func createWebHandler() http.Handler {
 			// Model is the upstream model name — preserve original casing.
 			rapi.Alias = strings.ToLower(strings.TrimSpace(rapi.Alias))
 			rapi.Model = strings.TrimSpace(rapi.Model)
+			// Remember whether the model was unavailable before the edit, so a
+			// key_ids whitelist change that adds a usable key can trigger an
+			// automatic re-probe (previously it stayed dead until manual retry).
+			wasUnavailable := false
+			if prev, err := db.Get().GetRAPIByID(rapi.ID); err == nil && prev != nil {
+				wasUnavailable = prev.Enabled && !prev.Available
+			}
 			if err := db.Get().UpdateRAPI(&rapi); err != nil {
 				writeJSONError(w, 500, err)
 				return
+			}
+			db.Get().AddChangeLog("rapi", "update", rapi.ID, rapi.Alias, rapi.Model)
+			if wasUnavailable {
+				rep := proxyGateway.RecoverRAPIs(r.Context(), []int64{rapi.ID}, 1, 8)
+				if len(rep.Recovered) > 0 {
+					logger.DefaultConsole().Info("service", "[API] auto-recovered model after whitelist edit",
+						"rapi_id", rapi.ID, "alias", rapi.Alias)
+				}
 			}
 			w.Write([]byte(`{"success":true}`))
 
 		case http.MethodDelete:
 			id := r.URL.Query().Get("id")
 			force := r.URL.Query().Get("force") == "true"
+			// sync=true is used by the discovery wizard when a previously
+			// auto-discovered model is no longer returned by the platform. It
+			// bypasses the enabled/available guard (the model may still be
+			// "effective") and always cascades (removes LAPI refs + metrics).
+			sync := r.URL.Query().Get("sync") == "true"
 			var rapiID int64
 			fmt.Sscanf(id, "%d", &rapiID)
 
@@ -396,12 +422,12 @@ func createWebHandler() http.Handler {
 				writeJSONError(w, 404, fmt.Errorf("模型不存在"))
 				return
 			}
-			if rapiInfo.Enabled && rapiInfo.Available {
+			if !sync && rapiInfo.Enabled && rapiInfo.Available {
 				writeJSONError(w, 403, fmt.Errorf("生效状态的模型不能删除，请先禁用"))
 				return
 			}
 
-			if force {
+			if force || sync {
 				// Cascade delete: remove LAPI references + metrics + RAPI
 				if err := db.Get().DeleteRAPICascade(rapiID); err != nil {
 					writeJSONError(w, 500, err)
@@ -416,7 +442,194 @@ func createWebHandler() http.Handler {
 				}
 				proxyGateway.InvalidateRAPI(rapiID)
 			}
+			db.Get().AddChangeLog("rapi", "delete", rapiID, rapiInfo.Alias, "")
 			w.Write([]byte(`{"success":true}`))
+		}
+	})
+
+	// Key-model direct test: POST /api/rapis/test {rapi_id, key_id, body}
+	// Sends a real chat/completions request straight to the upstream platform with
+	// the chosen key, bypassing the routing chain — for verifying a specific
+	// key-model pairing (e.g. after billing cooldown or whitelist edits).
+	mux.HandleFunc("/api/rapis/test", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"error":"method not allowed"}`, 405)
+			return
+		}
+		var req struct {
+			RAPIID         int64  `json:"rapi_id"`
+			KeyID          int64  `json:"key_id"`
+			Body           string `json:"body"`
+			ClearOnSuccess bool   `json:"clear_on_success"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, `{"error":"invalid json"}`, 400)
+			return
+		}
+		rapi, err := db.Get().GetRAPIByID(req.RAPIID)
+		if err != nil || rapi == nil {
+			writeJSONError(w, 404, fmt.Errorf("模型不存在"))
+			return
+		}
+		platform, err := db.Get().GetPlatformByID(rapi.PlatformID)
+		if err != nil || platform == nil {
+			writeJSONError(w, 404, fmt.Errorf("平台不存在"))
+			return
+		}
+		// Resolve the chosen key token (key_id=0 falls back to the platform token).
+		var token string
+		if req.KeyID > 0 {
+			keys, err := db.Get().GetPlatformKeys(platform.ID)
+			if err != nil {
+				writeJSONError(w, 500, err)
+				return
+			}
+			var found bool
+			for i := range keys {
+				if keys[i].ID == req.KeyID {
+					token = keys[i].Token
+					found = true
+					break
+				}
+			}
+			if !found {
+				writeJSONError(w, 404, fmt.Errorf("key not found"))
+				return
+			}
+		} else {
+			token = platform.Token
+		}
+		if token == "" {
+			writeJSONError(w, 400, fmt.Errorf("所选 Key 的 token 为空"))
+			return
+		}
+
+		// Build the upstream URL from the platform base + the RAPI's model.
+		var upstreamURL string
+		if apiformat.IsGoogleNativeBaseURL(platform.BaseURL) {
+			upstreamURL = apiformat.BuildURLs(platform.BaseURL, rapi.Model, apiformat.FormatGemini)[0]
+		} else {
+			upstreamURL = apiformat.BuildURLs(platform.BaseURL, rapi.Model, apiformat.FormatOpenAI)[0]
+		}
+
+		// Default minimal test body when none is provided.
+		body := req.Body
+		if strings.TrimSpace(body) == "" {
+			body = fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"ping"}],"max_tokens":16}`, rapi.Model)
+		}
+
+		client := &http.Client{Timeout: 60 * time.Second}
+		httpReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, upstreamURL, strings.NewReader(body))
+		if err != nil {
+			writeJSONError(w, 500, err)
+			return
+		}
+		if apiformat.IsGoogleNativeBaseURL(platform.BaseURL) {
+			httpReq.Header.Set(apiformat.GoogleAPIKeyHeader, token)
+		} else {
+			httpReq.Header.Set("Authorization", "Bearer "+token)
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		// Merge per-RAPI custom headers (JSON array of {key,value}).
+		if rapi.CustomHeaders != "" {
+			var hs []struct {
+				Key   string `json:"key"`
+				Value string `json:"value"`
+			}
+			if json.Unmarshal([]byte(rapi.CustomHeaders), &hs) == nil {
+				for _, h := range hs {
+					if h.Key != "" {
+						httpReq.Header.Set(h.Key, h.Value)
+					}
+				}
+			}
+		}
+
+		start := time.Now()
+		resp, err := client.Do(httpReq)
+		if err != nil {
+			writeJSONError(w, 502, fmt.Errorf("上游请求失败: %v", err))
+			return
+		}
+		defer resp.Body.Close()
+		respBody, _ := io.ReadAll(resp.Body)
+		if len(respBody) > 60*1024 {
+			respBody = respBody[:60*1024]
+		}
+		latency := time.Since(start).Milliseconds()
+
+		logger.DefaultConsole().Info("service", "[RAPI-TEST] direct key-model test",
+			"rapi_id", rapi.ID, "key_id", req.KeyID, "model", rapi.Model,
+			"url", upstreamURL, "status", resp.StatusCode, "latency_ms", latency)
+
+		// One-click recovery: on a 2xx response, clear the key's failure marker so
+		// the scheduler stops skipping it and it re-enters the pool immediately.
+		// A successful direct test also proves this key serves this model — clear
+		// any key×model capability block for the pair.
+		cleared := false
+		if req.ClearOnSuccess && req.KeyID > 0 && resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			if err := clearKeyFailureState(platform.ID, req.KeyID); err == nil {
+				cleared = true
+			}
+			proxyGateway.UnblockKeyForModel(req.KeyID, rapi.ID)
+		}
+
+		data, _ := json.Marshal(map[string]any{
+			"status":     resp.StatusCode,
+			"latency_ms": latency,
+			"body":       string(respBody),
+			"cleared":    cleared,
+		})
+		w.Write(data)
+	})
+
+	// Key×model capability block management (the platform revoked a key's access
+	// to a model). GET lists all blocks; DELETE removes one (operator cleared it
+	// or the platform re-granted access) and re-probes the model.
+	mux.HandleFunc("/api/key-model-blocks", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodGet:
+			blocks, err := db.Get().GetKeyModelBlocks()
+			if err != nil {
+				writeJSONError(w, 500, err)
+				return
+			}
+			if blocks == nil {
+				blocks = []models.KeyModelBlock{}
+			}
+			now := time.Now()
+			type blockView struct {
+				models.KeyModelBlock
+				Expired bool `json:"expired"`
+			}
+			view := make([]blockView, 0, len(blocks))
+			for _, b := range blocks {
+				view = append(view, blockView{KeyModelBlock: b, Expired: !b.ExpiresAt.IsZero() && !b.ExpiresAt.After(now)})
+			}
+			json.NewEncoder(w).Encode(view)
+		case http.MethodDelete:
+			keyIDStr := r.URL.Query().Get("key_id")
+			rapiIDStr := r.URL.Query().Get("rapi_id")
+			var keyID, rapiID int64
+			fmt.Sscanf(keyIDStr, "%d", &keyID)
+			fmt.Sscanf(rapiIDStr, "%d", &rapiID)
+			if keyID == 0 || rapiID == 0 {
+				http.Error(w, `{"error":"missing key_id or rapi_id"}`, 400)
+				return
+			}
+			proxyGateway.UnblockKeyForModel(keyID, rapiID)
+			// If the model was persisted unavailable because its pool was all
+			// blocked, re-probe it now that a key is unblocked.
+			rep := proxyGateway.RecoverRAPIs(r.Context(), []int64{rapiID}, 1, 8)
+			if len(rep.Recovered) > 0 {
+				logger.DefaultConsole().Info("service", "[BLOCK] model auto-restored after unblock",
+					"rapi_id", rapiID)
+			}
+			w.Write([]byte(`{"success":true}`))
+		default:
+			http.Error(w, `{"error":"method not allowed"}`, 405)
 		}
 	})
 
@@ -494,13 +707,47 @@ func createWebHandler() http.Handler {
 			http.Error(w, `{"error":"invalid json"}`, 400)
 			return
 		}
+		rapi, err := db.Get().GetRAPIByID(req.ID)
+		if err != nil {
+			writeJSONError(w, 404, fmt.Errorf("模型不存在"))
+			return
+		}
+		// Real probe: detect supported formats against the upstream using the same
+		// credentials real requests use — the first usable platform key, not the
+		// often-empty legacy platform token (the JD recovery blind spot). If any
+		// format responds, the model is reachable. Only then do we clear
+		// unavailable and revalidate. This avoids "recovering" a model that
+		// fails again instantly.
+		probeClient := &http.Client{Timeout: 15 * time.Second}
+		probeCtx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+		probeToken := platformKeyToken(rapi.PlatformID, rapi.Token)
+		results := apiformat.DetectFormats(probeCtx, rapi.BaseURL, rapi.Model, probeToken, probeClient)
+		var supported []apiformat.APIFormat
+		for _, res := range results {
+			if res.Supported {
+				supported = append(supported, res.Format)
+			}
+		}
+		if len(supported) == 0 {
+			writeJSONError(w, 502, fmt.Errorf("连通测试失败：上游无响应或不支持任何协议"))
+			return
+		}
 		if err := db.Get().SetRAPIUnavailableWithReason(req.ID, true, ""); err != nil {
 			writeJSONError(w, 500, err)
 			return
 		}
+		if len(supported) > 0 {
+			db.Get().UpdateRAPIFormats(req.ID, apiformat.FormatsToJSON(supported))
+		}
 		proxyGateway.RevalidateRAPI(req.ID)
-		log.Printf("[API] restoreRAPI id=%d", req.ID)
-		w.Write([]byte(`{"success":true}`))
+		logger.DefaultConsole().Info("service", "[API] restoreRAPI probed ok",
+			"rapi_id", req.ID, "alias", rapi.Alias, "formats", fmt.Sprint(supported))
+		resp, _ := json.Marshal(map[string]interface{}{
+			"success": true,
+			"formats": supported,
+		})
+		w.Write(resp)
 	})
 
 	// Probe and recover every RAPI currently persisted as unavailable.
@@ -515,9 +762,10 @@ func createWebHandler() http.Handler {
 		if err != nil {
 			cfg = &config.Config{RetryConcurrency: 8, RetryTimeoutSec: 15}
 		}
-		log.Printf("[API] retry-unhealthy triggered")
+		logger.DefaultConsole().Info("service", "[API] retry-unhealthy triggered")
 		rep := proxyGateway.RecoverUnhealthyRAPIs(r.Context(), cfg.RetryConcurrency, cfg.RetryTimeoutSec)
-		log.Printf("[API] retry-unhealthy done: probed=%d recovered=%d failed=%d", rep.Probed, len(rep.Recovered), len(rep.Failed))
+		logger.DefaultConsole().Info("service", "[API] retry-unhealthy done",
+			"probed", rep.Probed, "recovered", len(rep.Recovered), "failed", len(rep.Failed))
 		json.NewEncoder(w).Encode(rep)
 	})
 
@@ -542,29 +790,37 @@ func createWebHandler() http.Handler {
 			return
 		}
 
-		// Build /v1/models URL (same logic as fetch-models)
-		baseURL := platform.BaseURL
-		for _, suffix := range []string{"/v1/chat/completions", "/v1/messages", "/v1/chat", "/v1"} {
-			if len(baseURL) >= len(suffix) && baseURL[len(baseURL)-len(suffix):] == suffix {
-				baseURL = baseURL[:len(baseURL)-len(suffix)]
-				break
-			}
-		}
-		for len(baseURL) > 0 && baseURL[len(baseURL)-1] == '/' {
-			baseURL = baseURL[:len(baseURL)-1]
-		}
-		modelsURL := baseURL + "/v1/models"
+		// Build the list-models URL. Real Google Generative Language endpoints
+		// require /v1beta/models + x-goog-api-key; the OpenAI /v1/models + Bearer
+		// path 404s/401s there. Branch exactly like fetch-models / probePlatform.
+		// Use the first usable key (skips disabled/permanently-failed/expired).
+		fetchToken := platformKeyToken(platform.ID, platform.Token)
 
 		client := &http.Client{Timeout: 15 * time.Second}
-		httpReq, _ := http.NewRequestWithContext(r.Context(), http.MethodGet, modelsURL, nil)
-		fetchToken := platform.Token
-		if keys, err := db.Get().GetPlatformKeys(platform.ID); err == nil && len(keys) > 0 {
-			fetchToken = keys[0].Token
+		httpReq, _ := http.NewRequestWithContext(r.Context(), http.MethodGet, "", nil)
+		if apiformat.IsGoogleNativeBaseURL(platform.BaseURL) {
+			modelsURL := apiformat.BuildGoogleListModelsURL(platform.BaseURL, fetchToken)
+			httpReq.URL, _ = url.Parse(modelsURL)
+			httpReq.Header.Set(apiformat.GoogleAPIKeyHeader, fetchToken)
+		} else {
+			baseURL := platform.BaseURL
+			for _, suffix := range []string{"/v1/chat/completions", "/v1/messages", "/v1beta/models", "/v1beta", "/v1/chat", "/v1"} {
+				if len(baseURL) >= len(suffix) && baseURL[len(baseURL)-len(suffix):] == suffix {
+					baseURL = baseURL[:len(baseURL)-len(suffix)]
+					break
+				}
+			}
+			for len(baseURL) > 0 && baseURL[len(baseURL)-1] == '/' {
+				baseURL = baseURL[:len(baseURL)-1]
+			}
+			modelsURL := baseURL + "/v1/models"
+			httpReq.URL, _ = url.Parse(modelsURL)
+			httpReq.Header.Set("Authorization", "Bearer "+fetchToken)
 		}
-		httpReq.Header.Set("Authorization", "Bearer "+fetchToken)
 		httpReq.Header.Set("Content-Type", "application/json")
 
-		log.Printf("[RESTORE] testing platform id=%d via %s", req.ID, modelsURL)
+		logger.DefaultConsole().Info("service", "[RESTORE] testing platform",
+			"platform_id", req.ID, "url", httpReq.URL.String())
 		resp, err := client.Do(httpReq)
 		if err != nil {
 			writeJSONError(w, 502, fmt.Errorf("连接失败: %v", err))
@@ -578,17 +834,18 @@ func createWebHandler() http.Handler {
 			return
 		}
 
-		// Success: restore platform and all child RAPIs
-		if err := db.Get().SetPlatformAvailable(req.ID, true); err != nil {
-			writeJSONError(w, 500, err)
-			return
-		}
+		// Success: restore platform and all child RAPIs. The Platform entity
+		// persists available=true as its transition effect; then every child
+		// RAPI is cleared + revalidated.
+		pe := proxyGateway.Scheduler().PlatformEntity(req.ID, false)
+		pe.OnDetectSuccess()
 		rapis, _ := db.Get().GetRAPIsByPlatform(req.ID)
 		for _, rapi := range rapis {
 			db.Get().SetRAPIUnavailableWithReason(rapi.ID, true, "")
 			proxyGateway.RevalidateRAPI(rapi.ID)
 		}
-		log.Printf("[RESTORE] platform id=%d restored, %d RAPIs revalidated", req.ID, len(rapis))
+		logger.DefaultConsole().Info("service", "[RESTORE] platform restored",
+			"platform_id", req.ID, "rapis_revalidated", len(rapis))
 		w.Write([]byte(`{"success":true}`))
 	})
 
@@ -652,7 +909,8 @@ func createWebHandler() http.Handler {
 			writeJSONError(w, 404, fmt.Errorf("RAPI not found"))
 			return
 		}
-		log.Printf("[DETECT] starting format detection for rapi=%s model=%s base_url=%s", rapi.Alias, rapi.Model, rapi.BaseURL)
+		logger.DefaultConsole().Info("service", "[DETECT] starting format detection",
+			"rapi", rapi.Alias, "model", rapi.Model, "base_url", rapi.BaseURL)
 		results := apiformat.DetectFormats(r.Context(), rapi.BaseURL, rapi.Model, rapi.Token, nil)
 		var supported []apiformat.APIFormat
 		for _, res := range results {
@@ -665,7 +923,8 @@ func createWebHandler() http.Handler {
 			writeJSONError(w, 500, err)
 			return
 		}
-		log.Printf("[DETECT] rapi=%s detected formats: %s", rapi.Alias, formatsJSON)
+		logger.DefaultConsole().Info("service", "[DETECT] formats detected",
+			"rapi", rapi.Alias, "formats", formatsJSON)
 		resp, _ := json.Marshal(map[string]interface{}{
 			"success": true,
 			"formats": supported,
@@ -704,12 +963,7 @@ func createWebHandler() http.Handler {
 				writeJSONError(w, 500, err)
 				return
 			}
-			// Webpage platforms: auto-create the canonical "webpage" RAPI (available=false until token pushed).
-			if p.WebpageDomain != "" {
-				if _, err := db.Get().EnsureWebpageRAPI(p.ID); err != nil {
-					log.Printf("[API] EnsureWebpageRAPI failed platform_id=%d: %v", p.ID, err)
-				}
-			}
+			db.Get().AddChangeLog("platform", "create", p.ID, p.Name, "")
 			data, _ := json.Marshal(p)
 			w.Write(data)
 
@@ -727,12 +981,7 @@ func createWebHandler() http.Handler {
 				writeJSONError(w, 500, err)
 				return
 			}
-			// Ensure the webpage RAPI exists after update (idempotent).
-			if p.WebpageDomain != "" {
-				if _, err := db.Get().EnsureWebpageRAPI(p.ID); err != nil {
-					log.Printf("[API] EnsureWebpageRAPI failed platform_id=%d: %v", p.ID, err)
-				}
-			}
+			db.Get().AddChangeLog("platform", "update", p.ID, p.Name, "")
 			w.Write([]byte(`{"success":true}`))
 
 		case http.MethodDelete:
@@ -770,6 +1019,7 @@ func createWebHandler() http.Handler {
 					return
 				}
 			}
+			db.Get().AddChangeLog("platform", "delete", pID, platform.Name, "")
 			w.Write([]byte(`{"success":true}`))
 		}
 	})
@@ -793,30 +1043,42 @@ func createWebHandler() http.Handler {
 			writeJSONError(w, 404, fmt.Errorf("platform not found"))
 			return
 		}
-		// Build /v1/models URL
-		baseURL := platform.BaseURL
-		for _, suffix := range []string{"/v1/chat/completions", "/v1/messages", "/v1/chat", "/v1"} {
-			if len(baseURL) >= len(suffix) && baseURL[len(baseURL)-len(suffix):] == suffix {
-				baseURL = baseURL[:len(baseURL)-len(suffix)]
-				break
-			}
-		}
-		for len(baseURL) > 0 && baseURL[len(baseURL)-1] == '/' {
-			baseURL = baseURL[:len(baseURL)-1]
-		}
-		modelsURL := baseURL + "/v1/models"
-
 		// Task 19: Use the first (index=0) PlatformKey token instead of platform.Token.
 		client := &http.Client{Timeout: 15 * time.Second}
-		httpReq, _ := http.NewRequestWithContext(r.Context(), http.MethodGet, modelsURL, nil)
 		fetchToken := platform.Token
 		if keys, err := db.Get().GetPlatformKeys(platform.ID); err == nil && len(keys) > 0 {
 			fetchToken = keys[0].Token
 		}
-		httpReq.Header.Set("Authorization", "Bearer "+fetchToken)
+
+		// Detect whether this is a real Google Generative Language API endpoint.
+		// Google uses /v1beta/models?key=..., the x-goog-api-key header, and returns
+		// {models:[{name:"models/..."}]} — completely different from OpenAI's
+		// /v1/models + Bearer + {data:[{id}]}. Branching here is required; the OpenAI
+		// path returns 401/404 against the genuine Google API.
+		googleNative := apiformat.IsGoogleNativeBaseURL(platform.BaseURL)
+
+		var modelsURL string
+		httpReq, _ := http.NewRequestWithContext(r.Context(), http.MethodGet, "", nil)
+		if googleNative {
+			modelsURL = apiformat.BuildGoogleListModelsURL(platform.BaseURL, fetchToken)
+			httpReq.Header.Set(apiformat.GoogleAPIKeyHeader, fetchToken) // Google API key auth (not Bearer).
+		} else {
+			// OpenAI-compatible: normalise base URL and call /v1/models.
+			normalized := platform.BaseURL
+			for _, suffix := range []string{"/v1/chat/completions", "/v1/messages", "/v1beta/models", "/v1beta", "/v1/chat", "/v1"} {
+				if strings.HasSuffix(normalized, suffix) {
+					normalized = strings.TrimSuffix(normalized, suffix)
+					break
+				}
+			}
+			normalized = strings.TrimRight(normalized, "/")
+			modelsURL = normalized + "/v1/models"
+			httpReq.Header.Set("Authorization", "Bearer "+fetchToken)
+		}
+		httpReq.URL, _ = url.Parse(modelsURL)
 		httpReq.Header.Set("Content-Type", "application/json")
 
-		log.Printf("[FETCH] fetching models from %s", modelsURL)
+		logger.DefaultConsole().Info("service", "[FETCH] fetching models", "url", modelsURL)
 		resp, err := client.Do(httpReq)
 		if err != nil {
 			writeJSONError(w, 502, fmt.Errorf("fetch models failed: %v", err))
@@ -830,25 +1092,40 @@ func createWebHandler() http.Handler {
 			return
 		}
 
-		var result struct {
-			Data []struct {
-				ID string `json:"id"`
-			} `json:"data"`
-		}
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			writeJSONError(w, 502, fmt.Errorf("parse models response failed: %v", err))
-			return
-		}
-
-		modelNames := make([]string, 0, len(result.Data))
-		for _, m := range result.Data {
-			if m.ID != "" {
-				modelNames = append(modelNames, m.ID)
+		var modelNames []string
+		if googleNative {
+			bodyBytes, readErr := io.ReadAll(resp.Body)
+			if readErr != nil {
+				writeJSONError(w, 502, fmt.Errorf("read models response failed: %v", readErr))
+				return
+			}
+			modelNames = apiformat.ParseGoogleListModelsResponse(bodyBytes)
+			if modelNames == nil {
+				writeJSONError(w, 502, fmt.Errorf("parse google models response failed"))
+				return
+			}
+		} else {
+			var result struct {
+				Data []struct {
+					ID string `json:"id"`
+				} `json:"data"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+				writeJSONError(w, 502, fmt.Errorf("parse models response failed: %v", err))
+				return
+			}
+			modelNames = make([]string, 0, len(result.Data))
+			for _, m := range result.Data {
+				if m.ID != "" {
+					modelNames = append(modelNames, m.ID)
+				}
 			}
 		}
+
 		sort.Strings(modelNames)
 
-		log.Printf("[FETCH] got %d models from platform %s", len(modelNames), platform.Name)
+		logger.DefaultConsole().Info("service", "[FETCH] models fetched",
+			"count", len(modelNames), "platform", platform.Name)
 		resp2, _ := json.Marshal(map[string]interface{}{
 			"success": true,
 			"models":  modelNames,
@@ -866,6 +1143,10 @@ func createWebHandler() http.Handler {
 		var req struct {
 			PlatformID int64    `json:"platform_id"`
 			Models     []string `json:"models"`
+			// Source: "auto_discover" (from discovery wizard) or "manual". Defaults to
+			// "manual" for backward compatibility. Auto-discovered models may be pruned
+			// by a later re-sync; manual models are never auto-pruned.
+			Source string `json:"source"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, `{"error":"invalid json"}`, 400)
@@ -875,23 +1156,52 @@ func createWebHandler() http.Handler {
 			writeJSONError(w, 400, fmt.Errorf("no models specified"))
 			return
 		}
+		source := req.Source
+		if source == "" {
+			source = "manual"
+		}
 		platform, err := db.Get().GetPlatformByID(req.PlatformID)
 		if err != nil {
 			writeJSONError(w, 404, fmt.Errorf("platform not found"))
 			return
 		}
 
-		// Platform-level format detection (once for all RAPIs)
-		log.Printf("[BATCH] detecting formats for platform %s", platform.Name)
-		detectResults := apiformat.DetectFormats(r.Context(), platform.BaseURL, req.Models[0], platform.Token, nil)
+		// Platform-level format detection (once for all RAPIs). The result becomes
+		// the platform-level authority (platform.supported_formats) and is also
+		// cached on each created RAPI for the gateway's routing checks. We also
+		// record each format's first working URL in platform.format_endpoints so
+		// the gateway can forward to the exact endpoint detection proved works
+		// (important for aggregators with non-standard paths).
+		logger.DefaultConsole().Info("service", "[BATCH] detecting formats for platform", "platform", platform.Name)
+		// Use the first usable platform key (not platform.Token, which may be empty
+		// when keys live in platform_keys) so format detection exercises the same
+		// credentials as real requests.
+		detectResults := apiformat.DetectFormats(r.Context(), platform.BaseURL, req.Models[0], platformKeyToken(req.PlatformID, platform.Token), nil)
 		var supportedFormats []apiformat.APIFormat
+		endpoints := make(map[string]string, len(detectResults))
 		for _, res := range detectResults {
 			if res.Supported {
 				supportedFormats = append(supportedFormats, res.Format)
+				if res.URL != "" {
+					endpoints[string(res.Format)] = res.URL
+				}
 			}
 		}
 		formatsJSON := apiformat.FormatsToJSON(supportedFormats)
-		log.Printf("[BATCH] platform %s supports formats: %s", platform.Name, formatsJSON)
+		var endpointsJSON string
+		if len(endpoints) > 0 {
+			b, _ := json.Marshal(endpoints)
+			endpointsJSON = string(b)
+		}
+		// Persist as the platform-level authority (propagate to child RAPIs below).
+		if formatsJSON != "" {
+			if err := db.Get().UpdatePlatformFormats(req.PlatformID, formatsJSON, false, endpointsJSON); err != nil {
+				logger.DefaultConsole().Error("service", "[BATCH] UpdatePlatformFormats failed",
+					"platform_id", req.PlatformID, "error", err.Error())
+			}
+		}
+		logger.DefaultConsole().Info("service", "[BATCH] platform formats detected",
+			"platform", platform.Name, "formats", formatsJSON, "endpoints", endpointsJSON)
 
 		// Create RAPIs
 		created := make([]map[string]interface{}, 0)
@@ -906,21 +1216,26 @@ func createWebHandler() http.Handler {
 				Enabled:          true,
 				Available:        true,
 				SupportedFormats: formatsJSON,
+				Source:           source,
 			}
 			if err := db.Get().CreateRAPI(&rapi); err != nil {
 				errors = append(errors, fmt.Sprintf("%s: %v", modelName, err))
-				log.Printf("[BATCH] create RAPI failed: %s - %v", modelName, err)
+				logger.DefaultConsole().Error("service", "[BATCH] create RAPI failed",
+					"model", modelName, "error", err.Error())
 			} else {
+				db.Get().AddChangeLog("rapi", "create", rapi.ID, rapi.Alias, rapi.Model)
 				autoMapRAPItoLAPI(&rapi)
 				created = append(created, map[string]interface{}{
-					"id":    rapi.ID,
-					"alias": rapi.Alias,
-					"model": rapi.Model,
+					"id":     rapi.ID,
+					"alias":  rapi.Alias,
+					"model":  rapi.Model,
+					"source": rapi.Source,
 				})
 			}
 		}
 
-		log.Printf("[BATCH] created %d RAPIs for platform %s (formats: %s)", len(created), platform.Name, formatsJSON)
+		logger.DefaultConsole().Info("service", "[BATCH] RAPIs created",
+			"count", len(created), "platform", platform.Name, "formats", formatsJSON)
 		resp, _ := json.Marshal(map[string]interface{}{
 			"success":        true,
 			"created":        len(created),
@@ -933,56 +1248,7 @@ func createWebHandler() http.Handler {
 		w.Write(resp)
 	})
 
-	// Platform-level format detection (apply to all existing RAPIs)
-	mux.HandleFunc("/api/platforms/detect-formats", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if r.Method != http.MethodPost {
-			http.Error(w, `{"error":"method not allowed"}`, 405)
-			return
-		}
-		var req struct {
-			ID int64 `json:"id"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, `{"error":"invalid json"}`, 400)
-			return
-		}
-		platform, err := db.Get().GetPlatformByID(req.ID)
-		if err != nil {
-			writeJSONError(w, 404, fmt.Errorf("platform not found"))
-			return
-		}
-		// Get any RAPI under this platform for probing
-		rapis, _ := db.Get().GetRAPIsByPlatform(req.ID)
-		if len(rapis) == 0 {
-			writeJSONError(w, 400, fmt.Errorf("platform has no RAPIs"))
-			return
-		}
-		testModel := rapis[0].Model
-		log.Printf("[DETECT] platform-level format detection for %s using model %s", platform.Name, testModel)
-		results := apiformat.DetectFormats(r.Context(), platform.BaseURL, testModel, platform.Token, nil)
-		var supported []apiformat.APIFormat
-		for _, res := range results {
-			if res.Supported {
-				supported = append(supported, res.Format)
-			}
-		}
-		formatsJSON := apiformat.FormatsToJSON(supported)
-		// Apply to all RAPIs under this platform
-		for _, rapi := range rapis {
-			db.Get().UpdateRAPIFormats(rapi.ID, formatsJSON)
-		}
-		log.Printf("[DETECT] platform %s formats: %s (applied to %d RAPIs)", platform.Name, formatsJSON, len(rapis))
-		resp, _ := json.Marshal(map[string]interface{}{
-			"success": true,
-			"formats": supported,
-			"results": results,
-			"updated": len(rapis),
-		})
-		w.Write(resp)
-	})
-
-	// Platform Keys CRUD endpoint: /api/platforms/{id}/keys
+	// Platform Keys CRUD + probe endpoint: /api/platforms/{id}/keys[/{keyId}/probe]
 	mux.HandleFunc("/api/platforms/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
@@ -998,6 +1264,12 @@ func createWebHandler() http.Handler {
 		fmt.Sscanf(parts[0], "%d", &platformID)
 		if platformID == 0 {
 			http.Error(w, `{"error":"invalid platform id"}`, 400)
+			return
+		}
+
+		// Sub-path: /api/platforms/{id}/keys/{keyId}/probe
+		if len(parts) == 4 && parts[3] == "probe" {
+			handleKeyProbe(w, r, platformID, parts[2])
 			return
 		}
 
@@ -1025,19 +1297,117 @@ func createWebHandler() http.Handler {
 				writeJSONError(w, 500, err)
 				return
 			}
+			// A usable key was added: automatically re-probe any models of this
+			// platform that were marked unavailable because all their keys were
+			// dead, and restore the ones that actually respond with the new key.
+			// Models whose pool is still dead stay marked unavailable.
+			if strings.TrimSpace(k.Token) != "" {
+				rep := proxyGateway.RecoverPlatformRAPIs(r.Context(), platformID, 4, 8)
+				if len(rep.Recovered) > 0 {
+					logger.DefaultConsole().Info("service", "[KEY] auto-recovered models after key add",
+						"platform_id", platformID, "recovered", len(rep.Recovered))
+				}
+			}
 			data, _ := json.Marshal(k)
 			w.Write(data)
 
 		case http.MethodPut:
+			// Single-key update when ?key_id=N is given (edit label/free/expiry/enabled
+			// without replacing the whole list). An empty token keeps the stored one,
+			// so the client never has to echo the plaintext secret back.
+			if keyIDStr := r.URL.Query().Get("key_id"); keyIDStr != "" {
+				var kid int64
+				fmt.Sscanf(keyIDStr, "%d", &kid)
+				var k models.PlatformKey
+				if err := json.NewDecoder(r.Body).Decode(&k); err != nil {
+					http.Error(w, `{"error":"invalid json"}`, 400)
+					return
+				}
+				k.ID = kid
+				k.PlatformID = platformID
+				if strings.TrimSpace(k.Token) == "" {
+					keys, err := db.Get().GetPlatformKeys(platformID)
+					if err != nil {
+						writeJSONError(w, 500, err)
+						return
+					}
+					for i := range keys {
+						if keys[i].ID == kid {
+							k.Token = keys[i].Token
+							break
+						}
+					}
+					if k.Token == "" {
+						writeJSONError(w, 404, fmt.Errorf("key not found"))
+						return
+					}
+				}
+				if err := db.Get().UpdatePlatformKey(&k); err != nil {
+					writeJSONError(w, 500, err)
+					return
+				}
+				w.Write([]byte(`{"success":true}`))
+				return
+			}
+
 			// Replace entire key list.
 			var keys []models.PlatformKey
 			if err := json.NewDecoder(r.Body).Decode(&keys); err != nil {
 				http.Error(w, `{"error":"invalid json"}`, 400)
 				return
 			}
+			// Adopt stable ids and preserve failure state (failure_type/reason/failed_at)
+			// across the whole-list replace: saving the platform edit form must never
+			// re-id keys (that would break RAPI key_ids whitelists) nor silently clear
+			// cooldowns / permanent-failure markers. Clients that send ids (current
+			// dashboard) match directly; id-less clients (old cached pages, raw API
+			// callers) fall back to matching by decrypted token to keep identity.
+			existing, _ := db.Get().GetPlatformKeys(platformID)
+			byID := make(map[int64]models.PlatformKey, len(existing))
+			byToken := make(map[string]models.PlatformKey, len(existing))
+			for _, ek := range existing {
+				byID[ek.ID] = ek
+				if t := strings.TrimSpace(ek.Token); t != "" {
+					byToken[t] = ek
+				}
+			}
+			for i := range keys {
+				if keys[i].ID > 0 {
+					if prev, ok := byID[keys[i].ID]; ok {
+						keys[i].FailureType = prev.FailureType
+						keys[i].FailureReason = prev.FailureReason
+						keys[i].FailedAt = prev.FailedAt
+					}
+					continue
+				}
+				// id-less key: match by token to keep identity (and failure state).
+				if t := strings.TrimSpace(keys[i].Token); t != "" {
+					if prev, ok := byToken[t]; ok {
+						keys[i].ID = prev.ID
+						keys[i].FailureType = prev.FailureType
+						keys[i].FailureReason = prev.FailureReason
+						keys[i].FailedAt = prev.FailedAt
+					}
+				}
+			}
 			if err := db.Get().SetPlatformKeys(platformID, keys); err != nil {
 				writeJSONError(w, 500, err)
 				return
+			}
+			// Mirrors POST: a non-empty key list restores the platform.
+			hasNonEmpty := false
+			for _, k := range keys {
+				if strings.TrimSpace(k.Token) != "" {
+					hasNonEmpty = true
+					break
+				}
+			}
+			if hasNonEmpty {
+				rep := proxyGateway.RecoverPlatformRAPIs(r.Context(), platformID, 4, 8)
+				if len(rep.Recovered) > 0 {
+					logger.DefaultConsole().Info("service", "[KEY] auto-recovered models after key list replace",
+						"platform_id", platformID, "recovered", len(rep.Recovered))
+				}
 			}
 			w.Write([]byte(`{"success":true}`))
 
@@ -1049,11 +1419,25 @@ func createWebHandler() http.Handler {
 				http.Error(w, `{"error":"missing key_id"}`, 400)
 				return
 			}
+			// Strip the deleted key from every RAPI key_ids whitelist first so no
+			// model keeps a dangling reference (silent pool shrink). Report the
+			// affected models back to the UI for the confirmation toast.
+			removedFrom, err := db.Get().DetachKeyFromRAPIs(kid)
+			if err != nil {
+				writeJSONError(w, 500, err)
+				return
+			}
 			if err := db.Get().DeletePlatformKey(kid); err != nil {
 				writeJSONError(w, 500, err)
 				return
 			}
-			w.Write([]byte(`{"success":true}`))
+			// Drop the in-memory scheduler entity (cooldown / recovery scan).
+			proxyGateway.RemoveKey(kid)
+			data, _ := json.Marshal(map[string]interface{}{
+				"success":      true,
+				"removed_from": removedFrom,
+			})
+			w.Write(data)
 
 		default:
 			http.Error(w, `{"error":"method not allowed"}`, 405)
@@ -1122,11 +1506,14 @@ func createWebHandler() http.Handler {
 			// Enforce lowercase: LAPI alias must be lowercase to match incoming request model names
 			lapi.Alias = strings.ToLower(strings.TrimSpace(lapi.Alias))
 			if err := db.Get().CreateLAPI(&lapi); err != nil {
-				log.Printf("[API] CreateLAPI failed: alias=%s error=%v", lapi.Alias, err)
+				logger.DefaultConsole().Error("service", "[API] CreateLAPI failed",
+					"alias", lapi.Alias, "error", err.Error())
 				writeJSONError(w, 500, err)
 				return
 			}
-			log.Printf("[API] CreateLAPI success: id=%d alias=%s", lapi.ID, lapi.Alias)
+			logger.DefaultConsole().Info("service", "[API] CreateLAPI success",
+				"id", lapi.ID, "alias", lapi.Alias)
+			db.Get().AddChangeLog("lapi", "create", lapi.ID, lapi.Alias, "")
 			data, _ := json.Marshal(lapi)
 			w.Write(data)
 
@@ -1142,6 +1529,7 @@ func createWebHandler() http.Handler {
 				writeJSONError(w, 500, err)
 				return
 			}
+			db.Get().AddChangeLog("lapi", "update", lapi.ID, lapi.Alias, "")
 			w.Write([]byte(`{"success":true}`))
 
 		case http.MethodDelete:
@@ -1164,6 +1552,7 @@ func createWebHandler() http.Handler {
 				writeJSONError(w, 500, err)
 				return
 			}
+			db.Get().AddChangeLog("lapi", "delete", lapiID, lapiInfo.Alias, "")
 			w.Write([]byte(`{"success":true}`))
 		}
 	})
@@ -1315,19 +1704,19 @@ func createWebHandler() http.Handler {
 
 		// Per-model health rows (only models with any activity or issues)
 		type modelHealth struct {
-			ID           int64   `json:"id"`
-			Alias        string  `json:"alias"`
-			PlatformName string  `json:"platform_name"`
-			Enabled      bool    `json:"enabled"`
-			Available    bool    `json:"available"`
-			UnavailReason string `json:"unavail_reason,omitempty"`
-			TotalReq     int     `json:"total_req"`
-			SuccessRate  float64 `json:"success_rate"`
-			AvgLatencyMs float64 `json:"avg_latency_ms"`
-			Fail429      int     `json:"fail_429"`
-			Fail401      int     `json:"fail_401"`
-			Fail500      int     `json:"fail_500"`
-			LastUsed     string  `json:"last_used"`
+			ID            int64   `json:"id"`
+			Alias         string  `json:"alias"`
+			PlatformName  string  `json:"platform_name"`
+			Enabled       bool    `json:"enabled"`
+			Available     bool    `json:"available"`
+			UnavailReason string  `json:"unavail_reason,omitempty"`
+			TotalReq      int     `json:"total_req"`
+			SuccessRate   float64 `json:"success_rate"`
+			AvgLatencyMs  float64 `json:"avg_latency_ms"`
+			Fail429       int     `json:"fail_429"`
+			Fail401       int     `json:"fail_401"`
+			Fail500       int     `json:"fail_500"`
+			LastUsed      string  `json:"last_used"`
 		}
 		// Build platform name lookup
 		platName := make(map[int64]string)
@@ -1355,18 +1744,18 @@ func createWebHandler() http.Handler {
 		}
 
 		resp := map[string]interface{}{
-			"total_requests":      totalReq,
-			"total_success":       totalSuccess,
+			"total_requests":       totalReq,
+			"total_success":        totalSuccess,
 			"overall_success_rate": overallSuccessRate,
-			"avg_latency_ms":      avgLatencyMs,
-			"fail_429":            totalFail429,
-			"fail_401":            totalFail401,
-			"fail_500":            totalFail500,
-			"rapi_count":          len(rapis),
-			"lapi_count":          len(lapis),
-			"platform_count":      len(platforms),
-			"platforms":           platSummaries,
-			"models":              models,
+			"avg_latency_ms":       avgLatencyMs,
+			"fail_429":             totalFail429,
+			"fail_401":             totalFail401,
+			"fail_500":             totalFail500,
+			"rapi_count":           len(rapis),
+			"lapi_count":           len(lapis),
+			"platform_count":       len(platforms),
+			"platforms":            platSummaries,
+			"models":               models,
 		}
 		data, _ := json.Marshal(resp)
 		w.Write(data)
@@ -1638,167 +2027,6 @@ func createWebHandler() http.Handler {
 		w.Write([]byte(`{"success":true}`))
 	})
 
-	// Browser-push token endpoint — POST /api/token/push
-	//
-	// Allows a browser extension or local userscript to push a freshly-captured
-	// token/cookie to the gateway after the user logs in manually. The gateway
-	// immediately writes the new token to platform_keys (key_index=0) so that
-	// the next upstream request picks it up automatically — zero manual config.
-	//
-	// Request body (JSON):
-	//   { "platform_id": 3, "token": "sk-xxx..." }
-	//
-	// Optional per-platform push secret (set PushSecret on the Platform):
-	//   Supply it either as the "secret" body field or the X-Push-Secret header.
-	//   When PushSecret is empty (default) any local caller may push without auth.
-	//
-	// Response:
-	//   200 {"success":true,"platform":"<name>"}
-	//   400 {"error":"..."} — bad request / auth failure
-	//   404 {"error":"platform not found"}
-	//   500 {"error":"..."}
-	mux.HandleFunc("/api/token/push", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if r.Method != http.MethodPost {
-			http.Error(w, `{"error":"method not allowed"}`, 405)
-			return
-		}
-
-		var req struct {
-			// PlatformID is the numeric platform ID (legacy / manual config).
-			PlatformID     int64       `json:"platform_id"`
-			// Domain is the webpage_domain string (e.g. "abc.ai"). When set, the gateway
-			// looks up the platform by domain so extensions never need to know the numeric ID.
-			// If both are provided, platform_id takes precedence.
-			Domain         string      `json:"domain"`
-			Token          string      `json:"token"`
-			Secret         string      `json:"secret"`
-			SessionHeaders string      `json:"session_headers"`
-			Reusable       *bool       `json:"reusable"`
-			Reasons        []string    `json:"reasons"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, `{"error":"invalid json"}`, 400)
-			return
-		}
-		// token is required UNLESS this is a probe-only push (reusable=false with reasons,
-		// used by the browser extension to report platform incompatibility without a token).
-		isProbeOnly := req.Token == "" && req.Reusable != nil && !*req.Reusable && len(req.Reasons) > 0
-		if req.Token == "" && !isProbeOnly {
-			http.Error(w, `{"error":"token is required"}`, 400)
-			return
-		}
-
-		// Resolve platform: by ID first, then by webpage domain.
-		var platform *models.Platform
-		var resolveErr error
-		if req.PlatformID != 0 {
-			platform, resolveErr = db.Get().GetPlatformByID(req.PlatformID)
-		} else if req.Domain != "" {
-			platform, resolveErr = db.Get().GetPlatformByWebpageDomain(req.Domain)
-		} else {
-			http.Error(w, `{"error":"platform_id or domain is required"}`, 400)
-			return
-		}
-		if resolveErr != nil {
-			writeJSONError(w, 404, fmt.Errorf("platform not found"))
-			return
-		}
-		// Use the resolved platform's ID for all subsequent operations.
-		req.PlatformID = platform.ID
-
-		// Check push secret when the platform has one configured.
-		if platform.PushSecret != "" {
-			supplied := req.Secret
-			if supplied == "" {
-				supplied = r.Header.Get("X-Push-Secret")
-			}
-			if supplied != platform.PushSecret {
-				http.Error(w, `{"error":"invalid push secret"}`, 400)
-				return
-			}
-		}
-
-		// Convert reusable bool pointer to int status (-1=unknown, 0=false, 1=true)
-		reusableStatus := -1
-		if req.Reusable != nil {
-			if *req.Reusable {
-				reusableStatus = 1
-			} else {
-				reusableStatus = 0
-			}
-		}
-		reasonsJSON := "[]"
-		if len(req.Reasons) > 0 {
-			if b, jErr := json.Marshal(req.Reasons); jErr == nil {
-				reasonsJSON = string(b)
-			}
-		}
-
-		if isProbeOnly {
-			// Probe-only: only persist reusability verdict, do not touch token or RAPI state.
-			if dbErr := db.Get().UpdatePlatformReusability(req.PlatformID, reusableStatus, reasonsJSON); dbErr != nil {
-				log.Printf("[PUSH] probe UpdatePlatformReusability failed platform_id=%d: %v", req.PlatformID, dbErr)
-			}
-		} else {
-			if err := db.Get().UpdatePlatformTokenWithHeaders(req.PlatformID, req.Token, req.SessionHeaders, reusableStatus, reasonsJSON); err != nil {
-				writeJSONError(w, 500, err)
-				return
-			}
-			// For webpage platforms: mark the webpage RAPI as ready (available=true).
-			if platform.WebpageDomain != "" {
-				if dbErr := db.Get().SetWebpageRAPIReady(req.PlatformID, true); dbErr != nil {
-					log.Printf("[PUSH] SetWebpageRAPIReady failed platform_id=%d: %v", req.PlatformID, dbErr)
-				}
-				if proxyGateway != nil {
-					rapis, _ := db.Get().GetRAPIsByPlatform(req.PlatformID)
-					for _, ra := range rapis {
-						if ra.Alias == "webpage" {
-							proxyGateway.RevalidateRAPI(ra.ID)
-						}
-					}
-				}
-			}
-		}
-
-		reusableLabel := "unknown"
-		if reusableStatus == 1 {
-			reusableLabel = "reusable"
-		} else if reusableStatus == 0 {
-			reusableLabel = "not-reusable"
-		}
-		log.Printf("[PUSH] platform_id=%d name=%s probe=%v reusable=%s", req.PlatformID, platform.Name, isProbeOnly, reusableLabel)
-		resp, _ := json.Marshal(map[string]interface{}{
-			"success":  true,
-			"platform": platform.Name,
-		})
-		w.Write(resp)
-	})
-
-	// Token status endpoint — GET /api/platforms/token-status/{id}
-	// Returns has_token, valid, seconds_since_push, and reusability info for a platform.
-	mux.HandleFunc("/api/platforms/token-status/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if r.Method != http.MethodGet {
-			http.Error(w, `{"error":"method not allowed"}`, 405)
-			return
-		}
-		idStr := strings.TrimPrefix(r.URL.Path, "/api/platforms/token-status/")
-		var platformID int64
-		fmt.Sscanf(idStr, "%d", &platformID)
-		if platformID == 0 {
-			http.Error(w, `{"error":"invalid platform id"}`, 400)
-			return
-		}
-		status, err := db.Get().GetPlatformTokenStatus(platformID)
-		if err != nil {
-			writeJSONError(w, 500, err)
-			return
-		}
-		data, _ := json.Marshal(status)
-		w.Write(data)
-	})
-
 	// Peek token endpoint — GET /api/platforms/peek-token/{id}
 	// Returns a masked preview of the current token for admin display (never the full secret).
 	mux.HandleFunc("/api/platforms/peek-token/", func(w http.ResponseWriter, r *http.Request) {
@@ -1832,198 +2060,40 @@ func createWebHandler() http.Handler {
 		w.Write(data)
 	})
 
-	// --- Tools (Agent Tool-Calling) CRUD ---
-
-	mux.HandleFunc("/api/tools", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch r.Method {
-		case http.MethodGet:
-			toolsList, err := db.Get().GetAllTools()
-			if err != nil {
-				writeJSONError(w, 500, err)
-				return
-			}
-			if toolsList == nil {
-				toolsList = make([]db.ToolRecord, 0)
-			}
-			data, _ := json.Marshal(map[string]interface{}{"tools": toolsList})
-			w.Write(data)
-
-		case http.MethodPost:
-			var t db.ToolRecord
-			if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
-				writeJSONError(w, 400, fmt.Errorf("invalid JSON: %v", err))
-				return
-			}
-			if t.Name == "" {
-				writeJSONError(w, 400, fmt.Errorf("name is required"))
-				return
-			}
-			if t.ExecutorType == "" {
-				t.ExecutorType = "http"
-			}
-			if t.TimeoutMs <= 0 {
-				t.TimeoutMs = 30000
-			}
-			if t.Parameters == "" {
-				t.Parameters = "{}"
-			}
-			if t.ExecutorConfig == "" {
-				t.ExecutorConfig = "{}"
-			}
-			if err := db.Get().CreateTool(&t); err != nil {
-				if strings.Contains(err.Error(), "UNIQUE") {
-					writeJSONError(w, 409, fmt.Errorf("tool name already exists: %s", t.Name))
-					return
-				}
-				writeJSONError(w, 500, err)
-				return
-			}
-			tools.GetRegistry().Reload()
-			w.WriteHeader(201)
-			data, _ := json.Marshal(t)
-			w.Write(data)
-
-		default:
-			http.Error(w, `{"error":"method not allowed"}`, 405)
-		}
-	})
-
-	mux.HandleFunc("/api/tools/toggle", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if r.Method != http.MethodPost {
-			http.Error(w, `{"error":"method not allowed"}`, 405)
-			return
-		}
-		var req struct {
-			ID      int64 `json:"id"`
-			Enabled bool  `json:"enabled"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSONError(w, 400, err)
-			return
-		}
-		if err := db.Get().ToggleTool(req.ID, req.Enabled); err != nil {
-			writeJSONError(w, 500, err)
-			return
-		}
-		tools.GetRegistry().Reload()
-		w.Write([]byte(`{"ok":true}`))
-	})
-
-	mux.HandleFunc("/api/tools/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		idStr := strings.TrimPrefix(r.URL.Path, "/api/tools/")
-		var id int64
-		fmt.Sscanf(idStr, "%d", &id)
-		if id == 0 {
-			writeJSONError(w, 400, fmt.Errorf("invalid tool id"))
-			return
-		}
-
-		switch r.Method {
-		case http.MethodGet:
-			t, err := db.Get().GetToolByID(id)
-			if err != nil {
-				writeJSONError(w, 404, fmt.Errorf("tool not found"))
-				return
-			}
-			data, _ := json.Marshal(t)
-			w.Write(data)
-
-		case http.MethodPut:
-			var t db.ToolRecord
-			if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
-				writeJSONError(w, 400, err)
-				return
-			}
-			t.ID = id
-			if t.TimeoutMs <= 0 {
-				t.TimeoutMs = 30000
-			}
-			if err := db.Get().UpdateTool(&t); err != nil {
-				writeJSONError(w, 500, err)
-				return
-			}
-			tools.GetRegistry().Reload()
-			w.Write([]byte(`{"ok":true}`))
-
-		case http.MethodDelete:
-			if err := db.Get().DeleteTool(id); err != nil {
-				writeJSONError(w, 500, err)
-				return
-			}
-			tools.GetRegistry().Reload()
-			w.Write([]byte(`{"ok":true}`))
-
-		default:
-			http.Error(w, `{"error":"method not allowed"}`, 405)
-		}
-	})
-
-	// POST /api/tools/test — execute a tool with given arguments and return result
-	mux.HandleFunc("/api/tools/test", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if r.Method != http.MethodPost {
-			http.Error(w, `{"error":"method not allowed"}`, 405)
-			return
-		}
-		var req struct {
-			ToolName  string                 `json:"tool_name"`
-			Arguments map[string]interface{} `json:"arguments"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSONError(w, 400, fmt.Errorf("invalid JSON: %v", err))
-			return
-		}
-		if req.ToolName == "" {
-			writeJSONError(w, 400, fmt.Errorf("tool_name is required"))
-			return
-		}
-		tool, err := tools.GetRegistry().Get(req.ToolName)
-		if err != nil {
-			writeJSONError(w, 404, fmt.Errorf("tool not found: %s", req.ToolName))
-			return
-		}
-		executor, err := tools.NewExecutor(tool)
-		if err != nil {
-			writeJSONError(w, 400, err)
-			return
-		}
-		ctx, cancel := context.WithTimeout(r.Context(), time.Duration(tool.TimeoutMs)*time.Millisecond)
-		defer cancel()
-		start := time.Now()
-		result, execErr := executor.Execute(ctx, tool, req.Arguments)
-		durationMs := int(time.Since(start).Milliseconds())
-		resp := map[string]interface{}{
-			"success":     execErr == nil,
-			"result":      result,
-			"duration_ms": durationMs,
-		}
-		if execErr != nil {
-			resp["error"] = execErr.Error()
-		}
-		data, _ := json.Marshal(resp)
-		w.Write(data)
-	})
-
-	// GET /api/tools/logs — recent tool execution logs
-	mux.HandleFunc("/api/tools/logs", func(w http.ResponseWriter, r *http.Request) {
+	// Change-log endpoints — transient "unread notifications" for the dashboard banner.
+	// GET  /api/change-log        → returns all unread entries (newest first)
+	// POST /api/change-log/clear  → marks all as read by deleting them
+	mux.HandleFunc("/api/change-log", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method != http.MethodGet {
 			http.Error(w, `{"error":"method not allowed"}`, 405)
 			return
 		}
-		logs, err := db.Get().GetToolExecutionLogs(50)
+		entries, err := db.Get().GetChangeLogs()
 		if err != nil {
 			writeJSONError(w, 500, err)
 			return
 		}
-		if logs == nil {
-			logs = make([]db.ToolLogRecord, 0)
+		if entries == nil {
+			entries = []db.ChangeLogEntry{}
 		}
-		data, _ := json.Marshal(map[string]interface{}{"logs": logs})
+		data, _ := json.Marshal(map[string]interface{}{"entries": entries})
 		w.Write(data)
+	})
+
+	mux.HandleFunc("/api/change-log/clear", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"error":"method not allowed"}`, 405)
+			return
+		}
+		n, err := db.Get().ClearChangeLogs()
+		if err != nil {
+			writeJSONError(w, 500, err)
+			return
+		}
+		resp, _ := json.Marshal(map[string]interface{}{"success": true, "cleared": n})
+		w.Write(resp)
 	})
 
 	return mux
@@ -2034,13 +2104,25 @@ var dashboardHTML string
 
 // autoMapRAPItoLAPI checks if a newly created RAPI's model identity (series, model_name, version)
 // matches an existing LAPI. If so, the RAPI is automatically appended to that LAPI's routing chain.
+// Fallback: when identity fields are all empty (e.g. batch-created RAPIs), match by alias.
 func autoMapRAPItoLAPI(rapi *models.RAPI) {
+	var lapi *models.LAPI
+	var err error
+
 	if rapi.Series == "" && rapi.ModelName == "" && rapi.Version == "" {
-		return // No identity to match
-	}
-	lapi, err := db.Get().FindLAPIByModelIdentity(rapi.Series, rapi.ModelName, rapi.Version)
-	if err != nil || lapi == nil {
-		return // No matching LAPI
+		// No identity fields — fall back to alias matching.
+		if rapi.Alias == "" {
+			return
+		}
+		lapi, err = db.Get().GetLAPIByAlias(rapi.Alias)
+		if err != nil || lapi == nil {
+			return
+		}
+	} else {
+		lapi, err = db.Get().FindLAPIByModelIdentity(rapi.Series, rapi.ModelName, rapi.Version)
+		if err != nil || lapi == nil {
+			return // No matching LAPI
+		}
 	}
 	// Get current routing chain and check for duplicates
 	existing, err := db.Get().GetLAPIRAPIMapping(lapi.ID)
@@ -2055,11 +2137,13 @@ func autoMapRAPItoLAPI(rapi *models.RAPI) {
 	// Append to the end of the chain
 	existing = append(existing, rapi.ID)
 	if err := db.Get().SetLAPIRAPIOrder(lapi.ID, existing); err != nil {
-		log.Printf("[AUTO-MAP] failed to add rapi=%d to lapi=%s: %v", rapi.ID, lapi.Alias, err)
+		logger.DefaultConsole().Error("service", "[AUTO-MAP] failed to add rapi to lapi",
+			"rapi_id", rapi.ID, "lapi", lapi.Alias, "error", err.Error())
 		return
 	}
-	log.Printf("[AUTO-MAP] rapi=%s (series=%s name=%s ver=%s) auto-added to lapi=%s",
-		rapi.Alias, rapi.Series, rapi.ModelName, rapi.Version, lapi.Alias)
+	logger.DefaultConsole().Info("service", "[AUTO-MAP] rapi auto-added to lapi",
+		"rapi", rapi.Alias, "series", rapi.Series, "name", rapi.ModelName,
+		"version", rapi.Version, "lapi", lapi.Alias)
 }
 
 func writeJSONError(w http.ResponseWriter, status int, err error) {
@@ -2067,6 +2151,141 @@ func writeJSONError(w http.ResponseWriter, status int, err error) {
 	errResp, _ := json.Marshal(map[string]string{"error": err.Error()})
 	w.WriteHeader(status)
 	w.Write(errResp)
+}
+
+// platformKeyToken returns the first usable platform key token for probing,
+// preferring the gateway's shared helper (which skips disabled/permanently-
+// failed/expired keys) and falling back to the platform-level token.
+func platformKeyToken(platformID int64, platformToken string) string {
+	if proxyGateway != nil {
+		return proxyGateway.FirstUsableKey(platformID, platformToken)
+	}
+	return platformToken
+}
+
+// restorePlatformAvailability revalidates every child RAPI in the scheduler after a
+// key is added/replaced. Previously this also flipped platform.available=true, but
+// that's now decoupled: platform.available only reflects base_url reachability
+// (set by detect-formats / restore endpoint), not key presence.
+func restorePlatformAvailability(platformID int64) {
+	plat, err := db.Get().GetPlatformByID(platformID)
+	if err != nil || plat == nil {
+		return
+	}
+	if proxyGateway != nil {
+		rapis, _ := db.Get().GetRAPIsByPlatform(platformID)
+		for _, ra := range rapis {
+			// Clear persisted unavailable state (written by the gateway when all keys
+			// were dead) so the RAPI re-enters GetEnabledRAPIsForLAPI immediately.
+			db.Get().SetRAPIUnavailableWithReason(ra.ID, true, "")
+			proxyGateway.RevalidateRAPI(ra.ID)
+		}
+	}
+	logger.DefaultConsole().Info("service", "[KEY] RAPIs revalidated after key change",
+		"platform", plat.Name, "platform_id", platformID)
+}
+
+// handleKeyProbe tests a specific platform key by calling /v1/models (or /v1beta/models
+// for Google native). On success: clears key failure_type. On failure: keeps failure_type=2.
+func handleKeyProbe(w http.ResponseWriter, r *http.Request, platformID int64, keyIDStr string) {
+	var keyID int64
+	fmt.Sscanf(keyIDStr, "%d", &keyID)
+	if keyID == 0 {
+		writeJSONError(w, 400, fmt.Errorf("invalid key id"))
+		return
+	}
+
+	platform, err := db.Get().GetPlatformByID(platformID)
+	if err != nil || platform == nil {
+		writeJSONError(w, 404, fmt.Errorf("platform not found"))
+		return
+	}
+
+	// Find the specific key
+	keys, err := db.Get().GetPlatformKeys(platformID)
+	if err != nil {
+		writeJSONError(w, 500, err)
+		return
+	}
+	var targetKey *models.PlatformKey
+	for i := range keys {
+		if keys[i].ID == keyID {
+			targetKey = &keys[i]
+			break
+		}
+	}
+	if targetKey == nil {
+		writeJSONError(w, 404, fmt.Errorf("key not found"))
+		return
+	}
+	if targetKey.Token == "" {
+		writeJSONError(w, 400, fmt.Errorf("key token is empty"))
+		return
+	}
+
+	// Build the list-models URL (same logic as /api/platforms/restore).
+	client := &http.Client{Timeout: 15 * time.Second}
+	httpReq, _ := http.NewRequestWithContext(r.Context(), http.MethodGet, "", nil)
+	if apiformat.IsGoogleNativeBaseURL(platform.BaseURL) {
+		modelsURL := apiformat.BuildGoogleListModelsURL(platform.BaseURL, targetKey.Token)
+		httpReq.URL, _ = url.Parse(modelsURL)
+		httpReq.Header.Set(apiformat.GoogleAPIKeyHeader, targetKey.Token)
+	} else {
+		baseURL := platform.BaseURL
+		for _, suffix := range []string{"/v1/chat/completions", "/v1/messages", "/v1beta/models", "/v1beta", "/v1/chat", "/v1"} {
+			if len(baseURL) >= len(suffix) && baseURL[len(baseURL)-len(suffix):] == suffix {
+				baseURL = baseURL[:len(baseURL)-len(suffix)]
+				break
+			}
+		}
+		for len(baseURL) > 0 && baseURL[len(baseURL)-1] == '/' {
+			baseURL = baseURL[:len(baseURL)-1]
+		}
+		modelsURL := baseURL + "/v1/models"
+		httpReq.URL, _ = url.Parse(modelsURL)
+		httpReq.Header.Set("Authorization", "Bearer "+targetKey.Token)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	logger.DefaultConsole().Info("service", "[PROBE] testing key",
+		"key_id", keyID, "platform", platform.Name, "url", httpReq.URL.String())
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		writeJSONError(w, 502, fmt.Errorf("连接失败: %v", err))
+		return
+	}
+	defer resp.Body.Close()
+	io.ReadAll(resp.Body)
+
+	if resp.StatusCode != 200 {
+		writeJSONError(w, 502, fmt.Errorf("平台返回 %d，重置失败", resp.StatusCode))
+		return
+	}
+
+	// Success: clear failure_type + notify scheduler
+	if err := clearKeyFailureState(platformID, keyID); err != nil {
+		writeJSONError(w, 500, err)
+		return
+	}
+	logger.DefaultConsole().Info("service", "[PROBE] key restored, failure_type cleared", "key_id", keyID)
+	w.Write([]byte(`{"success":true}`))
+}
+
+// clearKeyFailureState resets a key's failure state (DB + scheduler) and revives
+// any child RAPIs that were persisted unavailable because all their keys were
+// dead. Shared by handleKeyProbe and the key-model direct test (clear_on_success).
+func clearKeyFailureState(platformID, keyID int64) error {
+	if err := db.Get().ClearKeyFailure(keyID); err != nil {
+		return err
+	}
+	if proxyGateway != nil {
+		proxyGateway.Scheduler().MarkKeySuccess(keyID)
+	}
+	// A probed-good key means the platform can serve again: revive any child RAPIs
+	// that were persisted unavailable because all their keys were dead.
+	restorePlatformAvailability(platformID)
+	logger.DefaultConsole().Info("service", "[KEY] failure state cleared", "key_id", keyID, "platform_id", platformID)
+	return nil
 }
 
 // maskToken returns a masked preview of a token for safe display.

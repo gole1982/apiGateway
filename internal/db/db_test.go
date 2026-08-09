@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -41,16 +42,15 @@ func setupTestDB(t *testing.T) *DB {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			name TEXT NOT NULL UNIQUE,
 			base_url TEXT NOT NULL,
-			url_auto_complete INTEGER NOT NULL DEFAULT 1,
 			token TEXT NOT NULL DEFAULT '',
 			last_token_fetch DATETIME,
 			enabled INTEGER NOT NULL DEFAULT 1,
 			available INTEGER NOT NULL DEFAULT 1,
 			notes TEXT NOT NULL DEFAULT '',
 			custom_headers TEXT NOT NULL DEFAULT '',
-			push_secret TEXT NOT NULL DEFAULT '',
-			webpage_domain TEXT NOT NULL DEFAULT '',
-			is_dynamic INTEGER NOT NULL DEFAULT 0,
+			supported_formats TEXT NOT NULL DEFAULT '["openai"]',
+			format_endpoints TEXT NOT NULL DEFAULT '',
+			sort_order INTEGER NOT NULL DEFAULT 0,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);
@@ -59,6 +59,9 @@ func setupTestDB(t *testing.T) *DB {
 			alias TEXT NOT NULL,
 			model TEXT NOT NULL DEFAULT '',
 			notes TEXT NOT NULL DEFAULT '',
+			series TEXT NOT NULL DEFAULT '',
+			model_name TEXT NOT NULL DEFAULT '',
+			version TEXT NOT NULL DEFAULT '',
 			platform_id INTEGER NOT NULL DEFAULT 0,
 			enabled INTEGER NOT NULL DEFAULT 1,
 			available INTEGER NOT NULL DEFAULT 1,
@@ -74,6 +77,9 @@ func setupTestDB(t *testing.T) *DB {
 			time_period_rules TEXT,
 			supported_formats TEXT NOT NULL DEFAULT '["openai"]',
 			custom_headers TEXT NOT NULL DEFAULT '',
+			key_ids TEXT NOT NULL DEFAULT '',
+			source TEXT NOT NULL DEFAULT 'manual',
+			sort_order INTEGER NOT NULL DEFAULT 0,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (platform_id) REFERENCES platform(id) ON DELETE CASCADE,
@@ -83,6 +89,9 @@ func setupTestDB(t *testing.T) *DB {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			alias TEXT NOT NULL UNIQUE,
 			notes TEXT NOT NULL DEFAULT '',
+			series TEXT NOT NULL DEFAULT '',
+			model_name TEXT NOT NULL DEFAULT '',
+			version TEXT NOT NULL DEFAULT '',
 			enabled INTEGER NOT NULL DEFAULT 1,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);
@@ -103,13 +112,23 @@ func setupTestDB(t *testing.T) *DB {
 			token TEXT NOT NULL DEFAULT '',
 			label TEXT NOT NULL DEFAULT '',
 			enabled INTEGER NOT NULL DEFAULT 1,
-			session_headers TEXT NOT NULL DEFAULT '',
-			reusable_status INTEGER NOT NULL DEFAULT -1,
-			reusable_reasons TEXT NOT NULL DEFAULT '[]',
+			failure_type INTEGER NOT NULL DEFAULT 0,
+			failure_reason TEXT NOT NULL DEFAULT '',
+			failed_at DATETIME,
+			expires_at DATETIME,
+			is_free INTEGER NOT NULL DEFAULT 0,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (platform_id) REFERENCES platform(id) ON DELETE CASCADE,
 			UNIQUE(platform_id, key_index)
+		);
+		CREATE TABLE IF NOT EXISTS key_model_blocks (
+			key_id INTEGER NOT NULL,
+			rapi_id INTEGER NOT NULL,
+			reason TEXT NOT NULL DEFAULT '',
+			expires_at DATETIME,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (key_id, rapi_id)
 		);
 		CREATE TABLE IF NOT EXISTS token_cache (
 			platform_key_id INTEGER PRIMARY KEY,
@@ -461,6 +480,162 @@ func TestPlatformKeyCRUD(t *testing.T) {
 	}
 }
 
+// TestPlatformKeyExpiryAndFreePersistence verifies that ExpiresAt/IsFree survive a
+// round-trip through SetPlatformKeys + GetPlatformKeys, and that DisableExpiredKeys
+// flips the enabled flag for keys whose ExpiresAt has passed.
+func TestPlatformKeyExpiryAndFreePersistence(t *testing.T) {
+	db := setupTestDB(t)
+
+	p := &models.Platform{Name: "test-expiry", BaseURL: "https://api.test.com/v1", Token: "sk-orig"}
+	if err := db.CreatePlatform(p); err != nil {
+		t.Fatalf("CreatePlatform: %v", err)
+	}
+
+	past := time.Now().Add(-1 * time.Hour).UTC()
+	future := time.Now().Add(24 * time.Hour).UTC()
+
+	// Mixed set: one free-unexpired, one paid-unexpired, one free-expired.
+	keys := []models.PlatformKey{
+		{Token: "free-future", Label: "free-future", Enabled: true, IsFree: true, ExpiresAt: &future},
+		{Token: "paid-future", Label: "paid-future", Enabled: true, IsFree: false, ExpiresAt: &future},
+		{Token: "free-expired", Label: "free-expired", Enabled: true, IsFree: true, ExpiresAt: &past},
+	}
+	if err := db.SetPlatformKeys(p.ID, keys); err != nil {
+		t.Fatalf("SetPlatformKeys: %v", err)
+	}
+
+	got, err := db.GetPlatformKeys(p.ID)
+	if err != nil {
+		t.Fatalf("GetPlatformKeys: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("GetPlatformKeys returned %d, want 3", len(got))
+	}
+	// Find by label for stable assertions regardless of internal ordering.
+	byLabel := map[string]models.PlatformKey{}
+	for _, k := range got {
+		byLabel[k.Label] = k
+	}
+	if !byLabel["free-future"].IsFree {
+		t.Errorf("free-future: IsFree = false, want true")
+	}
+	if byLabel["paid-future"].IsFree {
+		t.Errorf("paid-future: IsFree = true, want false")
+	}
+	if byLabel["free-future"].ExpiresAt == nil {
+		t.Errorf("free-future: ExpiresAt is nil, want set")
+	}
+
+	// Auto-disable expired keys.
+	n, err := db.DisableExpiredKeys()
+	if err != nil {
+		t.Fatalf("DisableExpiredKeys: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("DisableExpiredKeys affected %d, want 1", n)
+	}
+
+	got, _ = db.GetPlatformKeys(p.ID)
+	byLabel = map[string]models.PlatformKey{}
+	for _, k := range got {
+		byLabel[k.Label] = k
+	}
+	if byLabel["free-expired"].Enabled {
+		t.Errorf("free-expired: Enabled = true after DisableExpiredKeys, want false")
+	}
+	if !byLabel["free-future"].Enabled {
+		t.Errorf("free-future: Enabled = false, want true (not expired)")
+	}
+	if !byLabel["paid-future"].Enabled {
+		t.Errorf("paid-future: Enabled = false, want true (not expired)")
+	}
+
+	// Idempotent: a second run should report zero affected rows.
+	n2, _ := db.DisableExpiredKeys()
+	if n2 != 0 {
+		t.Errorf("DisableExpiredKeys second run affected %d, want 0", n2)
+	}
+}
+
+func TestMarkKeyPermanentFailure(t *testing.T) {
+	db := setupTestDB(t)
+	p := &models.Platform{Name: "test", BaseURL: "https://api.test.com/v1", Token: "sk-orig"}
+	db.CreatePlatform(p)
+	k := &models.PlatformKey{PlatformID: p.ID, Token: "key-a", Label: "primary", Enabled: true}
+	if err := db.AddPlatformKey(k); err != nil {
+		t.Fatalf("AddPlatformKey: %v", err)
+	}
+
+	if err := db.MarkKeyPermanentFailure(k.ID, "[认证失败] upstream 401"); err != nil {
+		t.Fatalf("MarkKeyPermanentFailure: %v", err)
+	}
+
+	keys, _ := db.GetPlatformKeys(p.ID)
+	if len(keys) != 1 {
+		t.Fatalf("GetPlatformKeys returned %d, want 1", len(keys))
+	}
+	if keys[0].FailureType != 2 {
+		t.Errorf("FailureType = %d, want 2 (permanent)", keys[0].FailureType)
+	}
+	if keys[0].FailureReason != "[认证失败] upstream 401" {
+		t.Errorf("FailureReason = %q, want '[认证失败] upstream 401'", keys[0].FailureReason)
+	}
+	if keys[0].FailedAt == nil {
+		t.Errorf("FailedAt should be non-nil after permanent failure")
+	}
+	// enabled should NOT be changed (decoupled from failure tracking)
+	if !keys[0].Enabled {
+		t.Errorf("Enabled = false, want true (failure tracking decoupled from enabled)")
+	}
+}
+
+func TestMarkKeyTemporaryFailure(t *testing.T) {
+	db := setupTestDB(t)
+	p := &models.Platform{Name: "test", BaseURL: "https://api.test.com/v1", Token: "sk-orig"}
+	db.CreatePlatform(p)
+	k := &models.PlatformKey{PlatformID: p.ID, Token: "key-a", Enabled: true}
+	db.AddPlatformKey(k)
+
+	if err := db.MarkKeyTemporaryFailure(k.ID, "upstream 429: rate limited"); err != nil {
+		t.Fatalf("MarkKeyTemporaryFailure: %v", err)
+	}
+
+	keys, _ := db.GetPlatformKeys(p.ID)
+	if keys[0].FailureType != 1 {
+		t.Errorf("FailureType = %d, want 1 (temporary)", keys[0].FailureType)
+	}
+	if keys[0].FailureReason != "upstream 429: rate limited" {
+		t.Errorf("FailureReason = %q, want 'upstream 429: rate limited'", keys[0].FailureReason)
+	}
+	if keys[0].FailedAt == nil {
+		t.Errorf("FailedAt should be non-nil after temporary failure")
+	}
+}
+
+func TestClearKeyFailure(t *testing.T) {
+	db := setupTestDB(t)
+	p := &models.Platform{Name: "test", BaseURL: "https://api.test.com/v1", Token: "sk-orig"}
+	db.CreatePlatform(p)
+	k := &models.PlatformKey{PlatformID: p.ID, Token: "key-a", Enabled: true}
+	db.AddPlatformKey(k)
+
+	db.MarkKeyPermanentFailure(k.ID, "test reason")
+	if err := db.ClearKeyFailure(k.ID); err != nil {
+		t.Fatalf("ClearKeyFailure: %v", err)
+	}
+
+	keys, _ := db.GetPlatformKeys(p.ID)
+	if keys[0].FailureType != 0 {
+		t.Errorf("FailureType = %d, want 0 (none)", keys[0].FailureType)
+	}
+	if keys[0].FailureReason != "" {
+		t.Errorf("FailureReason = %q, want ''", keys[0].FailureReason)
+	}
+	if keys[0].FailedAt != nil {
+		t.Errorf("FailedAt should be nil after clear")
+	}
+}
+
 func TestMetrics(t *testing.T) {
 	db := setupTestDB(t)
 
@@ -569,47 +744,56 @@ func TestRAPISameAliasOnDifferentPlatforms(t *testing.T) {
 	}
 }
 
-// TestWebpagePlatformIsDynamicAndIsWebpage verifies that webpage platforms persist
-// is_dynamic and that RAPIs under them are marked IsWebpage for gateway routing.
-func TestWebpagePlatformIsDynamicAndIsWebpage(t *testing.T) {
+// TestSeedDefaultPlatformsIdempotent verifies that seedDefaultPlatforms creates the
+// Google Gemini preset exactly once with the correct initial state, and that calling
+// it again (e.g. on gateway restart) does not create duplicates.
+func TestSeedDefaultPlatformsIdempotent(t *testing.T) {
 	db := setupTestDB(t)
 
-	p := &models.Platform{
-		Name:            "arena-web",
-		BaseURL:         "https://arena.ai/agent",
-		WebpageDomain:   "arena.ai/agent",
-		URLAutoComplete: false,
-		Enabled:         true,
-		Available:       true,
+	// 首次种入
+	if err := db.seedDefaultPlatforms(); err != nil {
+		t.Fatalf("seedDefaultPlatforms first call: %v", err)
 	}
-	if err := db.CreatePlatform(p); err != nil {
-		t.Fatalf("CreatePlatform: %v", err)
-	}
-	got, err := db.GetPlatformByID(p.ID)
-	if err != nil {
-		t.Fatalf("GetPlatformByID: %v", err)
-	}
-	if !got.IsDynamic {
-		t.Fatal("expected IsDynamic=true when WebpageDomain is set")
+	// 重启模拟：再次种入，应被 UNIQUE(name) + INSERT OR IGNORE 忽略
+	if err := db.seedDefaultPlatforms(); err != nil {
+		t.Fatalf("seedDefaultPlatforms second call: %v", err)
 	}
 
-	r := &models.RAPI{
-		Alias:            "webpage",
-		Model:            "default",
-		PlatformID:       p.ID,
-		Enabled:          true,
-		Available:        true,
-		SupportedFormats: `["openai"]`,
-	}
-	if err := db.CreateRAPI(r); err != nil {
-		t.Fatalf("CreateRAPI: %v", err)
-	}
-	rapis, err := db.GetRAPIsByPlatform(p.ID)
+	platforms, err := db.GetPlatforms()
 	if err != nil {
-		t.Fatalf("GetRAPIsByPlatform: %v", err)
+		t.Fatalf("GetPlatforms: %v", err)
 	}
-	if len(rapis) != 1 || !rapis[0].IsWebpage {
-		t.Fatalf("expected IsWebpage=true for webpage platform RAPI, got %+v", rapis)
+
+	var gemini *models.Platform
+	count := 0
+	for i := range platforms {
+		if platforms[i].Name == "Google Gemini" {
+			gemini = &platforms[i]
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly 1 Google Gemini platform, got %d", count)
+	}
+	if gemini == nil {
+		t.Fatal("gemini platform not found")
+	}
+
+	// 校验初始状态：enabled=true, available=false, token 空, gemini 格式
+	if !gemini.Enabled {
+		t.Errorf("preset should be enabled, got enabled=false")
+	}
+	if gemini.Available {
+		t.Errorf("preset should be available=false (no key yet), got available=true")
+	}
+	if gemini.Token != "" {
+		t.Errorf("preset token should be empty, got %q", gemini.Token)
+	}
+	if gemini.SupportedFormats != `["gemini"]` {
+		t.Errorf("preset supported_formats = %q, want %q", gemini.SupportedFormats, `["gemini"]`)
+	}
+	if gemini.BaseURL != "https://generativelanguage.googleapis.com" {
+		t.Errorf("preset base_url = %q", gemini.BaseURL)
 	}
 }
 
@@ -643,5 +827,289 @@ func TestTokenEncryptionRoundtrip(t *testing.T) {
 	}
 	if got.Token != secret {
 		t.Errorf("GetPlatformByID returned token %q, want %q", got.Token, secret)
+	}
+}
+
+// TestGetEnabledRAPIsIgnoresPlatformAvailable verifies that GetEnabledRAPIsForLAPI
+// does NOT gate RAPI selection on platform.available. A platform may have
+// available=0 (e.g. stale base_url unreachable flag) while its RAPIs are still
+// individually enabled+available and should remain selectable.
+func TestGetEnabledRAPIsIgnoresPlatformAvailable(t *testing.T) {
+	db := setupTestDB(t)
+
+	// Create platform with available=0 (simulates stale base_url unreachable flag).
+	// Enabled=true so the p.enabled=1 gate passes; we are isolating p.available.
+	p := &models.Platform{Name: "test-plat", BaseURL: "https://api.test.com/v1", Token: "sk-test", Enabled: true, Available: true}
+	db.CreatePlatform(p)
+	if err := db.SetPlatformAvailable(p.ID, false); err != nil {
+		t.Fatalf("SetPlatformAvailable: %v", err)
+	}
+
+	// Create enabled+available RAPI under this platform
+	r := &models.RAPI{Alias: "test-rapi", Model: "test-model", PlatformID: p.ID, Enabled: true, Available: true}
+	if err := db.CreateRAPI(r); err != nil {
+		t.Fatalf("CreateRAPI: %v", err)
+	}
+
+	// Create LAPI and link the RAPI via direct INSERT (no SetLAPIRAPIs helper exists).
+	l := &models.LAPI{Alias: "test-lapi"}
+	db.CreateLAPI(l)
+	if _, err := db.conn.Exec("INSERT INTO lapi_rapi_order (lapi_id, rapi_id, order_index) VALUES (?, ?, 0)", l.ID, r.ID); err != nil {
+		t.Fatalf("insert lapi_rapi_order: %v", err)
+	}
+
+	// Even though platform.available=0, RAPI should still be returned
+	rapis, err := db.GetEnabledRAPIsForLAPI(l.ID)
+	if err != nil {
+		t.Fatalf("GetEnabledRAPIsForLAPI: %v", err)
+	}
+	if len(rapis) != 1 {
+		t.Fatalf("GetEnabledRAPIsForLAPI returned %d RAPIs, want 1 (platform.available should not gate selection)", len(rapis))
+	}
+	if rapis[0].ID != r.ID {
+		t.Errorf("returned RAPI ID = %d, want %d", rapis[0].ID, r.ID)
+	}
+}
+
+// TestRAPIKeyIDsRoundTrip verifies the model→key whitelist column persists
+// through Create/Get/Update and flows into every RAPI read path (including the
+// LAPI chain loader used by the gateway hot path).
+func TestRAPIKeyIDsRoundTrip(t *testing.T) {
+	db := setupTestDB(t)
+	p := &models.Platform{Name: "test", BaseURL: "https://api.test.com/v1", Token: "sk-orig", Enabled: true, Available: true}
+	if err := db.CreatePlatform(p); err != nil {
+		t.Fatalf("CreatePlatform: %v", err)
+	}
+
+	r := &models.RAPI{Alias: "m2-restricted", Model: "M2", PlatformID: p.ID, KeyIDs: "7,11", Enabled: true, Available: true}
+	if err := db.CreateRAPI(r); err != nil {
+		t.Fatalf("CreateRAPI: %v", err)
+	}
+
+	// Read back via GetRAPIByID.
+	got, err := db.GetRAPIByID(r.ID)
+	if err != nil {
+		t.Fatalf("GetRAPIByID: %v", err)
+	}
+	if got.KeyIDs != "7,11" {
+		t.Errorf("GetRAPIByID KeyIDs = %q, want \"7,11\"", got.KeyIDs)
+	}
+
+	// Read back via the chain loader (hot path).
+	l := &models.LAPI{Alias: "test-lapi"}
+	if err := db.CreateLAPI(l); err != nil {
+		t.Fatalf("CreateLAPI: %v", err)
+	}
+	if _, err := db.conn.Exec("INSERT INTO lapi_rapi_order (lapi_id, rapi_id, order_index) VALUES (?, ?, 0)", l.ID, r.ID); err != nil {
+		t.Fatalf("insert lapi_rapi_order: %v", err)
+	}
+	chain, err := db.GetEnabledRAPIsForLAPI(l.ID)
+	if err != nil {
+		t.Fatalf("GetEnabledRAPIsForLAPI: %v", err)
+	}
+	if len(chain) != 1 || chain[0].KeyIDs != "7,11" {
+		t.Fatalf("chain loader KeyIDs = %+v, want [\"7,11\"]", chain)
+	}
+
+	// Update changes the whitelist.
+	if err := db.UpdateRAPI(&models.RAPI{ID: r.ID, Alias: "m2-restricted", Model: "M2", PlatformID: p.ID, KeyIDs: "9"}); err != nil {
+		t.Fatalf("UpdateRAPI: %v", err)
+	}
+	got2, _ := db.GetRAPIByID(r.ID)
+	if got2.KeyIDs != "9" {
+		t.Errorf("UpdateRAPI KeyIDs = %q, want \"9\"", got2.KeyIDs)
+	}
+
+	// Default is empty = all keys.
+	r2 := &models.RAPI{Alias: "m1-default", Model: "M1", PlatformID: p.ID, Enabled: true, Available: true}
+	if err := db.CreateRAPI(r2); err != nil {
+		t.Fatalf("CreateRAPI r2: %v", err)
+	}
+	got3, _ := db.GetRAPIByID(r2.ID)
+	if got3.KeyIDs != "" {
+		t.Errorf("default KeyIDs = %q, want \"\" (all keys)", got3.KeyIDs)
+	}
+}
+
+// TestDetachKeyFromRAPIs verifies that deleting a key strips it from every
+// RAPI key_ids whitelist and reports the affected models, while leaving
+// unrelated whitelists untouched.
+func TestDetachKeyFromRAPIs(t *testing.T) {
+	db := setupTestDB(t)
+	p := &models.Platform{Name: "detach-test", BaseURL: "https://api.test.com/v1", Token: "sk-t", Enabled: true, Available: true}
+	if err := db.CreatePlatform(p); err != nil {
+		t.Fatalf("CreatePlatform: %v", err)
+	}
+	k1 := models.PlatformKey{PlatformID: p.ID, Token: "k1-token", Enabled: true}
+	k2 := models.PlatformKey{PlatformID: p.ID, Token: "k2-token", Enabled: true}
+	if err := db.AddPlatformKey(&k1); err != nil {
+		t.Fatalf("AddPlatformKey k1: %v", err)
+	}
+	if err := db.AddPlatformKey(&k2); err != nil {
+		t.Fatalf("AddPlatformKey k2: %v", err)
+	}
+
+	refs := []*models.RAPI{
+		{Alias: "m-both", Model: "M1", PlatformID: p.ID, KeyIDs: fmt.Sprintf("%d,%d", k1.ID, k2.ID), Enabled: true, Available: true},
+		{Alias: "m-only-k1", Model: "M2", PlatformID: p.ID, KeyIDs: fmt.Sprintf("%d", k1.ID), Enabled: true, Available: true},
+		{Alias: "m-only-k2", Model: "M3", PlatformID: p.ID, KeyIDs: fmt.Sprintf("%d", k2.ID), Enabled: true, Available: true},
+		{Alias: "m-all", Model: "M4", PlatformID: p.ID, KeyIDs: "", Enabled: true, Available: true},
+	}
+	for _, r := range refs {
+		if err := db.CreateRAPI(r); err != nil {
+			t.Fatalf("CreateRAPI %s: %v", r.Alias, err)
+		}
+	}
+
+	affected, err := db.DetachKeyFromRAPIs(k1.ID)
+	if err != nil {
+		t.Fatalf("DetachKeyFromRAPIs: %v", err)
+	}
+	if len(affected) != 2 || affected[0] != "m-both" || affected[1] != "m-only-k1" {
+		t.Fatalf("affected = %v, want [m-both m-only-k1]", affected)
+	}
+
+	gotBoth, _ := db.GetRAPIByID(refs[0].ID)
+	if gotBoth.KeyIDs != fmt.Sprintf("%d", k2.ID) {
+		t.Errorf("m-both KeyIDs = %q, want %q", gotBoth.KeyIDs, fmt.Sprintf("%d", k2.ID))
+	}
+	gotOnlyK1, _ := db.GetRAPIByID(refs[1].ID)
+	if gotOnlyK1.KeyIDs != "" {
+		t.Errorf("m-only-k1 KeyIDs = %q, want \"\" (empty = all keys)", gotOnlyK1.KeyIDs)
+	}
+	gotOnlyK2, _ := db.GetRAPIByID(refs[2].ID)
+	if gotOnlyK2.KeyIDs != fmt.Sprintf("%d", k2.ID) {
+		t.Errorf("m-only-k2 KeyIDs = %q, want %q (unrelated untouched)", gotOnlyK2.KeyIDs, fmt.Sprintf("%d", k2.ID))
+	}
+	gotAll, _ := db.GetRAPIByID(refs[3].ID)
+	if gotAll.KeyIDs != "" {
+		t.Errorf("m-all KeyIDs = %q, want \"\"", gotAll.KeyIDs)
+	}
+
+	// Re-running is a no-op (id already gone).
+	if again, _ := db.DetachKeyFromRAPIs(k1.ID); len(again) != 0 {
+		t.Errorf("second detach affected = %v, want empty", again)
+	}
+}
+
+// TestKeyModelBlocksRoundTrip verifies Block/Get/Unblock/Clear for the
+// key×model capability blacklist.
+func TestKeyModelBlocksRoundTrip(t *testing.T) {
+	db := setupTestDB(t)
+	exp := time.Now().Add(24 * time.Hour)
+
+	if err := db.BlockKeyForModel(1, 10, "model not found: foo", exp); err != nil {
+		t.Fatalf("BlockKeyForModel: %v", err)
+	}
+	if err := db.BlockKeyForModel(2, 10, "模型不存在", exp); err != nil {
+		t.Fatalf("BlockKeyForModel 2: %v", err)
+	}
+
+	got, err := db.GetKeyModelBlocks()
+	if err != nil {
+		t.Fatalf("GetKeyModelBlocks: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("blocks = %d, want 2", len(got))
+	}
+
+	// Refresh (upsert) an existing pair.
+	if err := db.BlockKeyForModel(1, 10, "updated reason", exp); err != nil {
+		t.Fatalf("BlockKeyForModel upsert: %v", err)
+	}
+	got, _ = db.GetKeyModelBlocks()
+	for _, b := range got {
+		if b.KeyID == 1 && b.Reason != "updated reason" {
+			t.Errorf("upsert reason = %q, want %q", b.Reason, "updated reason")
+		}
+	}
+
+	if err := db.UnblockKeyForModel(1, 10); err != nil {
+		t.Fatalf("UnblockKeyForModel: %v", err)
+	}
+	got, _ = db.GetKeyModelBlocks()
+	if len(got) != 1 || got[0].KeyID != 2 {
+		t.Fatalf("after unblock = %+v, want only key 2", got)
+	}
+
+	if err := db.ClearKeyModelBlocksForKey(2); err != nil {
+		t.Fatalf("ClearKeyModelBlocksForKey: %v", err)
+	}
+	got, _ = db.GetKeyModelBlocks()
+	if len(got) != 0 {
+		t.Fatalf("after clear = %+v, want empty", got)
+	}
+}
+
+// TestGetHourlyDistributionWithBrokenTimestamps verifies the analytics
+// aggregates never error on rows whose timestamp was written in Go's
+// time.Time.String() format (SQLite strftime cannot parse " +0000 UTC m=+123").
+// The old-format rows must be excluded; parseable rows must be counted.
+func TestGetHourlyDistributionWithBrokenTimestamps(t *testing.T) {
+	db := setupTestDB(t)
+	now := time.Now()
+
+	// request_logs lives in the logger package; create a minimal copy here.
+	if _, err := db.conn.Exec(`
+		CREATE TABLE IF NOT EXISTS request_logs (
+			id TEXT PRIMARY KEY, session_id TEXT, timestamp DATETIME,
+			client_ip TEXT, request_method TEXT, request_path TEXT,
+			request_headers TEXT, request_body TEXT, req_max_tokens INTEGER DEFAULT 0,
+			lapi_alias TEXT, matched_rapis TEXT, selected_rapi TEXT,
+			upstream_url TEXT, upstream_headers TEXT, upstream_body TEXT,
+			response_status INTEGER, response_headers TEXT, response_body TEXT,
+			latency_ms INTEGER, tokens_used INTEGER, finish_reason TEXT,
+			error_message TEXT, retry_count INTEGER, fallback_used INTEGER,
+			status TEXT, completed_at DATETIME
+		)
+	`); err != nil {
+		t.Fatalf("create request_logs: %v", err)
+	}
+
+	// Old-format row (time.Time.String()) — strftime unparseable.
+	broken := now.Format("2006-01-02 15:04:05.999999999 -0700 MST m=+999.999")
+	if _, err := db.conn.Exec(`INSERT INTO request_logs (id, timestamp, lapi_alias, response_status, latency_ms) VALUES ('broken-1', ?, 'old-lapi', 200, 100)`, broken); err != nil {
+		t.Fatalf("insert broken row: %v", err)
+	}
+
+	// New-format row (parseable by SQLite).
+	good := now.Format("2006-01-02 15:04:05.999999999-07:00")
+	if _, err := db.conn.Exec(`INSERT INTO request_logs (id, timestamp, lapi_alias, response_status, latency_ms) VALUES ('good-1', ?, 'new-lapi', 200, 200)`, good); err != nil {
+		t.Fatalf("insert good row: %v", err)
+	}
+
+	buckets, err := db.GetHourlyDistribution(7)
+	if err != nil {
+		t.Fatalf("GetHourlyDistribution: %v", err)
+	}
+	foundNew := false
+	foundOld := false
+	for _, b := range buckets {
+		if b.LapiAlias == "new-lapi" {
+			foundNew = true
+		}
+		if b.LapiAlias == "old-lapi" {
+			foundOld = true
+		}
+	}
+	if !foundNew {
+		t.Errorf("parseable row missing from buckets: %+v", buckets)
+	}
+	if foundOld {
+		t.Errorf("unparseable old row should be excluded, got %+v", buckets)
+	}
+
+	trends, err := db.GetDailyTokenTrend(7)
+	if err != nil {
+		t.Fatalf("GetDailyTokenTrend: %v", err)
+	}
+	foundNewTrend := false
+	for _, tr := range trends {
+		if tr.LapiAlias == "new-lapi" {
+			foundNewTrend = true
+		}
+	}
+	if !foundNewTrend {
+		t.Errorf("parseable row missing from daily trend: %+v", trends)
 	}
 }

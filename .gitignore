@@ -13,3 +13,6 @@ logs/
 *.zcodecliexec*
 build_err.txt
 glm_verify.txt
+
+# DB backups
+*.db.bak*

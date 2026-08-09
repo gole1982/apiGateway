@@ -182,6 +182,10 @@ func TestAnthropicToOpenAIFinishReason(t *testing.T) {
 		{"end_turn", "stop"},
 		{"max_tokens", "length"},
 		{"tool_use", "tool_calls"},
+		// Regression: refusal must map to content_filter, mirroring the non-streaming
+		// path. Previously the streaming switch fell through and left it as "stop",
+		// silently dropping the content-filter signal.
+		{"refusal", "content_filter"},
 	}
 	for _, tt := range tests {
 		input := "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"" + tt.stopReason + "\",\"stop_sequence\":null}}\n\n"
@@ -204,6 +208,72 @@ func TestAnthropicToOpenAIFinishReason(t *testing.T) {
 	}
 }
 
+// TestAnthropicToOpenAIToolCallIndexReuseOnRetransmit is a regression test for the
+// bug where a repeated content_block_start for an already-seen Anthropic block index
+// would allocate a NEW OpenAI tool_call index (via len(map)), creating gaps and
+// mis-attaching subsequent argument deltas to the wrong tool call. The fix reuses the
+// existing index for a seen blockIdx.
+func TestAnthropicToOpenAIToolCallIndexReuseOnRetransmit(t *testing.T) {
+	// Construct SSE input where content_block_start for index 0 is sent twice.
+	// The second must reuse tool_call index 0.
+	events := []string{
+		`{"type":"message_start","message":{"id":"m","type":"message","role":"assistant","model":"c","content":[],"stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0}}}`,
+		`{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call_0","name":"get_weather","input":{}}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"loc\":\"SF\"}"}}`,
+		`{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"call_1","name":"get_time","input":{}}}`,
+		`{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call_0","name":"get_weather","input":{}}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"loc\":\"SF\"}"}}`,
+		`{"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null}}`,
+		`{"type":"message_stop"}`,
+	}
+	var sb strings.Builder
+	for _, e := range events {
+		sb.WriteString("data: ")
+		sb.WriteString(e)
+		sb.WriteString("\n\n")
+	}
+	frames, _ := runConverter(t, sb.String(), FormatAnthropic, FormatOpenAI)
+
+	// Collect the tool_call indices that appear in content_block_start-derived chunks.
+	// We expect indices {0, 1, 0} — i.e. the retransmitted start for block 0 reuses 0,
+	// NOT a new index 2.
+	var toolCallIndices []int
+	for _, f := range frames {
+		var chunk map[string]interface{}
+		if err := json.Unmarshal([]byte(f), &chunk); err != nil {
+			continue
+		}
+		choices, _ := chunk["choices"].([]interface{})
+		if len(choices) == 0 {
+			continue
+		}
+		choice, _ := choices[0].(map[string]interface{})
+		delta, _ := choice["delta"].(map[string]interface{})
+		tcs, _ := delta["tool_calls"].([]interface{})
+		for _, tc := range tcs {
+			call, _ := tc.(map[string]interface{})
+			if idx, ok := call["index"].(float64); ok {
+				toolCallIndices = append(toolCallIndices, int(idx))
+			}
+		}
+	}
+	// The retransmitted start for index 0 must produce tool_call index 0 (reused),
+	// not a fresh 2.
+	if len(toolCallIndices) == 0 {
+		t.Fatalf("no tool_call indices found in output frames; frames=%v", frames)
+	}
+	// Verify no index exceeds 1 (we only have two distinct tool blocks).
+	maxIdx := -1
+	for _, i := range toolCallIndices {
+		if i > maxIdx {
+			maxIdx = i
+		}
+	}
+	if maxIdx > 1 {
+		t.Errorf("tool_call index reuse regression: got max index %d (indices=%v); retransmitted block_start allocated a fresh index instead of reusing", maxIdx, toolCallIndices)
+	}
+}
+
 // ---- OpenAI→Anthropic conversion correctness --------------------------------
 
 func TestOpenAIToAnthropicMessageStart(t *testing.T) {
@@ -223,21 +293,31 @@ func TestOpenAIToAnthropicMessageStart(t *testing.T) {
 }
 
 func TestOpenAIToAnthropicContentDelta(t *testing.T) {
+	// A content-only chunk (upstream never sent role) must still be framed by a
+	// synthesized message_start and content_block_start before the text delta.
 	input := "data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\n"
 	frames, _ := runConverter(t, input, FormatOpenAI, FormatAnthropic)
-	if len(frames) == 0 {
-		t.Fatal("expected content_block_delta frame")
+
+	types := make([]string, 0, len(frames))
+	var gotText string
+	for _, f := range frames {
+		var obj map[string]interface{}
+		if err := json.Unmarshal([]byte(f), &obj); err != nil {
+			t.Fatalf("invalid JSON %q: %v", f, err)
+		}
+		ty, _ := obj["type"].(string)
+		types = append(types, ty)
+		if ty == "content_block_delta" {
+			d, _ := obj["delta"].(map[string]interface{})
+			gotText, _ = d["text"].(string)
+		}
 	}
-	var obj map[string]interface{}
-	if err := json.Unmarshal([]byte(frames[0]), &obj); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
+
+	if len(types) < 3 || types[0] != "message_start" || types[1] != "content_block_start" || types[2] != "content_block_delta" {
+		t.Errorf("frame sequence = %v; want [message_start content_block_start content_block_delta]", types)
 	}
-	if obj["type"] != "content_block_delta" {
-		t.Errorf("type = %v; want content_block_delta", obj["type"])
-	}
-	delta, _ := obj["delta"].(map[string]interface{})
-	if delta["text"] != "hi" {
-		t.Errorf("delta.text = %v; want %q", delta["text"], "hi")
+	if gotText != "hi" {
+		t.Errorf("delta.text = %q; want %q", gotText, "hi")
 	}
 }
 
@@ -371,6 +451,64 @@ func TestOpenAIToAnthropicDeepSeekStyleFullStream(t *testing.T) {
 	}
 	if types["message_stop"] == 0 {
 		t.Errorf("missing message_stop (stream not closed); types=%v", types)
+	}
+}
+
+// GLM (via Nvidia) repeats "role" in EVERY chunk, unlike standard OpenAI which
+// only sends it in the first. The converter must still emit message_start
+// exactly once — a duplicate message_start makes strict Anthropic clients treat
+// each delta as a new message and abort, so only the first character ("我")
+// ever reached the user. Also assert the required content_block_start/stop
+// framing around the text deltas.
+func TestOpenAIToAnthropicRoleRepeatedEveryChunk(t *testing.T) {
+	input := "" +
+		"data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\"," +
+		"\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"我\"},\"finish_reason\":null}]}\n\n" +
+		"data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\"," +
+		"\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"意识到\"},\"finish_reason\":null}]}\n\n" +
+		"data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\"," +
+		"\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":\"stop\"}]}\n\n"
+
+	frames, _ := runConverter(t, input, FormatOpenAI, FormatAnthropic)
+
+	types := map[string]int{}
+	var allText string
+	firstDeltaIdx, blockStartIdx := -1, -1
+	for i, f := range frames {
+		var obj map[string]interface{}
+		if err := json.Unmarshal([]byte(f), &obj); err != nil {
+			t.Fatalf("frame not valid JSON %q: %v", f, err)
+		}
+		ty, _ := obj["type"].(string)
+		types[ty]++
+		if ty == "content_block_delta" {
+			if firstDeltaIdx == -1 {
+				firstDeltaIdx = i
+			}
+			d, _ := obj["delta"].(map[string]interface{})
+			allText += d["text"].(string)
+		}
+		if ty == "content_block_start" && blockStartIdx == -1 {
+			blockStartIdx = i
+		}
+	}
+
+	if types["message_start"] != 1 {
+		t.Errorf("message_start emitted %d times; want exactly 1 (duplicate aborts strict clients); types=%v", types["message_start"], types)
+	}
+	if allText != "我意识到" {
+		t.Errorf("combined text = %q; want %q (content after first chunk was dropped)", allText, "我意识到")
+	}
+	if blockStartIdx == -1 {
+		t.Errorf("missing content_block_start before text deltas; types=%v", types)
+	} else if firstDeltaIdx != -1 && blockStartIdx > firstDeltaIdx {
+		t.Errorf("content_block_start (idx %d) must precede first content_block_delta (idx %d)", blockStartIdx, firstDeltaIdx)
+	}
+	if types["content_block_stop"] != 1 {
+		t.Errorf("content_block_stop emitted %d times; want 1; types=%v", types["content_block_stop"], types)
+	}
+	if types["message_delta"] != 1 || types["message_stop"] != 1 {
+		t.Errorf("expected exactly one message_delta and message_stop; types=%v", types)
 	}
 }
 

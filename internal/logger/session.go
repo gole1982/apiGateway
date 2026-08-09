@@ -70,7 +70,8 @@ func (t *SessionTracker) InjectSessionID(r *http.Request) string {
 	*r = *r.WithContext(ctx)
 
 	// Increment request count for this session (best-effort, not from conn lookup)
-	t.mu.RLock()
+	// Must use Lock (not RLock) because we mutate TotalRequests and LastRequestAt.
+	t.mu.Lock()
 	for _, session := range t.sessions {
 		if session.ID == sessionID {
 			session.TotalRequests++
@@ -81,7 +82,7 @@ func (t *SessionTracker) InjectSessionID(r *http.Request) string {
 			break
 		}
 	}
-	t.mu.RUnlock()
+	t.mu.Unlock()
 
 	return sessionID
 }

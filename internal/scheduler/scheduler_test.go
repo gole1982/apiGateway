@@ -90,20 +90,21 @@ func TestMarkFailureSetsCooldown(t *testing.T) {
 
 	until := m.MarkFailure(1, time.Time{}, "rate limited")
 	if !until.After(time.Now()) {
-		t.Fatalf("unavailableUntil %v should be in the future", until)
+		t.Fatalf("recoverAt %v should be in the future", until)
 	}
 
-	m.mu.Lock()
-	s := m.rapis[1]
-	failures := s.consecutiveFailures
-	reason := s.unavailableReason
-	m.mu.Unlock()
-
-	if failures != 1 {
-		t.Fatalf("consecutiveFailures = %d, want 1", failures)
+	snap := m.Snapshot()
+	var rs RAPISnapshot
+	for _, s := range snap.RAPIs {
+		if s.ID == 1 {
+			rs = s
+		}
 	}
-	if reason != "rate limited" {
-		t.Fatalf("unavailableReason = %q, want %q", reason, "rate limited")
+	if rs.ConsecutiveFailures != 1 {
+		t.Fatalf("consecutiveFailures = %d, want 1", rs.ConsecutiveFailures)
+	}
+	if rs.Reason != "rate limited" {
+		t.Fatalf("reason = %q, want %q", rs.Reason, "rate limited")
 	}
 }
 
@@ -142,17 +143,17 @@ func TestMarkSuccessClearsCooldown(t *testing.T) {
 	m.MarkFailure(1, time.Time{}, "fail")
 	m.MarkSuccess(1)
 
-	m.mu.Lock()
-	s := m.rapis[1]
-	unavail := s.unavailableUntil
-	failures := s.consecutiveFailures
-	m.mu.Unlock()
-
-	if !unavail.IsZero() {
-		t.Fatalf("unavailableUntil should be zero after MarkSuccess, got %v", unavail)
+	var rs RAPISnapshot
+	for _, s := range m.Snapshot().RAPIs {
+		if s.ID == 1 {
+			rs = s
+		}
 	}
-	if failures != 0 {
-		t.Fatalf("consecutiveFailures = %d, want 0 after MarkSuccess", failures)
+	if rs.Cooling {
+		t.Fatalf("RAPI should not be cooling after MarkSuccess")
+	}
+	if rs.ConsecutiveFailures != 0 {
+		t.Fatalf("consecutiveFailures = %d, want 0 after MarkSuccess", rs.ConsecutiveFailures)
 	}
 }
 
@@ -348,13 +349,14 @@ func TestRecoveryLoopClearsCooldown(t *testing.T) {
 	// Wait for recovery loop to clear the cooldown
 	time.Sleep(100 * time.Millisecond)
 
-	m.mu.Lock()
-	s := m.rapis[1]
-	unavail := s.unavailableUntil
-	m.mu.Unlock()
-
-	if !unavail.IsZero() && unavail.After(time.Now()) {
-		t.Fatalf("recovery loop should have cleared cooldown, but unavailableUntil = %v", unavail)
+	var rs RAPISnapshot
+	for _, s := range m.Snapshot().RAPIs {
+		if s.ID == 1 {
+			rs = s
+		}
+	}
+	if rs.Cooling && rs.RecoverAt.After(time.Now()) {
+		t.Fatalf("recovery loop should have cleared cooldown, but recoverAt = %v", rs.RecoverAt)
 	}
 }
 
@@ -374,4 +376,202 @@ func testRAPIs(rapis ...models.RAPIWithPlatform) []models.RAPIWithPlatform {
 		rapis[i].Available = true
 	}
 	return rapis
+}
+
+func TestPickAvailableKeySkipsPermanentFailure(t *testing.T) {
+	m := NewManager(testConfig())
+	defer m.Close()
+
+	keys := []models.PlatformKey{
+		{ID: 1, KeyIndex: 0, Enabled: true, FailureType: 2}, // permanent failure, skip
+		{ID: 2, KeyIndex: 1, Enabled: true, FailureType: 0}, // healthy
+	}
+
+	got, _, err := m.PickAvailableKey(keys)
+	if err != nil {
+		t.Fatalf("PickAvailableKey: %v", err)
+	}
+	if got.ID != 2 {
+		t.Fatalf("selected key %d, want 2 (key 1 is permanent failure)", got.ID)
+	}
+}
+
+func TestPickAvailableKeyAllowsTemporaryFailure(t *testing.T) {
+	m := NewManager(testConfig())
+	defer m.Close()
+
+	// failure_type=1 (temporary) keys are NOT skipped here — they're managed by
+	// the scheduler's in-memory cooldown. PickAvailableKey should return them.
+	keys := []models.PlatformKey{
+		{ID: 1, KeyIndex: 0, Enabled: true, FailureType: 1}, // temporary failure, not skipped
+	}
+
+	got, _, err := m.PickAvailableKey(keys)
+	if err != nil {
+		t.Fatalf("PickAvailableKey: %v", err)
+	}
+	if got.ID != 1 {
+		t.Fatalf("selected key %d, want 1 (temporary failure should not be skipped)", got.ID)
+	}
+}
+
+func TestPickAvailableKeyAllPermanentFails(t *testing.T) {
+	m := NewManager(testConfig())
+	defer m.Close()
+
+	keys := []models.PlatformKey{
+		{ID: 1, KeyIndex: 0, Enabled: true, FailureType: 2},
+		{ID: 2, KeyIndex: 1, Enabled: true, FailureType: 2},
+	}
+
+	_, _, err := m.PickAvailableKey(keys)
+	if !errors.Is(err, ErrAllKeysUnavailable) {
+		t.Fatalf("err = %v, want ErrAllKeysUnavailable", err)
+	}
+}
+
+func TestPickAvailableKeyPrefersFree(t *testing.T) {
+	m := NewManager(testConfig())
+	defer m.Close()
+
+	// A paid key with the lower (preferred by the old logic) key_index should
+	// still yield to a free key with a higher key_index.
+	keys := []models.PlatformKey{
+		{ID: 1, KeyIndex: 0, Enabled: true, IsFree: false}, // paid, first
+		{ID: 2, KeyIndex: 1, Enabled: true, IsFree: true},  // free
+	}
+
+	got, _, err := m.PickAvailableKey(keys)
+	if err != nil {
+		t.Fatalf("PickAvailableKey: %v", err)
+	}
+	if got.ID != 2 {
+		t.Fatalf("selected key %d, want 2 (free preferred over paid with lower index)", got.ID)
+	}
+}
+
+func TestPickAvailableKeyFreeEarliestExpiry(t *testing.T) {
+	m := NewManager(testConfig())
+	defer m.Close()
+
+	// Two free keys: the one that expires sooner should be picked first so its
+	// remaining quota is consumed before it lapses.
+	soon := time.Now().Add(1 * time.Hour)
+	later := time.Now().Add(24 * time.Hour)
+	keys := []models.PlatformKey{
+		{ID: 1, KeyIndex: 0, Enabled: true, IsFree: true, ExpiresAt: &later},
+		{ID: 2, KeyIndex: 1, Enabled: true, IsFree: true, ExpiresAt: &soon},
+	}
+
+	got, _, err := m.PickAvailableKey(keys)
+	if err != nil {
+		t.Fatalf("PickAvailableKey: %v", err)
+	}
+	if got.ID != 2 {
+		t.Fatalf("selected key %d, want 2 (nearer ExpiresAt preferred among free keys)", got.ID)
+	}
+}
+
+func TestPickAvailableKeyPaidEarliestExpiry(t *testing.T) {
+	m := NewManager(testConfig())
+	defer m.Close()
+
+	// Same tier-priority should apply to paid keys: nearer expiry first.
+	soon := time.Now().Add(1 * time.Hour)
+	later := time.Now().Add(24 * time.Hour)
+	keys := []models.PlatformKey{
+		{ID: 1, KeyIndex: 0, Enabled: true, IsFree: false, ExpiresAt: &later},
+		{ID: 2, KeyIndex: 1, Enabled: true, IsFree: false, ExpiresAt: &soon},
+	}
+
+	got, _, err := m.PickAvailableKey(keys)
+	if err != nil {
+		t.Fatalf("PickAvailableKey: %v", err)
+	}
+	if got.ID != 2 {
+		t.Fatalf("selected key %d, want 2 (nearer ExpiresAt preferred among paid keys)", got.ID)
+	}
+}
+
+func TestPickAvailableKeyNeverExpiresSortsLastInTier(t *testing.T) {
+	m := NewManager(testConfig())
+	defer m.Close()
+
+	// Within the free tier, a key with no ExpiresAt (never expires) should be
+	// deferred in favour of one that does expire.
+	soon := time.Now().Add(1 * time.Hour)
+	keys := []models.PlatformKey{
+		{ID: 1, KeyIndex: 0, Enabled: true, IsFree: true},            // never
+		{ID: 2, KeyIndex: 1, Enabled: true, IsFree: true, ExpiresAt: &soon},
+	}
+
+	got, _, err := m.PickAvailableKey(keys)
+	if err != nil {
+		t.Fatalf("PickAvailableKey: %v", err)
+	}
+	if got.ID != 2 {
+		t.Fatalf("selected key %d, want 2 (key with deadline preferred over never-expires)", got.ID)
+	}
+}
+
+func TestPickAvailableKeySkipsExpired(t *testing.T) {
+	m := NewManager(testConfig())
+	defer m.Close()
+
+	// Runtime guard: an expired-but-still-enabled key must be skipped in favour
+	// of the next candidate. This covers the window before the startup sweep
+	// has persisted enabled=0 for expired keys.
+	past := time.Now().Add(-1 * time.Hour)
+	keys := []models.PlatformKey{
+		{ID: 1, KeyIndex: 0, Enabled: true, IsFree: true, ExpiresAt: &past}, // free but expired
+		{ID: 2, KeyIndex: 1, Enabled: true, IsFree: false},                  // paid, healthy
+	}
+
+	got, _, err := m.PickAvailableKey(keys)
+	if err != nil {
+		t.Fatalf("PickAvailableKey: %v", err)
+	}
+	if got.ID != 2 {
+		t.Fatalf("selected key %d, want 2 (expired free key must be skipped, fall back to paid)", got.ID)
+	}
+}
+
+func TestPickAvailableKeyAllExpired(t *testing.T) {
+	m := NewManager(testConfig())
+	defer m.Close()
+
+	past := time.Now().Add(-1 * time.Hour)
+	keys := []models.PlatformKey{
+		{ID: 1, KeyIndex: 0, Enabled: true, ExpiresAt: &past},
+		{ID: 2, KeyIndex: 1, Enabled: true, ExpiresAt: &past},
+	}
+
+	_, _, err := m.PickAvailableKey(keys)
+	if !errors.Is(err, ErrAllKeysUnavailable) {
+		t.Fatalf("err = %v, want ErrAllKeysUnavailable for all-expired keys", err)
+	}
+}
+
+func TestPickAvailableKeyDoesNotMutateInput(t *testing.T) {
+	m := NewManager(testConfig())
+	defer m.Close()
+
+	soon := time.Now().Add(1 * time.Hour)
+	later := time.Now().Add(24 * time.Hour)
+	keys := []models.PlatformKey{
+		{ID: 1, KeyIndex: 0, Enabled: true, IsFree: true, ExpiresAt: &later},
+		{ID: 2, KeyIndex: 1, Enabled: true, IsFree: true, ExpiresAt: &soon},
+	}
+	// Caller-ordered snapshot must be preserved across the internal sort.
+	before := append([]models.PlatformKey(nil), keys...)
+
+	_, _, err := m.PickAvailableKey(keys)
+	if err != nil {
+		t.Fatalf("PickAvailableKey: %v", err)
+	}
+	for i := range keys {
+		if keys[i].ID != before[i].ID {
+			t.Fatalf("input slice mutated at index %d: got %d, want %d", i, keys[i].ID, before[i].ID)
+		}
+	}
 }

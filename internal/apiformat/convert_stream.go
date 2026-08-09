@@ -19,16 +19,29 @@ type StreamConverter struct {
 	flusher      interface{ Flush() }
 	requestID    string
 	writtenFrames int // number of data: frames actually sent to the client
+
+	// OpenAI→Anthropic protocol state. message_start must be emitted exactly
+	// once and content_block_start must precede the first text delta; track
+	// them here because the per-chunk conversion is otherwise stateless.
+	anthropicMsgStarted   bool
+	anthropicBlockStarted bool // text content_block is open
+	anthropicBlockIndex   int  // next content_block index to assign
+	anthropicToolOpen     bool // a tool_use content_block is currently open
+	anthropicToolIdxMap   map[int]int // OpenAI tool_calls[i].index → Anthropic block index
+
+	// Gemini→OpenAI state: first chunk must carry role.
+	geminiFirstSent bool
 }
 
 // NewStreamConverter creates a converter for streaming SSE responses.
 func NewStreamConverter(reader io.Reader, writer io.Writer, from APIFormat, to APIFormat, model string) *StreamConverter {
 	return &StreamConverter{
-		reader: reader,
-		writer: writer,
-		from:   from,
-		to:     to,
-		model:  model,
+		reader:            reader,
+		writer:            writer,
+		from:              from,
+		to:                to,
+		model:             model,
+		anthropicToolIdxMap: make(map[int]int),
 	}
 }
 
@@ -187,6 +200,53 @@ func (sc *StreamConverter) anthropicChunkToOpenAI(data string) (string, error) {
 			},
 		}
 
+	case "content_block_start":
+		// If this is a tool_use block, emit the tool call metadata (id + name).
+		if cb, ok := event["content_block"].(map[string]interface{}); ok {
+			if getString(cb, "type") == "tool_use" {
+				// Track the Anthropic block index → OpenAI tool_call index mapping.
+				blockIdx := 0
+				if idx, ok := event["index"].(float64); ok {
+					blockIdx = int(idx)
+				}
+				// The tool_call index in OpenAI is the order of tool blocks (0-based).
+				// Reuse an existing mapping if this block index was seen before
+				// (e.g. on a retransmitted content_block_start) so arguments from
+				// subsequent deltas attach to the right tool call. Allocating a fresh
+				// index every time would create gaps and mis-attach arguments.
+				toolCallIdx, seen := sc.anthropicToolIdxMap[blockIdx]
+				if !seen {
+					toolCallIdx = len(sc.anthropicToolIdxMap)
+					sc.anthropicToolIdxMap[blockIdx] = toolCallIdx
+				}
+
+				chunk["choices"] = []interface{}{
+					map[string]interface{}{
+						"index": 0,
+						"delta": map[string]interface{}{
+							"tool_calls": []interface{}{
+								map[string]interface{}{
+									"index": toolCallIdx,
+									"id":    getString(cb, "id"),
+									"type":  "function",
+									"function": map[string]interface{}{
+										"name":      getString(cb, "name"),
+										"arguments": "",
+									},
+								},
+							},
+						},
+						"finish_reason": nil,
+					},
+				}
+			} else {
+				// text block start — no OpenAI equivalent needed, skip.
+				return "", nil
+			}
+		} else {
+			return "", nil
+		}
+
 	case "content_block_delta":
 		delta, _ := event["delta"].(map[string]interface{})
 		deltaType := getString(delta, "type")
@@ -201,14 +261,20 @@ func (sc *StreamConverter) anthropicChunkToOpenAI(data string) (string, error) {
 				},
 			}
 		} else if deltaType == "input_json_delta" {
-			// Tool use streaming — emit as partial JSON.
+			// Tool use streaming — map Anthropic block index to OpenAI tool_call index.
+			blockIdx := 0
+			if idx, ok := event["index"].(float64); ok {
+				blockIdx = int(idx)
+			}
+			toolCallIdx := sc.anthropicToolIdxMap[blockIdx]
+
 			chunk["choices"] = []interface{}{
 				map[string]interface{}{
 					"index": 0,
 					"delta": map[string]interface{}{
 						"tool_calls": []interface{}{
 							map[string]interface{}{
-								"index": 0,
+								"index": toolCallIdx,
 								"function": map[string]interface{}{
 									"arguments": getString(delta, "partial_json"),
 								},
@@ -233,6 +299,11 @@ func (sc *StreamConverter) anthropicChunkToOpenAI(data string) (string, error) {
 			finishReason = "tool_calls"
 		case "end_turn":
 			finishReason = "stop"
+		case "refusal":
+			// Mirror the non-streaming path (convert_response.go) which maps
+			// refusal → content_filter. Without this the content-filter signal is
+			// silently lost and the client sees a normal "stop".
+			finishReason = "content_filter"
 		}
 
 		choice := map[string]interface{}{
@@ -252,7 +323,7 @@ func (sc *StreamConverter) anthropicChunkToOpenAI(data string) (string, error) {
 	case "message_stop":
 		return "[DONE]", nil
 
-	case "content_block_start", "content_block_stop", "ping":
+	case "content_block_stop", "ping":
 		return "", nil
 
 	default:
@@ -280,35 +351,61 @@ func (sc *StreamConverter) geminiChunkToOpenAI(data string) (string, error) {
 
 	var deltaContent string
 	var finishReason interface{}
+	var toolCalls []interface{}
 
 	if candidates, ok := event["candidates"].([]interface{}); ok && len(candidates) > 0 {
 		cand, _ := candidates[0].(map[string]interface{})
 
 		if content, ok := cand["content"].(map[string]interface{}); ok {
 			deltaContent = extractGeminiText(content)
+
+			// Handle functionCall parts.
+			if parts, ok := content["parts"].([]interface{}); ok {
+				for _, p := range parts {
+					part, ok := p.(map[string]interface{})
+					if !ok {
+						continue
+					}
+					if fnCall, ok := part["functionCall"].(map[string]interface{}); ok {
+						tc := map[string]interface{}{
+							"index": 0,
+							"type":  "function",
+							"function": map[string]interface{}{
+								"name":      getString(fnCall, "name"),
+								"arguments": toJSONString(fnCall["args"]),
+							},
+						}
+						toolCalls = append(toolCalls, tc)
+					}
+				}
+			}
 		}
 
 		if fr := getString(cand, "finishReason"); fr != "" && fr != "STOP" {
 			switch fr {
 			case "MAX_TOKENS":
-				reason := "length"
-				finishReason = reason
+				finishReason = "length"
 			case "SAFETY":
-				reason := "content_filter"
-				finishReason = reason
+				finishReason = "content_filter"
 			default:
-				reason := "stop"
-				finishReason = reason
+				finishReason = "stop"
 			}
 		} else if _, ok := cand["finishReason"]; ok {
-			reason := "stop"
-			finishReason = reason
+			finishReason = "stop"
 		}
 	}
 
 	delta := map[string]interface{}{}
+	// First chunk must carry role for OpenAI clients.
+	if !sc.geminiFirstSent {
+		delta["role"] = "assistant"
+		sc.geminiFirstSent = true
+	}
 	if deltaContent != "" {
 		delta["content"] = deltaContent
+	}
+	if len(toolCalls) > 0 {
+		delta["tool_calls"] = toolCalls
 	}
 	chunk["choices"] = []interface{}{
 		map[string]interface{}{
@@ -367,27 +464,40 @@ func (sc *StreamConverter) openaiChunkToAnthropic(data string) (string, error) {
 	// SSE frame, instead of the old early-return approach that silently dropped fields.
 	var parts []string
 
-	if role := getString(delta, "role"); role != "" {
-		// role present → emit message_start.
-		startEvent := map[string]interface{}{
-			"type": "message_start",
-			"message": map[string]interface{}{
-				"id":      id,
-				"type":    "message",
-				"role":    "assistant",
-				"model":   sc.model,
-				"content": []interface{}{},
-				"usage":   map[string]interface{}{"input_tokens": 0, "output_tokens": 0},
-			},
-		}
-		parts = append(parts, toJSON(startEvent))
+	// message_start must be emitted exactly once, before any content. Standard
+	// OpenAI streams only carry "role" in the first chunk, but some upstreams
+	// (e.g. GLM via Nvidia) repeat it in every chunk — emitting message_start
+	// each time makes strict Anthropic clients treat each delta as a brand-new
+	// message and abort, so only the first character ever reaches the user.
+	if role := getString(delta, "role"); role != "" && !sc.anthropicMsgStarted {
+		parts = append(parts, toJSON(sc.anthropicMessageStart(id)))
+		sc.anthropicMsgStarted = true
 	}
 
+	// --- Text content ---
 	if content, ok := delta["content"].(string); ok && content != "" {
+		// Guarantee message_start even if the upstream never sent a role chunk.
+		if !sc.anthropicMsgStarted {
+			parts = append(parts, toJSON(sc.anthropicMessageStart(id)))
+			sc.anthropicMsgStarted = true
+		}
+		// Anthropic requires content_block_start before the first text delta.
+		if !sc.anthropicBlockStarted {
+			blockStart := map[string]interface{}{
+				"type":  "content_block_start",
+				"index": sc.anthropicBlockIndex,
+				"content_block": map[string]interface{}{
+					"type": "text",
+					"text": "",
+				},
+			}
+			parts = append(parts, toJSON(blockStart))
+			sc.anthropicBlockStarted = true
+		}
 		// Text delta.
 		block := map[string]interface{}{
 			"type":  "content_block_delta",
-			"index": 0,
+			"index": sc.anthropicBlockIndex,
 			"delta": map[string]interface{}{
 				"type": "text_delta",
 				"text": content,
@@ -396,13 +506,118 @@ func (sc *StreamConverter) openaiChunkToAnthropic(data string) (string, error) {
 		parts = append(parts, toJSON(block))
 	}
 
+	// --- Tool calls ---
+	if toolCalls, ok := delta["tool_calls"].([]interface{}); ok && len(toolCalls) > 0 {
+		if !sc.anthropicMsgStarted {
+			parts = append(parts, toJSON(sc.anthropicMessageStart(id)))
+			sc.anthropicMsgStarted = true
+		}
+		for _, tc := range toolCalls {
+			call, ok := tc.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			// OpenAI tool_calls[i].index identifies which tool call this delta belongs to.
+			callIdx := 0
+			if idx, ok := call["index"].(float64); ok {
+				callIdx = int(idx)
+			}
+
+			fn, _ := call["function"].(map[string]interface{})
+			toolID := getString(call, "id")
+			toolName := ""
+			if fn != nil {
+				toolName = getString(fn, "name")
+			}
+
+			// If this is the first chunk for this tool call (has id + name), emit content_block_start.
+			if toolID != "" && toolName != "" {
+				// Close any open text block first.
+				if sc.anthropicBlockStarted {
+					parts = append(parts, toJSON(map[string]interface{}{
+						"type": "content_block_stop", "index": sc.anthropicBlockIndex,
+					}))
+					sc.anthropicBlockIndex++
+					sc.anthropicBlockStarted = false
+				}
+				// Close a previously open tool block (different index).
+				if sc.anthropicToolOpen {
+					if prevBlock, exists := sc.anthropicToolIdxMap[callIdx]; exists && prevBlock != sc.anthropicBlockIndex {
+						parts = append(parts, toJSON(map[string]interface{}{
+							"type": "content_block_stop", "index": prevBlock,
+						}))
+					} else if sc.anthropicToolOpen {
+						parts = append(parts, toJSON(map[string]interface{}{
+							"type": "content_block_stop", "index": sc.anthropicBlockIndex,
+						}))
+					}
+					sc.anthropicToolOpen = false
+				}
+				// Open new tool_use block.
+				blockIdx := sc.anthropicBlockIndex
+				sc.anthropicToolIdxMap[callIdx] = blockIdx
+				blockStart := map[string]interface{}{
+					"type":  "content_block_start",
+					"index": blockIdx,
+					"content_block": map[string]interface{}{
+						"type":  "tool_use",
+						"id":    toolID,
+						"name":  toolName,
+						"input": map[string]interface{}{},
+					},
+				}
+				parts = append(parts, toJSON(blockStart))
+				sc.anthropicBlockIndex++
+				sc.anthropicToolOpen = true
+			}
+
+			// Emit argument fragments as input_json_delta.
+			if fn != nil {
+				if args, ok := fn["arguments"].(string); ok && args != "" {
+					blockIdx := sc.anthropicToolIdxMap[callIdx]
+					block := map[string]interface{}{
+						"type":  "content_block_delta",
+						"index": blockIdx,
+						"delta": map[string]interface{}{
+							"type":         "input_json_delta",
+							"partial_json": args,
+						},
+					}
+					parts = append(parts, toJSON(block))
+				}
+			}
+		}
+	}
+
+	// --- Finish ---
 	if finishReason != "" {
+		// Close any open content block (text or tool_use).
+		if sc.anthropicBlockStarted {
+			parts = append(parts, toJSON(map[string]interface{}{
+				"type": "content_block_stop", "index": sc.anthropicBlockIndex,
+			}))
+			sc.anthropicBlockStarted = false
+		}
+		if sc.anthropicToolOpen {
+			// Close the last tool block.
+			lastIdx := sc.anthropicBlockIndex - 1
+			if lastIdx < 0 {
+				lastIdx = 0
+			}
+			parts = append(parts, toJSON(map[string]interface{}{
+				"type": "content_block_stop", "index": lastIdx,
+			}))
+			sc.anthropicToolOpen = false
+		}
+
 		stopReason := "end_turn"
 		switch finishReason {
 		case "length":
 			stopReason = "max_tokens"
 		case "tool_calls":
 			stopReason = "tool_use"
+		case "content_filter":
+			stopReason = "end_turn"
 		case "stop":
 			stopReason = "end_turn"
 		}
@@ -423,6 +638,22 @@ func (sc *StreamConverter) openaiChunkToAnthropic(data string) (string, error) {
 	}
 
 	return strings.Join(parts, "\x00"), nil
+}
+
+// anthropicMessageStart builds the message_start event that opens an Anthropic
+// streaming message.
+func (sc *StreamConverter) anthropicMessageStart(id string) map[string]interface{} {
+	return map[string]interface{}{
+		"type": "message_start",
+		"message": map[string]interface{}{
+			"id":      id,
+			"type":    "message",
+			"role":    "assistant",
+			"model":   sc.model,
+			"content": []interface{}{},
+			"usage":   map[string]interface{}{"input_tokens": 0, "output_tokens": 0},
+		},
+	}
 }
 
 // ---------- OpenAI SSE → Gemini SSE ----------

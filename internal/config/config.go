@@ -3,7 +3,6 @@ package config
 import (
 	"os"
 	"path/filepath"
-	"strings"
 
 	"gopkg.in/ini.v1"
 )
@@ -23,15 +22,18 @@ type Config struct {
 	// CooldownSec is the base cooldown after the first RAPI/key failure (default 10s).
 	// MaxCooldownSec caps the exponential backoff (default 120s).
 	// RequestMaxWaitSec is how long a request queues waiting for a free RAPI before giving up (default 120s).
+	// BillingCooldownSec is the cooldown applied to recoverable billing errors
+	// (欠费/积分不足), default 1800 (30 min). Longer than CooldownSec so an
+	// out-of-credit key does not burn a failed upstream attempt on every request.
 	CooldownSec        int
 	MaxCooldownSec     int
+	BillingCooldownSec int
+	// CapabilityBlockSec is how long a key×model capability block lives after
+	// the platform denied a key for a model (404 "model not found" etc.),
+	// default 86400 (24 h). While blocked the pair is skipped; after expiry it
+	// is retried automatically so a re-granted permission is picked up.
+	CapabilityBlockSec int
 	RequestMaxWaitSec  int
-
-	// Agent tool-calling loop
-	AgentEnabled        bool
-	AgentMaxIterations  int
-	AgentTimeoutSec     int
-	AgentShellWhitelist []string // allowed shell commands (e.g. python, node, curl)
 
 	// Startup health recovery
 	// RetryOnStartup, when true, makes the gateway probe every RAPI that is
@@ -41,6 +43,16 @@ type Config struct {
 	RetryOnStartup   bool
 	RetryConcurrency int
 	RetryTimeoutSec  int
+
+	// Structured console log settings.
+	// LogLevel is one of "debug"/"info"/"warn"/"error" (default "info"). Maps to
+	// the stdlib slog level that gates the JSON stderr stream.
+	// LogFile, when true, additionally tees the JSON stream to LogFilePath
+	// (default "logs/gateway.log") so operators can collect rotated files
+	// without scraping stderr.
+	LogLevel   string
+	LogFile    bool
+	LogFilePath string
 }
 
 func Load() (*Config, error) {
@@ -57,28 +69,18 @@ func Load() (*Config, error) {
 			ProxyPort:          13579,
 			WebPort:            24680,
 			DialTimeoutSec:     30,
-			ResponseTimeoutSec: 300,
-			CooldownSec:        10,
-			MaxCooldownSec:     120,
-			RequestMaxWaitSec:  120,
-			AgentEnabled:       true,
-			AgentMaxIterations: 10,
-			AgentTimeoutSec:    120,
-			AgentShellWhitelist: []string{"python", "node", "curl"},
+			ResponseTimeoutSec: 300,					CooldownSec:        10,
+					MaxCooldownSec:     120,
+					BillingCooldownSec: 1800,
+					CapabilityBlockSec: 86400,
+					RequestMaxWaitSec:  120,
 			RetryOnStartup:     true,
 			RetryConcurrency:   8,
 			RetryTimeoutSec:    15,
+			LogLevel:           "info",
+			LogFile:            false,
+			LogFilePath:        "logs/gateway.log",
 		}, nil
-	}
-
-	// Parse shell whitelist (comma-separated)
-	shellWL := cfg.Section("agent").Key("shell_whitelist").MustString("python,node,curl")
-	var whitelist []string
-	for _, s := range strings.Split(shellWL, ",") {
-		s = strings.TrimSpace(s)
-		if s != "" {
-			whitelist = append(whitelist, s)
-		}
 	}
 
 	return &Config{
@@ -88,13 +90,14 @@ func Load() (*Config, error) {
 		ResponseTimeoutSec: cfg.Section("").Key("response_timeout_sec").MustInt(300),
 		CooldownSec:        cfg.Section("").Key("cooldown_sec").MustInt(10),
 		MaxCooldownSec:     cfg.Section("").Key("max_cooldown_sec").MustInt(120),
+		BillingCooldownSec: cfg.Section("").Key("billing_cooldown_sec").MustInt(1800),
+		CapabilityBlockSec: cfg.Section("").Key("capability_block_sec").MustInt(86400),
 		RequestMaxWaitSec:  cfg.Section("").Key("request_max_wait_sec").MustInt(120),
-		AgentEnabled:        cfg.Section("agent").Key("enabled").MustBool(true),
-		AgentMaxIterations:  cfg.Section("agent").Key("max_iterations").MustInt(10),
-		AgentTimeoutSec:     cfg.Section("agent").Key("total_timeout_sec").MustInt(120),
-		AgentShellWhitelist: whitelist,
 		RetryOnStartup:      cfg.Section("health").Key("retry_on_startup").MustBool(true),
 		RetryConcurrency:    cfg.Section("health").Key("retry_concurrency").MustInt(8),
 		RetryTimeoutSec:     cfg.Section("health").Key("retry_timeout_sec").MustInt(15),
+		LogLevel:            cfg.Section("log").Key("level").MustString("info"),
+		LogFile:             cfg.Section("log").Key("file").MustBool(false),
+		LogFilePath:         cfg.Section("log").Key("file_path").MustString("logs/gateway.log"),
 	}, nil
 }

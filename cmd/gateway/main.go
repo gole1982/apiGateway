@@ -1,7 +1,7 @@
 package main
 
 import (
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -16,11 +16,12 @@ func main() {
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		log.Println("Received termination signal, shutting down...")
+		slog.Info("Received termination signal, shutting down...", "component", "main")
 		svc.Stop()
 	}()
 
 	if err := svc.Run(); err != nil {
-		log.Fatalf("Gateway error: %v", err)
+		slog.Error("Gateway error", "component", "main", "error", err.Error())
+		os.Exit(1)
 	}
 }

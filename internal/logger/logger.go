@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"math/rand"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+	"unicode/utf8"
 )
 
 type Logger struct {
@@ -19,6 +22,12 @@ type Logger struct {
 	ctx        context.Context
 	cancel     context.CancelFunc
 	wg         sync.WaitGroup
+	// closed is set before eventQueue is closed so that concurrent RecordEvent callers
+	// can early-return instead of sending on a closed channel (which always panics,
+	// even under select/default — select only guards the "no receiver" case, not closed).
+	closed atomic.Bool
+	// droppedCount counts log events that were dropped because the event queue was full.
+	droppedCount atomic.Int64
 }
 
 type LogWorker struct {
@@ -52,6 +61,12 @@ func (l *Logger) Start() {
 }
 
 func (l *Logger) Stop() {
+	// Set the closed flag FIRST so concurrent RecordEvent callers early-return before
+	// we close the channel. Sending on a closed channel always panics; select/default
+	// only guards the "no receiver ready" case, not "closed". There is still a tiny
+	// window between the flag check and the send in RecordEvent, so RecordEvent also
+	// defers a recover() as a belt-and-braces guard against that race.
+	l.closed.Store(true)
 	// 1) Close the queue so the worker drains remaining events and exits.
 	// 2) Cancel context so the cleanup goroutine exits.
 	// 3) Wait for both. Order matters: cancel alone would not drain the queue.
@@ -61,15 +76,33 @@ func (l *Logger) Stop() {
 }
 
 func (l *Logger) RecordEvent(event LogEvent) {
+	if l.closed.Load() {
+		// Logger is shutting down and the queue is (about to be) closed — drop silently.
+		return
+	}
 	if event.Timestamp.IsZero() {
 		event.Timestamp = time.Now()
 	}
 
+	// Guard against the race between the closed.Load() check above and the send below:
+	// if Stop() flips the flag and closes the channel right after our check, the send
+	// would panic. recover() turns that into a silent drop, which is the correct
+	// behaviour during shutdown (we must not crash the gateway for a lost log line).
+	defer func() { _ = recover() }()
+
 	select {
 	case l.eventQueue <- event:
 	default:
-		dropEvent(l.config.QueueCapacity)
+		dropEvent(l.config.QueueCapacity, &l.droppedCount)
 	}
+}
+
+// DroppedEvents returns the number of log events that have been dropped because the
+// event queue was full (or the logger was shutting down). Useful for observability —
+// a non-zero value indicates the queue capacity should be increased or the worker is
+// not keeping up.
+func (l *Logger) DroppedEvents() int64 {
+	return l.droppedCount.Load()
 }
 
 func (l *Logger) RecordRequestReceived(requestID, sessionID, clientIP, method, path string, headers map[string]string, body string) {
@@ -167,6 +200,17 @@ func (l *Logger) RecordError(requestID, message, stage string) {
 
 func (w *LogWorker) run() {
 	defer w.logger.wg.Done()
+	// A panic anywhere in the worker (DB write failure, malformed payload parsing,
+	// a nil deref in extractMaxTokens/extractFinishReason, etc.) would otherwise kill
+	// the entire logging pipeline: the deferred wg.Done() runs, Stop() returns, but
+	// subsequent RecordEvent calls would pile up forever (and, post Fix 8, panic on
+	// the closed channel). Catching the panic keeps the worker alive-ish — we log it
+	// and let the loop continue so at least future events have a chance to be recorded.
+	defer func() {
+		if r := recover(); r != nil {
+			DefaultConsole().Error("logger", "[logger] worker panic recovered", "panic", fmt.Sprint(r))
+		}
+	}()
 
 	w.batch = make([]LogEvent, 0, w.logger.config.BatchSize)
 	w.resetTimer()
@@ -349,7 +393,20 @@ func truncateBody(body string, maxKB int) string {
 	if len(body) <= maxBytes {
 		return body
 	}
-	return body[:maxBytes] + " [TRUNCATED]"
+	// Truncate on a valid UTF-8 rune boundary. Slicing at an arbitrary byte offset can
+	// split a multi-byte rune (e.g. mid-Chinese-character), producing invalid UTF-8 that
+	// corrupts later json.Marshal output (replacement chars or errors) and confuses the
+	// string-scan extractors (extractMaxTokens/extractFinishReason). Walk back to the
+	// start of the last complete rune at or before maxBytes.
+	cutoff := maxBytes
+	for cutoff > 0 {
+		if utf8.RuneStart(body[cutoff]) {
+			// body[cutoff] is the first byte of a rune; cutting here keeps runes whole.
+			break
+		}
+		cutoff--
+	}
+	return body[:cutoff] + " [TRUNCATED]"
 }
 
 func getString(data map[string]interface{}, key string) string {
@@ -386,7 +443,13 @@ func getBool(data map[string]interface{}, key string) bool {
 	return false
 }
 
-func dropEvent(queueSize int) {
+// dropEvent is called when a log event cannot be enqueued (queue full). It increments
+// a dropped counter so that callers (e.g. /api/status) can observe log data loss.
+// The previous implementation was a no-op, which meant events were silently dropped
+// with zero observability — the dashboard would show incomplete requests (stuck at
+// "pending") with no indication that logging was backing up.
+func dropEvent(queueSize int, counter *atomic.Int64) {
+	counter.Add(1)
 }
 
 // extractMaxTokens pulls the max_tokens integer out of a JSON request body using
@@ -448,12 +511,43 @@ func extractFinishReason(body string) string {
 	return rest[1 : end+1]
 }
 
-func saveFailedEvent(log *RequestLog) {
-	os.MkdirAll("logs", 0755)
-	file, _ := os.OpenFile("logs/failed_events.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if file != nil {
-		defer file.Close()
-		data, _ := json.Marshal(log)
-		file.WriteString(time.Now().String() + ": " + string(data) + "\n")
+func saveFailedEvent(entry *RequestLog) {
+	// This is the safety-net writer invoked when the primary DB write fails. Previously
+	// every error here was silently swallowed (MkdirAll ignored, file open error dropped,
+	// WriteString error dropped), so a failed SaveRequestLog was completely invisible —
+	// the operator would never know the safety net itself was broken. Surface each failure
+	// to the structured console logger so it at least appears in process logs.
+	//
+	// Each line written to logs/failed_events.log is a standalone JSON Lines record
+	// matching the same schema as the console stream: {"ts":...,"event":"save_failed",
+	// "request_id":...,"reason":...,"entry":{...}}. The reason field uses a small set
+	// of enumerated values (mkdir_failed / open_failed / marshal_failed / write_failed)
+	// so the safety-net file is grep/parse-friendly rather than a free-form text dump.
+	if err := os.MkdirAll("logs", 0755); err != nil {
+		DefaultConsole().Error("logger", "[logger] saveFailedEvent: MkdirAll failed", "reason", "mkdir_failed", "error", err.Error())
+		return
+	}
+	file, err := os.OpenFile("logs/failed_events.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		DefaultConsole().Error("logger", "[logger] saveFailedEvent: open failed_events.log failed", "reason", "open_failed", "error", err.Error())
+		return
+	}
+	defer file.Close()
+	entryData, err := json.Marshal(entry)
+	if err != nil {
+		DefaultConsole().Error("logger", "[logger] saveFailedEvent: marshal failed", "reason", "marshal_failed", "error", err.Error())
+		return
+	}
+	// Build the JSON Lines wrapper manually so the safety-net file is self-describing
+	// even when read without the rest of the codebase (each record carries the
+	// request_id at the top level for quick grep).
+	wrapper, _ := json.Marshal(map[string]interface{}{
+		"ts":         time.Now().UTC().Format(time.RFC3339Nano),
+		"event":      "save_failed",
+		"request_id": entry.ID,
+		"entry":      json.RawMessage(entryData),
+	})
+	if _, err := file.Write(append(wrapper, '\n')); err != nil {
+		DefaultConsole().Error("logger", "[logger] saveFailedEvent: write failed", "reason", "write_failed", "error", err.Error())
 	}
 }

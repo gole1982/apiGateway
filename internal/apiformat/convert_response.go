@@ -22,7 +22,7 @@ func ConvertResponse(body []byte, from APIFormat, to APIFormat, model string) ([
 	// Step 2: convert from canonical to target format if needed.
 	if to == FormatOpenAI {
 		// Ensure model is set to the LAPI alias.
-		canonical = replaceModelField(canonical, model)
+		canonical = ReplaceModelField(canonical, model)
 		return canonical, nil
 	}
 	return fromCanonicalResponse(canonical, to, model)
@@ -96,6 +96,8 @@ func anthropicToOpenAIResponse(body []byte, model string) ([]byte, error) {
 		finishReason = "tool_calls"
 	case "end_turn":
 		finishReason = "stop"
+	case "refusal":
+		finishReason = "content_filter"
 	}
 
 	// Map usage.
@@ -159,7 +161,11 @@ func geminiToOpenAIResponse(body []byte, model string) ([]byte, error) {
 				finishReason = "length"
 			case "SAFETY":
 				finishReason = "content_filter"
+			case "RECITATION":
+				finishReason = "content_filter"
 			case "STOP":
+				finishReason = "stop"
+			case "OTHER":
 				finishReason = "stop"
 			}
 
@@ -303,6 +309,8 @@ func openaiToAnthropicResponse(body []byte, model string) ([]byte, error) {
 			stopReason = "max_tokens"
 		case "tool_calls":
 			stopReason = "tool_use"
+		case "content_filter":
+			stopReason = "end_turn"
 		default:
 			stopReason = "end_turn"
 		}

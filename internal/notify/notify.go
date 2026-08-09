@@ -1,7 +1,7 @@
 package notify
 
 import (
-	"log"
+	"log/slog"
 	"sync"
 )
 
@@ -58,7 +58,7 @@ func (s *NotificationService) Publish(title, message string) {
 			// drop if subscriber is too slow
 		}
 	}
-	log.Printf("NOTIFY: %s — %s", title, message)
+	slog.Info("NOTIFY: "+title+" — "+message, "component", "notify", "title", title, "message", message)
 }
 
 // PublishAsync fires a notification in a goroutine (non-blocking).

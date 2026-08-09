@@ -1,233 +1,98 @@
 # API Gateway
 
-Resilient Multi-LLM API Gateway for Windows with automatic failover and dynamic token refresh.
+多 LLM API 代理网关，提供成本路由、自动故障转移、多协议格式转换和动态令牌管理。
 
-## Overview
+## 架构
 
-A robust Go-based API Gateway designed specifically for Windows environments. It provides:
+三层资源模型：
 
-- **Multi-Channel Support**: Manage multiple LLM API providers simultaneously
-- **Intelligent Failover**: Automatic failover based on channel priority
-- **Dynamic Token Refresh**: Automatic and on-demand token refresh for channels
-- **OpenAI-Compatible Proxy**: Drop-in replacement for OpenAI API clients
-- **Web Dashboard**: User-friendly interface for channel management
-- **Windows Service Integration**: Run as a Windows service or console app
-- **System Tray Integration**: Native Windows notifications
+- **Platform**（平台）— 上游 LLM 服务商，持有 Base URL 和认证凭据（API Key 或浏览器会话令牌）
+- **RAPI**（远程 API）— 平台下的具体模型端点，携带成本、速率限制和协议格式配置
+- **LAPI**（本地 API）— 面向客户端的别名，绑定一条 RAPI 路由链，请求按链顺序故障转移
 
-## Tech Stack
+请求流程：客户端 → LAPI 别名匹配 → 调度器按成本/可用性选取 RAPI → 上游代理 → 失败自动切换链中下一个 RAPI。
 
-- **Language**: Go 1.21+ (58.4% of codebase)
-- **Frontend**: HTML (41.4% of codebase)
-- **Database**: SQLite
-- **Deployment**: Docker support (Dockerfile included)
-- **Key Dependencies**:
-  - `github.com/google/uuid` - UUID generation
-  - `gopkg.in/ini.v1` - Configuration management
-  - `modernc.org/sqlite` - SQLite driver
+## 核心特性
 
-## Quick Start
+- **成本路由**：base_cost → high_cost（超阈值）→ time_period_rules（分时），调度器优先选取最低成本可用 RAPI
+- **故障转移**：所有非 2xx 响应触发切换；401 自动刷新令牌并重试同一 RAPI
+- **被动监控**：冷却计时器 + 指数退避，无需主动健康检查
+- **速率限制**：RPM / RPH / RPD / TPM / TPH / TPD 六维限制
+- **多协议转换**：OpenAI（内部标准格式）↔ Anthropic ↔ Gemini 双向转换，含 SSE 流式转换
+- **动态令牌**：浏览器扩展推送会话令牌，网关自动接管上游请求；AES-256-GCM 加密存储
+- **Dashboard**：内嵌 Vue 3 SPA，三层决策视图（Health → Efficiency → Capacity），SSE 实时推送
 
-### Installation
+## 端口
 
-```powershell
-# Install as Windows Service
-.\gateway.exe -install
+| 服务 | 默认端口 | 绑定地址 |
+|------|---------|---------|
+| Proxy | 13579 | 0.0.0.0 |
+| Dashboard | 24680 | 127.0.0.1 |
 
-# Or run in console mode
-.\gateway.exe
-```
-
-### Service Management
-
-```powershell
-.\gateway.exe -install       # Install service
-.\gateway.exe -uninstall     # Remove service
-sc query GatewayService      # Check service status
-sc start GatewayService      # Start service
-sc stop GatewayService       # Stop service
-```
-
-## Ports
-
-- **Proxy**: `13579` - OpenAI-compatible `/v1/chat/completions` endpoint
-- **Dashboard**: `24680` - Web admin UI
-
-## Configuration
-
-Create `proxy.cfg` in the same directory as `gateway.exe`:
+通过 `proxy.cfg` 覆盖（与 gateway.exe 同目录）：
 
 ```ini
-proxy_port = 13579
-web_port = 24680
-refresh_interval_sec = 600
+proxy_port = 54321
+web_port = 54322
+dial_timeout_sec = 30
+response_timeout_sec = 300
+cooldown_sec = 10
+max_cooldown_sec = 120
+request_max_wait_sec = 120
 ```
 
-### Configuration Parameters
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `proxy_port` | 13579 | OpenAI-compatible proxy port |
-| `web_port` | 24680 | Dashboard web port |
-| `refresh_interval_sec` | 600 | Token refresh interval in seconds (10 minutes) |
-
-## Channel Management
-
-### Web Dashboard
-
-Access the dashboard at `http://localhost:24680` to manage channels.
-
-1. Click **+ Add Channel**
-2. Fill in the channel details:
-   - **Alias**: Channel name (e.g., `openai-gpt4`)
-   - **API URL**: Upstream API endpoint
-   - **Token / API Key**: Your API key
-   - **Priority**: Lower number = higher priority for failover
-   - **Dynamic Token**: Enable auto token refresh
-   - **Token Command**: Command to fetch new token (if dynamic enabled)
-
-## Dynamic Token Refresher
-
-For channels with `is_dynamic = true`, the gateway provides:
-
-1. **Background Refresh**: Periodically executes `token_command` to fetch fresh tokens
-   - Interval controlled by `refresh_interval_sec`
-   - Runs in background without interrupting service
-   
-2. **401 Recovery**: On HTTP 401 response
-   - Instantly re-fetches token using `token_command`
-   - Retries the original request automatically
-   - Client connection remains alive during refresh
-
-## API Endpoint
-
-### OpenAI-Compatible Chat Completions
+## 代理端点
 
 ```
-POST http://localhost:13579/v1/chat/completions
+POST /v1/chat/completions   — OpenAI 兼容聊天补全（自动检测客户端协议格式）
+GET  /v1/models             — 模型列表
+GET  /status                — 网关状态
 ```
 
-The gateway proxies requests to configured channels with automatic failover:
+客户端可使用 OpenAI、Anthropic 或 Gemini 格式请求，网关自动识别并转换：
 
 ```bash
-curl -X POST http://localhost:13579/v1/chat/completions \
+curl -X POST http://localhost:54321/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{
-    "model": "gpt-4",
-    "messages": [{"role": "user", "content": "Hello"}]
-  }'
+  -d '{"model": "my-alias", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
-## Build
+## 构建与运行
 
-### Build from Source
-
-```powershell
-# Build gateway service executable
+```bash
+# 构建
 go build -o gateway.exe ./cmd/gateway
 
-# Build system tray application
-go build -o gateway_tray.exe ./cmd/tray
+# 运行
+./gateway.exe
+
+# 诊断日志工具
+go build -o diaglog.exe ./cmd/diaglog
 ```
 
-### Docker Build
+Go 1.21+，纯 Go SQLite 驱动（modernc.org/sqlite），无 CGO 依赖。
 
-```dockerfile
-# See Dockerfile for containerized deployment
-docker build -t apigateway .
-```
-
-## Architecture
+## 项目结构
 
 ```
-gateway.exe (Windows Service / Console App)
-    ├── Config (proxy.cfg) 
-    │   └── Ports, refresh interval settings
-    │
-    ├── SQLite Database (gateway.db)
-    │   └── Channel configuration storage
-    │
-    ├── Proxy Handler
-    │   └── OpenAI-compatible /v1/chat/completions with failover logic
-    │
-    ├── Token Refresher
-    │   ├── Background token refresh worker
-    │   └── 401 HTTP response recovery handler
-    │
-    └── IPC Notifier
-        └── TCP communication to gateway_tray.exe for notifications
-
-gateway_tray.exe (User Session - Optional)
-    └── Windows Toast Notifications
-        └── Service events and alerts
+cmd/
+  gateway/          主入口
+  diaglog/          诊断日志工具
+internal/
+  apiformat/        OpenAI ↔ Anthropic ↔ Gemini 协议转换层
+  config/           proxy.cfg 配置加载
+  crypto/           AES-256-GCM 令牌加密
+  db/               SQLite 数据访问 + 迁移
+  gateway/          代理核心：请求路由、故障转移、流式转发
+  logger/           异步请求日志
+  models/           数据模型
+  notify/           SSE 通知推送
+  scheduler/        成本路由调度器、速率限制、冷却管理
+  service/          HTTP 服务 + Dashboard REST API + 内嵌前端
 ```
 
-## Channel Priority & Failover
+## 依赖
 
-Channels are evaluated in priority order (lower number = higher priority):
-
-1. Request goes to highest priority channel
-2. On success (2xx response) → request complete
-3. On failure → try next priority channel
-4. On HTTP 401 → refresh token and retry same channel
-5. If all channels fail → return error to client
-
-## Database
-
-The gateway uses SQLite (`gateway.db`) to persist channel configurations:
-
-- Channel aliases, API URLs, tokens
-- Priority settings
-- Dynamic token refresh configurations
-- Token command definitions
-
-## Windows Integration
-
-### System Tray (gateway_tray.exe)
-
-Optional companion application that:
-- Displays notifications from the gateway service
-- Shows service status
-- Allows quick service start/stop (when running as Windows Service)
-
-## Troubleshooting
-
-### Service Won't Start
-
-```powershell
-# Check Windows Event Viewer for errors
-# Or check if port 13579/24680 are in use
-netstat -ano | findstr ":13579"
-netstat -ano | findstr ":24680"
-```
-
-### Dynamic Token Refresh Not Working
-
-1. Verify `token_command` is valid
-2. Check `refresh_interval_sec` in `proxy.cfg`
-3. Ensure token command has proper permissions
-4. Check gateway logs for command execution errors
-
-### Connection to Upstream API Fails
-
-1. Verify **API URL** is correct
-2. Test API key manually
-3. Check firewall rules allow outbound connections
-4. Verify **Priority** settings for failover order
-
-## Contributing
-
-Contributions are welcome! Areas for enhancement:
-- Additional proxy endpoint support
-- More token refresh strategies
-- Dashboard UI improvements
-- Cross-platform support
-
-## License
-
-[Add your license information here]
-
-## Version
-
-Current version: 1.0  
-Go: 1.21+  
-Tested on: Windows 10/11
+- `modernc.org/sqlite` — 纯 Go SQLite 驱动
+- `gopkg.in/ini.v1` — INI 配置解析
+- `github.com/google/uuid` — UUID 生成
