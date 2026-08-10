@@ -249,9 +249,12 @@ func (k *Key) onSessionFailure(ctx *fsm.Context) {
 
 func (k *Key) onPlatformFailure(ctx *fsm.Context) {
 	p := ctx.Payload.(SessionFailurePayload)
-	now := time.Now()
 	k.reason = p.Reason
-	ctx.Machine.SetTimer(now.Add(k.cfg.MaxCooldown))
+	// PlatformFailure persists failure_type=2, so the row keeps the key skipped
+	// even after any cooldown. A timer here would only fire a PlatformFailed→Healthy
+	// transition that the next Sync(row) immediately reverts to PermanentFailed
+	// (failure_type=2 is the source of truth). Don't set a timer: the state is
+	// intentionally pinned until a Success/Enable event clears failure_type.
 	if k.store != nil && k.id > 0 {
 		_ = k.store.MarkKeyPermanentFailure(k.id, p.Reason)
 	}

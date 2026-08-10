@@ -173,11 +173,11 @@ func (s *LogStorage) AppendEvent(requestID string, event *LogEvent) error {
 }
 
 type SessionFilter struct {
-	ClientIP     string
-	StartTime    time.Time
-	EndTime      time.Time
-	Limit        int
-	Offset       int
+	ClientIP  string
+	StartTime time.Time
+	EndTime   time.Time
+	Limit     int
+	Offset    int
 }
 
 func (s *LogStorage) GetSessions(filter SessionFilter) ([]Session, error) {

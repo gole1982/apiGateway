@@ -28,9 +28,9 @@ type Event = fsm.Event
 // Well-known entity states.
 const (
 	StateHealthy         State = "healthy"
-	StateCooling         State = "cooling"         // session-scope cooldown; auto-recovers via timer
-	StatePlatformFailed  State = "platform_failed" // platform-scope cooldown (quota/overload); pinned, auto-recovers
-	StateInvalidated     State = "invalidated"     // persisted unavailable / admin disabled; only Revalidate leaves
+	StateCooling         State = "cooling"          // session-scope cooldown; auto-recovers via timer
+	StatePlatformFailed  State = "platform_failed"  // platform-scope cooldown (quota/overload); pinned, auto-recovers
+	StateInvalidated     State = "invalidated"      // persisted unavailable / admin disabled; only Revalidate leaves
 	StatePermanentFailed State = "permanent_failed" // key failure_type=2; only Success/Enable leaves
 	StateDisabled        State = "disabled"         // key enabled=0 in DB
 	StateExpired         State = "expired"          // key past ExpiresAt
@@ -204,10 +204,10 @@ type Store interface {
 // IsBilling marks a recoverable billing/quota error (欠费/积分不足) so the
 // entity applies the longer BillingCooldown instead of DefaultCooldown.
 type SessionFailurePayload struct {
-	Reason            string
-	RetryAt           time.Time
-	IsTimeout         bool
-	IsBilling         bool
+	Reason           string
+	RetryAt          time.Time
+	IsTimeout        bool
+	IsBilling        bool
 	PersistTemporary bool
 }
 
@@ -218,11 +218,12 @@ type AllKeysPayload struct {
 	Reason string
 }
 
-// keyRowUsable reports whether a DB row is usable by its persisted facts alone
+// KeyRowUsable reports whether a DB row is usable by its persisted facts alone
 // (enabled, not permanently failed, not expired). This is the authoritative
-// "key is not hard-dead" predicate shared by PickAvailableKey (via the Key
-// entity) and KeysHardDead — keep them aligned.
-func keyRowUsable(k models.PlatformKey, now time.Time) bool {
+// "key is not hard-dead" predicate shared by KeysHardDead and the gateway's
+// firstUsableKey/firstUsableFromKeys probe helpers — keep them aligned so the
+// three copies do not drift.
+func KeyRowUsable(k models.PlatformKey, now time.Time) bool {
 	if !k.Enabled || k.FailureType == 2 {
 		return false
 	}
@@ -244,17 +245,17 @@ func KeysHardDead(keys []models.PlatformKey) (bool, string) {
 		return false, ""
 	}
 	now := time.Now()
-	dead := 0
 	var reason string
 	for _, k := range keys {
+		if KeyRowUsable(k, now) {
+			return false, ""
+		}
 		switch {
 		case !k.Enabled:
-			dead++
 			if reason == "" {
 				reason = "Key 已禁用"
 			}
 		case k.FailureType == 2:
-			dead++
 			if reason == "" {
 				reason = k.FailureReason
 				if reason == "" {
@@ -262,12 +263,9 @@ func KeysHardDead(keys []models.PlatformKey) (bool, string) {
 				}
 			}
 		case k.ExpiresAt != nil && !k.ExpiresAt.IsZero() && now.After(*k.ExpiresAt):
-			dead++
 			if reason == "" {
 				reason = "Key 已过期"
 			}
-		default:
-			return false, ""
 		}
 	}
 	return true, reason

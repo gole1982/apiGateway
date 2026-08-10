@@ -87,17 +87,17 @@ func ConfigFromAppConfig(cooldownSec, maxCooldownSec, requestMaxWaitSec, billing
 // wait queues. All runtime state lives in the entities; this type coordinates
 // picking, cooldown recovery, counters, and the per-LAPI wait queues.
 type Manager struct {
-	mu       sync.Mutex
-	cond     *sync.Cond
-	cfg      Config
-	ecfg     entity.CooldownConfig
-	store    entity.Store
-	rapis    map[int64]*entity.RAPI
-	keys     map[int64]*entity.Key
+	mu        sync.Mutex
+	cond      *sync.Cond
+	cfg       Config
+	ecfg      entity.CooldownConfig
+	store     entity.Store
+	rapis     map[int64]*entity.RAPI
+	keys      map[int64]*entity.Key
 	platforms map[int64]*entity.Platform
-	queues   map[int64]*waitQueue
-	counters map[int64]*rapiCounters
-	stop     chan struct{}
+	queues    map[int64]*waitQueue
+	counters  map[int64]*rapiCounters
+	stop      chan struct{}
 }
 
 // timeBucket tracks request/token counts within a fixed time window.
@@ -256,11 +256,11 @@ func (m *Manager) MarkAllKeysUnavailable(rapiID int64, hard bool, reason string)
 //
 // Selection order (ascending priority — first match wins):
 //  1. IsFree desc        — within one platform, free keys are tried before paid keys
-//                          so free quota is consumed first.
+//     so free quota is consumed first.
 //  2. ExpiresAt asc      — among keys of the same free/paid tier, the key whose
-//                          ExpiresAt is nearest is tried first (so its remaining quota
-//                          is used before it lapses). Keys with no ExpiresAt (never
-//                          expires) sort last within their tier.
+//     ExpiresAt is nearest is tried first (so its remaining quota
+//     is used before it lapses). Keys with no ExpiresAt (never
+//     expires) sort last within their tier.
 //  3. KeyIndex asc       — stable tiebreaker preserving operator-configured order.
 //
 // Each key entity is synced with its fresh DB row (enabled / failure_type /
@@ -383,10 +383,9 @@ func (m *Manager) RemoveKey(keyID int64) {
 func (m *Manager) MarkKeySuccess(keyID int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if ke := m.keys[keyID]; ke != nil {
-		ke.OnSuccess()
-		m.cond.Broadcast()
-	}
+	ke := m.keyEntityLocked(keyID)
+	ke.OnSuccess()
+	m.cond.Broadcast()
 }
 
 // MarkSuccess clears the cooldown and resets consecutive failure count.

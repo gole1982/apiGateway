@@ -50,8 +50,8 @@ type Config struct {
 	// LogFile, when true, additionally tees the JSON stream to LogFilePath
 	// (default "logs/gateway.log") so operators can collect rotated files
 	// without scraping stderr.
-	LogLevel   string
-	LogFile    bool
+	LogLevel    string
+	LogFile     bool
 	LogFilePath string
 }
 
@@ -69,11 +69,11 @@ func Load() (*Config, error) {
 			ProxyPort:          13579,
 			WebPort:            24680,
 			DialTimeoutSec:     30,
-			ResponseTimeoutSec: 300,					CooldownSec:        10,
-					MaxCooldownSec:     120,
-					BillingCooldownSec: 1800,
-					CapabilityBlockSec: 86400,
-					RequestMaxWaitSec:  120,
+			ResponseTimeoutSec: 300, CooldownSec: 10,
+			MaxCooldownSec:     120,
+			BillingCooldownSec: 1800,
+			CapabilityBlockSec: 86400,
+			RequestMaxWaitSec:  120,
 			RetryOnStartup:     true,
 			RetryConcurrency:   8,
 			RetryTimeoutSec:    15,
@@ -84,20 +84,20 @@ func Load() (*Config, error) {
 	}
 
 	return &Config{
-		ProxyPort:      cfg.Section("").Key("proxy_port").MustInt(13579),
-		WebPort:        cfg.Section("").Key("web_port").MustInt(24680),
-		DialTimeoutSec: cfg.Section("").Key("dial_timeout_sec").MustInt(30),
+		ProxyPort:          cfg.Section("").Key("proxy_port").MustInt(13579),
+		WebPort:            cfg.Section("").Key("web_port").MustInt(24680),
+		DialTimeoutSec:     cfg.Section("").Key("dial_timeout_sec").MustInt(30),
 		ResponseTimeoutSec: cfg.Section("").Key("response_timeout_sec").MustInt(300),
 		CooldownSec:        cfg.Section("").Key("cooldown_sec").MustInt(10),
 		MaxCooldownSec:     cfg.Section("").Key("max_cooldown_sec").MustInt(120),
 		BillingCooldownSec: cfg.Section("").Key("billing_cooldown_sec").MustInt(1800),
 		CapabilityBlockSec: cfg.Section("").Key("capability_block_sec").MustInt(86400),
 		RequestMaxWaitSec:  cfg.Section("").Key("request_max_wait_sec").MustInt(120),
-		RetryOnStartup:      cfg.Section("health").Key("retry_on_startup").MustBool(true),
-		RetryConcurrency:    cfg.Section("health").Key("retry_concurrency").MustInt(8),
-		RetryTimeoutSec:     cfg.Section("health").Key("retry_timeout_sec").MustInt(15),
-		LogLevel:            cfg.Section("log").Key("level").MustString("info"),
-		LogFile:             cfg.Section("log").Key("file").MustBool(false),
-		LogFilePath:         cfg.Section("log").Key("file_path").MustString("logs/gateway.log"),
+		RetryOnStartup:     cfg.Section("health").Key("retry_on_startup").MustBool(true),
+		RetryConcurrency:   cfg.Section("health").Key("retry_concurrency").MustInt(8),
+		RetryTimeoutSec:    cfg.Section("health").Key("retry_timeout_sec").MustInt(15),
+		LogLevel:           cfg.Section("log").Key("level").MustString("info"),
+		LogFile:            cfg.Section("log").Key("file").MustBool(false),
+		LogFilePath:        cfg.Section("log").Key("file_path").MustString("logs/gateway.log"),
 	}, nil
 }

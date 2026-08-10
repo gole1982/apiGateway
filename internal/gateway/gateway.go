@@ -372,25 +372,21 @@ func (g *ProxyGateway) recoverRAPIs(ctx context.Context, unhealthy []models.RAPI
 
 // firstUsableFromKeys returns the token of the first enabled, not-permanently-
 // failed, not-expired key in the given (already model-filtered) pool, or "" if
-// none is usable. Mirrors PickAvailableKey's usable criteria so probes exercise
-// the same credentials real requests use.
+// none is usable. Uses the shared entity.KeyRowUsable predicate so probes
+// exercise the same credentials real requests use.
 func (g *ProxyGateway) firstUsableFromKeys(keys []models.PlatformKey) string {
 	now := time.Now()
 	for _, k := range keys {
-		if !k.Enabled || k.FailureType == 2 {
-			continue
+		if entity.KeyRowUsable(k, now) {
+			return k.Token
 		}
-		if k.ExpiresAt != nil && !k.ExpiresAt.IsZero() && now.After(*k.ExpiresAt) {
-			continue
-		}
-		return k.Token
 	}
 	return ""
 }
 
 // firstUsableKey returns the token of the first enabled, not-permanently-failed,
-// not-expired PlatformKey for the platform — mirroring PickAvailableKey's usable
-// criteria so probes exercise the same credentials real requests use. Falls back
+// not-expired PlatformKey for the platform — using the shared entity.KeyRowUsable
+// predicate so probes exercise the same credentials real requests use. Falls back
 // to the legacy platform-level token when no usable key exists (matching the old
 // behavior for token-based platforms like Google Gemini's platform token).
 func (g *ProxyGateway) firstUsableKey(platformID int64, platformToken string) string {
@@ -398,13 +394,9 @@ func (g *ProxyGateway) firstUsableKey(platformID int64, platformToken string) st
 	if err == nil && len(keys) > 0 {
 		now := time.Now()
 		for _, k := range keys {
-			if !k.Enabled || k.FailureType == 2 {
-				continue
+			if entity.KeyRowUsable(k, now) {
+				return k.Token
 			}
-			if k.ExpiresAt != nil && !k.ExpiresAt.IsZero() && now.After(*k.ExpiresAt) {
-				continue
-			}
-			return k.Token
 		}
 	}
 	return platformToken
@@ -535,27 +527,40 @@ func (g *ProxyGateway) UnblockKeyForModel(keyID, rapiID int64) {
 }
 
 // isBlocked reports whether (key, model) is currently capability-blocked and
-// returns the recorded reason. Expired blocks are ignored (natural retry).
+// returns the recorded reason. Expired blocks are ignored (natural retry) and
+// lazily purged from memory so stale entries do not accumulate.
 func (g *ProxyGateway) isBlocked(keyID, rapiID int64) (string, bool) {
 	g.blockMu.RLock()
-	defer g.blockMu.RUnlock()
 	m := g.blocks[keyID]
 	if m == nil {
+		g.blockMu.RUnlock()
 		return "", false
 	}
 	b, ok := m[rapiID]
 	if !ok {
+		g.blockMu.RUnlock()
 		return "", false
 	}
 	if !b.expiresAt.IsZero() && !b.expiresAt.After(time.Now()) {
+		g.blockMu.RUnlock()
+		// Upgrade to a write lock and purge the expired entry.
+		g.blockMu.Lock()
+		if mm := g.blocks[keyID]; mm != nil {
+			delete(mm, rapiID)
+			if len(mm) == 0 {
+				delete(g.blocks, keyID)
+			}
+		}
+		g.blockMu.Unlock()
 		return "", false
 	}
+	g.blockMu.RUnlock()
 	return b.reason, true
 }
 
 // filterBlockedKeys drops keys that are capability-blocked for rapiID so they
 // are never tried for that model (each attempt would burn a 404). The synthetic
-// platform-token key (ID 0) is never blocked.
+// platform-token key (ID -1) is never blocked.
 func (g *ProxyGateway) filterBlockedKeys(keys []models.PlatformKey, rapiID int64) []models.PlatformKey {
 	out := make([]models.PlatformKey, 0, len(keys))
 	for _, k := range keys {
@@ -671,8 +676,9 @@ func (g *ProxyGateway) HandleChatCompletions(w http.ResponseWriter, r *http.Requ
 	// Bug 8.6: Apply Gemini URL model to req.Model if not set in body.
 	if clientFormat == apiformat.FormatGemini && req.Model == "" && geminiURLModel != "" {
 		req.Model = geminiURLModel
-		// Re-inject model into canonical body.
-		canonicalBody, _ = apiformat.ConvertRequest(canonicalBody, apiformat.FormatOpenAI, apiformat.FormatOpenAI, req.Model)
+		// Re-inject model into canonical body. Use ReplaceModelField (lossless
+		// JSON decode/encode) rather than a full OpenAI→OpenAI conversion round-trip.
+		canonicalBody = apiformat.ReplaceModelField(canonicalBody, req.Model)
 	}
 
 	// Detect stream from body or Gemini URL suffix.
@@ -861,7 +867,7 @@ func (g *ProxyGateway) tryKeyForRAPI(
 		// key/rapi context the operator needs to diagnose per-key failures.
 		keyLog := logger.DefaultConsole().With("request_id", requestID).With("rapi", rapi.Alias, "key_id", key.ID)
 
-		resp, _, _, doErr := g.doUpstreamRequest(ctx, rapi, effectiveURL, upstreamBody, token, requestID, retryCount, targetFormat)
+		resp, _, doErr := g.doUpstreamRequest(ctx, rapi, effectiveURL, upstreamBody, token, requestID, retryCount, targetFormat)
 		if doErr != nil {
 			isTimeout := isTimeoutError(doErr)
 			keyLog.Error("gateway", "[ERR] upstream request failed",
@@ -1023,7 +1029,7 @@ func (g *ProxyGateway) handleAllKeysUnavailable(rapi models.RAPIWithPlatform, re
 	first := g.scheduler.MarkAllKeysUnavailable(rapi.ID, hardDead, reason)
 	if first && g.notifyService != nil {
 		g.notifyService.PublishAsync(
-			fmt.Sprintf("模型 %s [%s] 所有 Key 不可用（%s），已标记模型不可用，请更换或启用 Key 后点击恢复", rapi.Alias, rapi.PlatformName, deadReason),
+			fmt.Sprintf("模型 %s [%s] 所有 Key 不可用（%s），已标记模型不可用，请更换或启用 Key 后点击恢复", rapi.Alias, rapi.PlatformName, reason),
 			"模型不可用",
 		)
 	}
@@ -1055,40 +1061,40 @@ func (g *ProxyGateway) handleStreamingRequest(w http.ResponseWriter, r *http.Req
 		rapi, waitUntil, err := g.scheduler.PickAvailable(lapi.ID, rapis, clientFormat)
 		if err != nil {
 			if errors.Is(err, scheduler.ErrAllRAPIUnavailable) {
-			if waitUntil.IsZero() {
-				// All RAPIs are hard-disabled (not just cooling down) — no point waiting.
-				const msg = "all RAPIs are disabled or unavailable"
-				reqLog.Error("gateway", "[FAIL] "+msg, "lapi", lapi.Alias)
-				g.sendErrorStream(w, flusher, msg)
-				if g.log != nil {
-					g.log.RecordError(requestID, msg, "UPSTREAM_RESPONSE")
+				if waitUntil.IsZero() {
+					// All RAPIs are hard-disabled (not just cooling down) — no point waiting.
+					const msg = "all RAPIs are disabled or unavailable"
+					reqLog.Error("gateway", "[FAIL] "+msg, "lapi", lapi.Alias)
+					g.sendErrorStream(w, flusher, msg)
+					if g.log != nil {
+						g.log.RecordError(requestID, msg, "UPSTREAM_RESPONSE")
+					}
+					return fallbackUsed, http.StatusServiceUnavailable
 				}
-				return fallbackUsed, http.StatusServiceUnavailable
-			}
-			reqLog.Info("gateway", "[WAIT] all RAPI unavailable",
-				"wait_until", waitUntil.Format("15:04:05"), "attempt", retryCount)
-			if waitErr := g.scheduler.Wait(r.Context(), lapi.ID, waitUntil); waitErr != nil {
-				reqLog.Error("gateway", "[FAIL] wait exhausted", "lapi", lapi.Alias, "error", waitErr.Error())
-				g.sendErrorStream(w, flusher, waitErr.Error())
-				if g.log != nil {
-					g.log.RecordError(requestID, waitErr.Error(), "UPSTREAM_RESPONSE")
+				reqLog.Info("gateway", "[WAIT] all RAPI unavailable",
+					"wait_until", waitUntil.Format("15:04:05"), "attempt", retryCount)
+				if waitErr := g.scheduler.Wait(r.Context(), lapi.ID, waitUntil); waitErr != nil {
+					reqLog.Error("gateway", "[FAIL] wait exhausted", "lapi", lapi.Alias, "error", waitErr.Error())
+					g.sendErrorStream(w, flusher, waitErr.Error())
+					if g.log != nil {
+						g.log.RecordError(requestID, waitErr.Error(), "UPSTREAM_RESPONSE")
+					}
+					return fallbackUsed, http.StatusServiceUnavailable
 				}
-				return fallbackUsed, http.StatusServiceUnavailable
+				continue
 			}
-			continue
+			reqLog.Error("gateway", "[FAIL] PickAvailable error", "error", err.Error())
+			g.sendErrorStream(w, flusher, err.Error())
+			return fallbackUsed, http.StatusServiceUnavailable
 		}
-		reqLog.Error("gateway", "[FAIL] PickAvailable error", "error", err.Error())
-		g.sendErrorStream(w, flusher, err.Error())
-		return fallbackUsed, http.StatusServiceUnavailable
-	}
 
-	// Determine the best target format for this RAPI.
-	targetFormat := pickTargetFormat(rapi, clientFormat)
-	effectiveURL := resolveUpstreamURL(rapi, targetFormat)
-	// Per-iteration rapi context for downstream log lines.
-	rl := reqLog.With("rapi", rapi.Alias, "model", rapi.Model, "format", targetFormat, "url", effectiveURL, "attempt", retryCount)
-	rl.Info("gateway", "[SEND] forwarding upstream")
-	if effectiveURL == "" {
+		// Determine the best target format for this RAPI.
+		targetFormat := pickTargetFormat(rapi, clientFormat)
+		effectiveURL := resolveUpstreamURL(rapi, targetFormat)
+		// Per-iteration rapi context for downstream log lines.
+		rl := reqLog.With("rapi", rapi.Alias, "model", rapi.Model, "format", targetFormat, "url", effectiveURL, "attempt", retryCount)
+		rl.Info("gateway", "[SEND] forwarding upstream")
+		if effectiveURL == "" {
 			g.scheduler.MarkFailure(rapi.ID, time.Time{}, "invalid url")
 			continue
 		}
@@ -1132,8 +1138,9 @@ func (g *ProxyGateway) handleStreamingRequest(w http.ResponseWriter, r *http.Req
 		latencyMs := int(time.Since(startTime).Milliseconds())
 
 		if err != nil {
-			// Count failed request toward rate limit counters (0 tokens — unknown).
-			g.scheduler.RecordRequest(rapi.ID, 0)
+			// Do not count failed attempts toward rate-limit/cost counters:
+			// a failure should not push the RAPI into HighCost or consume its
+			// RPM/RPH/RPD budget (only successful requests reflect real load).
 			if errors.Is(err, scheduler.ErrAllKeysUnavailable) {
 				// All keys exhausted — surface the dead link instead of skipping silently.
 				g.handleAllKeysUnavailable(rapi, requestID, rl)
@@ -1263,39 +1270,39 @@ func (g *ProxyGateway) handleNonStreamingRequest(w http.ResponseWriter, r *http.
 		rapi, waitUntil, err := g.scheduler.PickAvailable(lapi.ID, rapis, clientFormat)
 		if err != nil {
 			if errors.Is(err, scheduler.ErrAllRAPIUnavailable) {
-			if waitUntil.IsZero() {
-				// All RAPIs are hard-disabled (not just cooling down) — no point waiting.
-				const msg = "all RAPIs are disabled or unavailable"
-				reqLog.Error("gateway", "[FAIL] "+msg, "lapi", lapi.Alias)
-				http.Error(w, fmt.Sprintf(`{"error":{"message":"%s","type":"service_unavailable"}}`, msg), http.StatusServiceUnavailable)
-				if g.log != nil {
-					g.log.RecordError(requestID, msg, "UPSTREAM_RESPONSE")
+				if waitUntil.IsZero() {
+					// All RAPIs are hard-disabled (not just cooling down) — no point waiting.
+					const msg = "all RAPIs are disabled or unavailable"
+					reqLog.Error("gateway", "[FAIL] "+msg, "lapi", lapi.Alias)
+					http.Error(w, fmt.Sprintf(`{"error":{"message":"%s","type":"service_unavailable"}}`, msg), http.StatusServiceUnavailable)
+					if g.log != nil {
+						g.log.RecordError(requestID, msg, "UPSTREAM_RESPONSE")
+					}
+					return fallbackUsed, http.StatusServiceUnavailable
 				}
-				return fallbackUsed, http.StatusServiceUnavailable
-			}
-			reqLog.Info("gateway", "[WAIT] all RAPI unavailable",
-				"wait_until", waitUntil.Format("15:04:05"), "attempt", retryCount)
-			if waitErr := g.scheduler.Wait(reqCtx, lapi.ID, waitUntil); waitErr != nil {
-				reqLog.Error("gateway", "[FAIL] wait exhausted", "lapi", lapi.Alias, "error", waitErr.Error())
-				http.Error(w, fmt.Sprintf(`{"error":{"message":"%s","type":"service_unavailable"}}`, waitErr.Error()), http.StatusServiceUnavailable)
-				if g.log != nil {
-					g.log.RecordError(requestID, waitErr.Error(), "UPSTREAM_RESPONSE")
+				reqLog.Info("gateway", "[WAIT] all RAPI unavailable",
+					"wait_until", waitUntil.Format("15:04:05"), "attempt", retryCount)
+				if waitErr := g.scheduler.Wait(reqCtx, lapi.ID, waitUntil); waitErr != nil {
+					reqLog.Error("gateway", "[FAIL] wait exhausted", "lapi", lapi.Alias, "error", waitErr.Error())
+					http.Error(w, fmt.Sprintf(`{"error":{"message":"%s","type":"service_unavailable"}}`, waitErr.Error()), http.StatusServiceUnavailable)
+					if g.log != nil {
+						g.log.RecordError(requestID, waitErr.Error(), "UPSTREAM_RESPONSE")
+					}
+					return fallbackUsed, http.StatusServiceUnavailable
 				}
-				return fallbackUsed, http.StatusServiceUnavailable
+				continue
 			}
-			continue
+			reqLog.Error("gateway", "[FAIL] PickAvailable error", "error", err.Error())
+			http.Error(w, fmt.Sprintf(`{"error":{"message":"%s","type":"service_unavailable"}}`, err.Error()), http.StatusServiceUnavailable)
+			return fallbackUsed, http.StatusServiceUnavailable
 		}
-		reqLog.Error("gateway", "[FAIL] PickAvailable error", "error", err.Error())
-		http.Error(w, fmt.Sprintf(`{"error":{"message":"%s","type":"service_unavailable"}}`, err.Error()), http.StatusServiceUnavailable)
-		return fallbackUsed, http.StatusServiceUnavailable
-	}
 
-	// Determine the best target format for this RAPI.
-	targetFormat := pickTargetFormat(rapi, clientFormat)
-	effectiveURL := resolveUpstreamURL(rapi, targetFormat)
-	rl := reqLog.With("rapi", rapi.Alias, "model", rapi.Model, "format", targetFormat, "url", effectiveURL, "attempt", retryCount)
-	rl.Info("gateway", "[SEND] forwarding upstream")
-	if effectiveURL == "" {
+		// Determine the best target format for this RAPI.
+		targetFormat := pickTargetFormat(rapi, clientFormat)
+		effectiveURL := resolveUpstreamURL(rapi, targetFormat)
+		rl := reqLog.With("rapi", rapi.Alias, "model", rapi.Model, "format", targetFormat, "url", effectiveURL, "attempt", retryCount)
+		rl.Info("gateway", "[SEND] forwarding upstream")
+		if effectiveURL == "" {
 			g.scheduler.MarkFailure(rapi.ID, time.Time{}, "invalid url")
 			continue
 		}
@@ -1327,8 +1334,8 @@ func (g *ProxyGateway) handleNonStreamingRequest(w http.ResponseWriter, r *http.
 		latencyMs := int(time.Since(startTime).Milliseconds())
 
 		if err != nil {
-			// Count failed request toward rate limit counters (0 tokens — unknown).
-			g.scheduler.RecordRequest(rapi.ID, 0)
+			// Do not count failed attempts toward rate-limit/cost counters
+			// (see streaming path): only successful requests reflect real load.
 			if errors.Is(err, scheduler.ErrAllKeysUnavailable) {
 				// All keys exhausted — surface the dead link instead of skipping silently.
 				g.handleAllKeysUnavailable(rapi, requestID, rl)
@@ -1408,10 +1415,10 @@ func expandHeaderValue(v string) string {
 // NewProxyGatewayWithConfig — we do NOT set http.Client.Timeout or a per-request context
 // deadline here, because either would kill streaming response bodies mid-flight.
 // The caller's ctx carries the client-connection lifetime as an implicit upper bound.
-func (g *ProxyGateway) doUpstreamRequest(ctx context.Context, rapi models.RAPIWithPlatform, url string, body []byte, token string, requestID string, retryCount int, targetFormat string) (*http.Response, int, []byte, error) {
+func (g *ProxyGateway) doUpstreamRequest(ctx context.Context, rapi models.RAPIWithPlatform, url string, body []byte, token string, requestID string, retryCount int, targetFormat string) (*http.Response, int, error) {
 	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(body))
 	if err != nil {
-		return nil, 0, nil, err
+		return nil, 0, err
 	}
 	upstreamReq.Header.Set("Content-Type", "application/json")
 	// Disable transparent gzip decompression by Go's Transport.
@@ -1467,9 +1474,9 @@ func (g *ProxyGateway) doUpstreamRequest(ctx context.Context, rapi models.RAPIWi
 
 	resp, err := g.httpClient.Do(upstreamReq)
 	if err != nil {
-		return nil, 0, nil, err
+		return nil, 0, err
 	}
-	return resp, resp.StatusCode, nil, nil
+	return resp, resp.StatusCode, nil
 }
 
 func (g *ProxyGateway) sendErrorStream(w http.ResponseWriter, flusher http.Flusher, message string) {

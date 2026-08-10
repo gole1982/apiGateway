@@ -501,7 +501,7 @@ func TestPickAvailableKeyNeverExpiresSortsLastInTier(t *testing.T) {
 	// deferred in favour of one that does expire.
 	soon := time.Now().Add(1 * time.Hour)
 	keys := []models.PlatformKey{
-		{ID: 1, KeyIndex: 0, Enabled: true, IsFree: true},            // never
+		{ID: 1, KeyIndex: 0, Enabled: true, IsFree: true}, // never
 		{ID: 2, KeyIndex: 1, Enabled: true, IsFree: true, ExpiresAt: &soon},
 	}
 

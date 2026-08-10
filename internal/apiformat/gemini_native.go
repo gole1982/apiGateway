@@ -76,7 +76,7 @@ func BuildGoogleListModelsURL(baseURL, apiKey string) string {
 func ParseGoogleListModelsResponse(raw []byte) []string {
 	// Decode lazily; we don't want a hard dependency on the exact schema.
 	type googleModel struct {
-		Name                      string   `json:"name"`
+		Name                       string   `json:"name"`
 		SupportedGenerationMethods []string `json:"supportedGenerationMethods"`
 	}
 	var resp struct {

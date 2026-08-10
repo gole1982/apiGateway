@@ -176,8 +176,8 @@ func TestAnthropicToOpenAIContentDelta(t *testing.T) {
 
 func TestAnthropicToOpenAIFinishReason(t *testing.T) {
 	tests := []struct {
-		stopReason     string
-		wantFinish     string
+		stopReason string
+		wantFinish string
 	}{
 		{"end_turn", "stop"},
 		{"max_tokens", "length"},
@@ -512,8 +512,6 @@ func TestOpenAIToAnthropicRoleRepeatedEveryChunk(t *testing.T) {
 	}
 }
 
-
-
 // ---- NUL sentinel split ------------------------------------------------------
 
 func TestNULSentinelProducesTwoSSEFrames(t *testing.T) {
@@ -527,7 +525,6 @@ func TestNULSentinelProducesTwoSSEFrames(t *testing.T) {
 		t.Errorf("expected [frameA frameB], got %v", frames)
 	}
 }
-
 
 // ---- OpenAI→Gemini: combined-field chunks (DeepSeek style) ------------------
 
@@ -606,7 +603,6 @@ func TestAnthropicToOpenAINoFieldCollision(t *testing.T) {
 		t.Errorf("message_start chunk must not carry content; got delta=%v", delta)
 	}
 }
-
 
 // ---- Gemini→OpenAI conversion correctness -----------------------------------
 
