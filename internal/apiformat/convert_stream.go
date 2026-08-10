@@ -11,22 +11,22 @@ import (
 
 // StreamConverter reads SSE events from one format and writes them in another.
 type StreamConverter struct {
-	reader       io.Reader
-	writer       io.Writer
-	from         APIFormat
-	to           APIFormat
-	model        string
-	flusher      interface{ Flush() }
-	requestID    string
+	reader        io.Reader
+	writer        io.Writer
+	from          APIFormat
+	to            APIFormat
+	model         string
+	flusher       interface{ Flush() }
+	requestID     string
 	writtenFrames int // number of data: frames actually sent to the client
 
 	// OpenAI→Anthropic protocol state. message_start must be emitted exactly
 	// once and content_block_start must precede the first text delta; track
 	// them here because the per-chunk conversion is otherwise stateless.
 	anthropicMsgStarted   bool
-	anthropicBlockStarted bool // text content_block is open
-	anthropicBlockIndex   int  // next content_block index to assign
-	anthropicToolOpen     bool // a tool_use content_block is currently open
+	anthropicBlockStarted bool        // text content_block is open
+	anthropicBlockIndex   int         // next content_block index to assign
+	anthropicToolOpen     bool        // a tool_use content_block is currently open
 	anthropicToolIdxMap   map[int]int // OpenAI tool_calls[i].index → Anthropic block index
 
 	// Gemini→OpenAI state: first chunk must carry role.
@@ -36,11 +36,11 @@ type StreamConverter struct {
 // NewStreamConverter creates a converter for streaming SSE responses.
 func NewStreamConverter(reader io.Reader, writer io.Writer, from APIFormat, to APIFormat, model string) *StreamConverter {
 	return &StreamConverter{
-		reader:            reader,
-		writer:            writer,
-		from:              from,
-		to:                to,
-		model:             model,
+		reader:              reader,
+		writer:              writer,
+		from:                from,
+		to:                  to,
+		model:               model,
 		anthropicToolIdxMap: make(map[int]int),
 	}
 }
@@ -75,7 +75,9 @@ func (sc *StreamConverter) Run() error {
 
 	// Process any remaining event block.
 	if len(eventLines) > 0 {
-		sc.processEventBlock(eventLines)
+		if err := sc.processEventBlock(eventLines); err != nil {
+			return err
+		}
 	}
 
 	return scanner.Err()

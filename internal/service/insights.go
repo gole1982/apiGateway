@@ -149,7 +149,7 @@ func buildHealth(snap scheduler.Snapshot, rapiStatByID map[int64]db.RAPIStat, ra
 		h.CoolingRAPIs = append(h.CoolingRAPIs, CoolingRAPI{
 			ID: rs.ID, Alias: alias, Reason: rs.Reason,
 			ConsecutiveFailures: rs.ConsecutiveFailures,
-			RecoverAt: rs.RecoverAt, LastSuccess: rs.LastSuccess,
+			RecoverAt:           rs.RecoverAt, LastSuccess: rs.LastSuccess,
 			LastFailure: rs.LastFailure, Invalidated: rs.Invalidated,
 		})
 	}
@@ -331,9 +331,9 @@ func buildCapacity(
 		counter := counterByID[rapiID]
 
 		type dimCheck struct {
-			name string
-			used int
-			limit int
+			name    string
+			used    int
+			limit   int
 			isToken bool
 		}
 		checks := []dimCheck{

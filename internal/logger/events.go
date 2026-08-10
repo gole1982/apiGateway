@@ -41,9 +41,9 @@ func (e EventType) String() string {
 }
 
 type RequestLog struct {
-	ID             string    `json:"id"`
-	SessionID      string    `json:"session_id"`
-	Timestamp      time.Time `json:"timestamp"`
+	ID        string    `json:"id"`
+	SessionID string    `json:"session_id"`
+	Timestamp time.Time `json:"timestamp"`
 
 	ClientIP       string `json:"client_ip"`
 	RequestMethod  string `json:"request_method"`
@@ -51,11 +51,11 @@ type RequestLog struct {
 	RequestHeaders string `json:"request_headers"`
 	RequestBody    string `json:"request_body"`
 	// Extracted from request body for quick filtering (no body parse on hot path).
-	ReqMaxTokens   int    `json:"req_max_tokens"`
+	ReqMaxTokens int `json:"req_max_tokens"`
 
-	LapiAlias      string `json:"lapi_alias"`
-	MatchedRAPIs   string `json:"matched_rapis"`
-	SelectedRAPI   string `json:"selected_rapi"`
+	LapiAlias    string `json:"lapi_alias"`
+	MatchedRAPIs string `json:"matched_rapis"`
+	SelectedRAPI string `json:"selected_rapi"`
 
 	UpstreamURL     string `json:"upstream_url"`
 	UpstreamHeaders string `json:"upstream_headers"`
@@ -67,7 +67,7 @@ type RequestLog struct {
 	LatencyMS       int    `json:"latency_ms"`
 	TokensUsed      int    `json:"tokens_used"`
 	// Extracted from upstream response (last non-null finish_reason in SSE stream).
-	FinishReason    string `json:"finish_reason"`
+	FinishReason string `json:"finish_reason"`
 
 	ErrorMessage string `json:"error_message"`
 	RetryCount   int    `json:"retry_count"`
@@ -80,11 +80,11 @@ type RequestLog struct {
 }
 
 type Session struct {
-	ID             string    `json:"id"`
-	ClientIP       string    `json:"client_ip"`
-	ClientPort     int       `json:"client_port"`
-	StartedAt      time.Time `json:"start_time"`
-	EndedAt        time.Time `json:"end_time"`
-	TotalRequests  int       `json:"request_count"`
-	LastRequestAt  time.Time `json:"last_request_at"`
+	ID            string    `json:"id"`
+	ClientIP      string    `json:"client_ip"`
+	ClientPort    int       `json:"client_port"`
+	StartedAt     time.Time `json:"start_time"`
+	EndedAt       time.Time `json:"end_time"`
+	TotalRequests int       `json:"request_count"`
+	LastRequestAt time.Time `json:"last_request_at"`
 }

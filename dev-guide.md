@@ -183,3 +183,24 @@ golangci-lint run --fix
 go build ./...          # 确保编译通过
 go vet ./...            # 静态分析
 golangci-lint run
+```
+
+## 六、已知技术债（保守保留，待后续重构）
+
+以下两项经评估为"大面积重构、需其它部分逻辑支持"，当前单机部署下保持现状，不立即改造。后续若需多实例部署或前端协议统一，再按此处标注启动重构。
+
+### 1. Dashboard 错误响应格式不统一
+
+`internal/service/service.go` 的 `/api/*` 端点存在三种错误响应形态并存：
+
+- 代理路径（`/v1/chat/completions` 等）：`{"error":{"message":...,"type":...}}`
+- Dashboard API 多数端点：`writeJSONError` 输出 `{"error":{"message":...}}`
+- 部分端点：`http.Error(w, "{\"error\":\"...\"}", code)` 纯字符串
+
+统一为单一格式需同时修改十几个端点 **并** 同步前端 `internal/service/dashboard.html` 的错误解析逻辑，属跨层改动。当前各协议域内部已各自一致，单机使用不影响功能，故保留。
+
+### 2. `Service` 包级单例与全局变量
+
+`internal/service/service.go` 顶层声明了包级可变全局：`instance`、`notifySvc`、`proxyGateway`、`httpServer`、`webServer`、`logInstance`、`sessionTracker`，并在 `Run()` 中赋值；`New()` 的单例检查无锁。
+
+将它们收敛为 `Service` 结构体字段需改动 `Run()` 内所有闭包与各 handler 对这些变量的引用（handler 直接捕获包级变量而非通过实例），牵涉面广。单机单实例场景下功能正确，故保留。若未来需要多实例 / 可测试性，应整体重构为依赖注入。

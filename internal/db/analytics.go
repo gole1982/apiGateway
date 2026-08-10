@@ -4,11 +4,11 @@ import "time"
 
 // HourBucket represents one hour's aggregated traffic across all or one LAPI.
 type HourBucket struct {
-	Hour         int    `json:"hour"`          // 0-23
+	Hour         int    `json:"hour"` // 0-23
 	LapiAlias    string `json:"lapi_alias"`
 	RequestCount int    `json:"request_count"`
 	TokenCount   int    `json:"token_count"`
-	ErrorCount   int    `json:"error_count"`   // response_status >= 400
+	ErrorCount   int    `json:"error_count"` // response_status >= 400
 	Fail429      int    `json:"fail_429"`
 	AvgLatencyMs int    `json:"avg_latency_ms"`
 }
@@ -58,8 +58,8 @@ type FallbackStats struct {
 	LapiAlias     string  `json:"lapi_alias"`
 	TotalRequests int     `json:"total_requests"`
 	FallbackCount int     `json:"fallback_count"`
-	RetryCount    int     `json:"retry_count"`     // sum of retry_count
-	FallbackRate  float64 `json:"fallback_rate"`   // fallback_count / total * 100
+	RetryCount    int     `json:"retry_count"`   // sum of retry_count
+	FallbackRate  float64 `json:"fallback_rate"` // fallback_count / total * 100
 }
 
 // GetFallbackStats aggregates fallback usage from request_logs within the last N hours.
@@ -105,7 +105,7 @@ func (db *DB) GetFallbackStats(hours int) ([]FallbackStats, error) {
 
 // DailyTrend holds one day's aggregated token and request counts.
 type DailyTrend struct {
-	Date         string `json:"date"`          // YYYY-MM-DD
+	Date         string `json:"date"` // YYYY-MM-DD
 	LapiAlias    string `json:"lapi_alias"`
 	RequestCount int    `json:"request_count"`
 	TokenCount   int    `json:"token_count"`

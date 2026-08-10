@@ -60,7 +60,7 @@ func TestTruncateBodyWithinLimit(t *testing.T) {
 func TestTruncateBodyOverLimit(t *testing.T) {
 	const suffix = " [TRUNCATED]"
 	body := strings.Repeat("x", 10*1024+1) // 10 KB + 1 byte
-	got := truncateBody(body, 10)           // 10 KB limit
+	got := truncateBody(body, 10)          // 10 KB limit
 	if !strings.HasSuffix(got, suffix) {
 		t.Errorf("truncateBody did not append %q", suffix)
 	}
@@ -78,7 +78,7 @@ func TestTruncateBodyPreservesUTF8Boundaries(t *testing.T) {
 	// (2048 bytes) lands in the middle of the 683rd char; the old byte-cut would
 	// produce invalid UTF-8; the fix walks back to a rune boundary.
 	chars := strings.Repeat("中", 700) // 2100 bytes
-	got := truncateBody(chars, 2) // 2*1024 = 2048 byte limit
+	got := truncateBody(chars, 2)     // 2*1024 = 2048 byte limit
 	prefix := strings.TrimSuffix(got, " [TRUNCATED]")
 	if !utf8.ValidString(prefix) {
 		t.Errorf("truncateBody produced invalid UTF-8 prefix (mid-rune cut); len(prefix)=%d", len(prefix))

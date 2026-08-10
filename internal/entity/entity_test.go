@@ -19,7 +19,7 @@ func testConfig() CooldownConfig {
 // fakeStore records persistence calls for asserting side effects.
 type fakeStore struct {
 	rapiUnavailable []string // reasons written with available=false
-	platformAvail   []bool  // available values written for platforms
+	platformAvail   []bool   // available values written for platforms
 	permanentKeys   []int64
 	temporaryKeys   []int64
 	clearedKeys     []int64

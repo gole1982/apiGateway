@@ -1941,7 +1941,14 @@ func (db *DB) DeletePlatformKey(keyID int64) error {
 	return tx.Commit()
 }
 
-// ============ Token Cache ============
+// ============ Token Cache (legacy / unused at runtime) ============
+//
+// NOTE: These accessors are retained for backward compatibility but are NOT
+// called by any runtime code path. The "dynamic token / browser-extension
+// push" feature described in older READMEs is not implemented: token_cache
+// rows are only ever written by these accessors (exercised solely by tests).
+// The table itself and its migrations are kept to avoid touching the DB
+// schema. Safe to remove together with the feature if it is reintroduced.
 
 func (db *DB) GetCachedTokenForKey(platformKeyID int64) (string, error) {
 	db.mu.RLock()

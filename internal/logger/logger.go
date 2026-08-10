@@ -31,10 +31,10 @@ type Logger struct {
 }
 
 type LogWorker struct {
-	logger    *Logger
-	batch     []LogEvent
-	batchMu   sync.Mutex
-	timer     *time.Timer
+	logger  *Logger
+	batch   []LogEvent
+	batchMu sync.Mutex
+	timer   *time.Timer
 }
 
 func NewLogger(storage *LogStorage, config LogConfig) *Logger {
@@ -132,7 +132,7 @@ func (l *Logger) RecordRoutingDecision(requestID, lapiAlias string, matchedRAPIs
 		EventType: ROUTING_DECISION,
 		Timestamp: time.Now(),
 		Data: map[string]interface{}{
-			"lapi_alias":   lapiAlias,
+			"lapi_alias":    lapiAlias,
 			"matched_rapis": string(matchedJSON),
 		},
 	}
@@ -145,11 +145,11 @@ func (l *Logger) RecordUpstreamSent(requestID, selectedRAPI, upstreamURL string,
 		EventType: UPSTREAM_SENT,
 		Timestamp: time.Now(),
 		Data: map[string]interface{}{
-			"selected_rapi":   selectedRAPI,
-			"upstream_url":    upstreamURL,
+			"selected_rapi":    selectedRAPI,
+			"upstream_url":     upstreamURL,
 			"upstream_headers": headers,
 			"upstream_body":    truncateBody(body, l.config.MaxBodySizeKB),
-			"retry_count":     retryCount,
+			"retry_count":      retryCount,
 		},
 	}
 	l.RecordEvent(event)
@@ -161,7 +161,7 @@ func (l *Logger) RecordUpstreamResponse(requestID string, statusCode int, header
 		EventType: UPSTREAM_RESPONSE,
 		Timestamp: time.Now(),
 		Data: map[string]interface{}{
-			"response_status":   statusCode,
+			"response_status":  statusCode,
 			"response_headers": headers,
 			"response_body":    truncateBody(body, l.config.MaxBodySizeKB),
 			"latency_ms":       latencyMS,

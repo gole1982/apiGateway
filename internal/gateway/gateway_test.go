@@ -21,7 +21,6 @@ func TestFilterKeysByKeyIDs(t *testing.T) {
 		{ID: 33, KeyIndex: 2, Token: "k3", Enabled: true},
 	}
 
-
 	// Empty whitelist = all platform keys.
 	if got := filterKeysByKeyIDs(keys, ""); len(got) != 3 {
 		t.Fatalf("empty whitelist: got %d keys, want 3", len(got))
@@ -95,9 +94,9 @@ func TestModelKeyPoolHardDead(t *testing.T) {
 // appear inside user content and is whitespace-agnostic.
 func TestReplaceModelField(t *testing.T) {
 	tests := []struct {
-		name     string
-		body     string
-		newModel string
+		name      string
+		body      string
+		newModel  string
 		wantModel string // expected value of the model field after replacement
 	}{
 		{"no space", `{"model":"gpt-4","messages":[]}`, "claude-3", "claude-3"},

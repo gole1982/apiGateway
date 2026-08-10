@@ -50,7 +50,7 @@ type ConsoleOptions struct {
 // attribute (which package emitted the log) and exposes convenience helpers
 // matching the old call sites' shape (Info/Warn/Error with key/value pairs).
 type ConsoleLogger struct {
-	sl     *slog.Logger
+	sl        *slog.Logger
 	component string
 }
 
