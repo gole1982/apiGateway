@@ -916,9 +916,11 @@ func (g *ProxyGateway) tryKeyForRAPI(
 				g.log.RecordError(requestID, reason, "UPSTREAM_RESPONSE")
 			}
 			if g.notifyService != nil {
-				g.notifyService.PublishAsync(
-					fmt.Sprintf("模型 %s [%s] Key #%d 认证失败（401），已标记永久失效，请处理后点击重置状态", rapi.Alias, rapi.PlatformName, key.KeyIndex),
-					"Key 认证失败",
+				g.notifyService.PublishEvent(
+					"error", notify.MenuKeys, "failure",
+					fmt.Sprintf("Key #%d 认证失败（401），已标记永久失效", key.KeyIndex),
+					fmt.Sprintf("模型 %s [%s]", rapi.Alias, rapi.PlatformName),
+					key.ID,
 				)
 			}
 			continue
@@ -947,6 +949,13 @@ func (g *ProxyGateway) tryKeyForRAPI(
 				keyLog.Warn("gateway", "[KEY-BLOCK] capability mismatch, blocking key×model",
 					"status", resp.StatusCode, "reason", reason)
 				g.blockKeyForModel(key.ID, rapi.ID, reason)
+				if g.notifyService != nil {
+					g.notifyService.PublishEvent("error", notify.MenuKeys, "failure",
+						fmt.Sprintf("Key #%d 无权访问模型 %s，已加入能力黑名单", key.KeyIndex, rapi.Alias),
+						reason, key.ID)
+					g.notifyService.RecordUnread(notify.MenuModels, "failure",
+						fmt.Sprintf("模型 %s 对 Key #%d 失效", rapi.Alias, key.KeyIndex), reason, rapi.ID)
+				}
 				if g.log != nil {
 					g.log.RecordError(requestID, reason+"（该 Key 无权访问此模型，已加入能力黑名单）", "UPSTREAM_RESPONSE")
 				}
@@ -959,9 +968,11 @@ func (g *ProxyGateway) tryKeyForRAPI(
 				g.log.RecordError(requestID, reason, "UPSTREAM_RESPONSE")
 			}
 			if g.notifyService != nil {
-				g.notifyService.PublishAsync(
-					fmt.Sprintf("模型 %s [%s] Key #%d 平台受限（%d），已标记永久失效，请处理后点击重置状态", rapi.Alias, rapi.PlatformName, key.KeyIndex, resp.StatusCode),
-					"Key 平台受限",
+				g.notifyService.PublishEvent(
+					"error", notify.MenuKeys, "failure",
+					fmt.Sprintf("Key #%d 平台受限（%d），已标记永久失效", key.KeyIndex, resp.StatusCode),
+					fmt.Sprintf("模型 %s [%s]", rapi.Alias, rapi.PlatformName),
+					key.ID,
 				)
 			}
 			continue
@@ -978,6 +989,13 @@ func (g *ProxyGateway) tryKeyForRAPI(
 				keyLog.Warn("gateway", "[KEY-BLOCK] capability mismatch, blocking key×model",
 					"status", resp.StatusCode, "reason", reason)
 				g.blockKeyForModel(key.ID, rapi.ID, reason)
+				if g.notifyService != nil {
+					g.notifyService.PublishEvent("error", notify.MenuKeys, "failure",
+						fmt.Sprintf("Key #%d 无权访问模型 %s，已加入能力黑名单", key.KeyIndex, rapi.Alias),
+						reason, key.ID)
+					g.notifyService.RecordUnread(notify.MenuModels, "failure",
+						fmt.Sprintf("模型 %s 对 Key #%d 失效", rapi.Alias, key.KeyIndex), reason, rapi.ID)
+				}
 				if g.log != nil {
 					g.log.RecordError(requestID, reason+"（该 Key 无权访问此模型，已加入能力黑名单）", "UPSTREAM_RESPONSE")
 				}
@@ -1028,9 +1046,11 @@ func (g *ProxyGateway) handleAllKeysUnavailable(rapi models.RAPIWithPlatform, re
 	// cooling) get a short session cooldown.
 	first := g.scheduler.MarkAllKeysUnavailable(rapi.ID, hardDead, reason)
 	if first && g.notifyService != nil {
-		g.notifyService.PublishAsync(
-			fmt.Sprintf("模型 %s [%s] 所有 Key 不可用（%s），已标记模型不可用，请更换或启用 Key 后点击恢复", rapi.Alias, rapi.PlatformName, reason),
-			"模型不可用",
+		g.notifyService.PublishEvent(
+			"error", notify.MenuModels, "failure",
+			fmt.Sprintf("模型 %s 所有 Key 不可用，已标记模型不可用", rapi.Alias),
+			reason,
+			rapi.ID,
 		)
 	}
 }
@@ -1153,7 +1173,7 @@ func (g *ProxyGateway) handleStreamingRequest(w http.ResponseWriter, r *http.Req
 					g.log.RecordError(requestID, "Model "+rapi.Alias+" ["+rapi.PlatformName+"] failed: "+err.Error(), "UPSTREAM_RESPONSE")
 				}
 				if g.notifyService != nil {
-					g.notifyService.PublishAsync(fmt.Sprintf("模型 %s 请求失败: %v", rapi.Alias, err), "模型错误")
+					g.notifyService.PublishAsync("error", fmt.Sprintf("模型 %s 请求失败: %v", rapi.Alias, err), "模型错误")
 				}
 			}
 			retryCount++
@@ -1174,7 +1194,7 @@ func (g *ProxyGateway) handleStreamingRequest(w http.ResponseWriter, r *http.Req
 		g.db.RecordRequest(rapi.ID, lapi.ID, resp.StatusCode, latencyMs, tokensUsed)
 
 		if g.notifyService != nil {
-			g.notifyService.PublishAsync(fmt.Sprintf("Streaming from %s", rapi.Alias), "Active Route")
+			g.notifyService.PublishAsync("info", fmt.Sprintf("Streaming from %s", rapi.Alias), "Active Route")
 		}
 
 		// Bug 8.1: target format is already set correctly; no intermediate OpenAI step.

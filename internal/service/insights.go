@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"gateway/internal/db"
+	"gateway/internal/models"
 	"gateway/internal/scheduler"
 )
 
@@ -35,12 +36,23 @@ type CoolingRAPI struct {
 	LastSuccess         time.Time `json:"last_success"`
 	LastFailure         time.Time `json:"last_failure"`
 	Invalidated         bool      `json:"invalidated"`
+	// Platform context for hierarchical alert display / click-through navigation.
+	PlatformID      int64  `json:"platform_id"`
+	PlatformName    string `json:"platform_name"`
+	BillingAddress  string `json:"billing_address,omitempty"`
+	KeyIDs          string `json:"key_ids,omitempty"` // RAPI's key pool whitelist (empty = all platform keys)
 }
 
 type CoolingKey struct {
 	ID        int64     `json:"id"`
 	Reason    string    `json:"reason"`
 	RecoverAt time.Time `json:"recover_at"`
+	// Platform context for hierarchical alert display / click-through navigation.
+	PlatformID     int64  `json:"platform_id"`
+	PlatformName   string `json:"platform_name"`
+	Label          string `json:"label,omitempty"`
+	KeyIndex       int    `json:"key_index"`
+	BillingAddress string `json:"billing_address,omitempty"`
 }
 
 type ErrorRow struct {
@@ -77,6 +89,7 @@ type rapiCfg struct {
 	Enabled    bool
 	Available  bool
 	PlatformID int64
+	KeyIDs     string
 }
 
 // ============ Insight Generation ============
@@ -86,6 +99,8 @@ func generateInsights() InsightResponse {
 	rapiStats, _ := db.Get().GetRAPIStats()
 	rapis, _ := db.Get().GetRAPIs()
 	lapis, _ := db.Get().GetLAPIs()
+	platforms, _ := db.Get().GetPlatforms()
+	allKeys, _ := db.Get().GetAllPlatformKeys()
 	orders, _ := db.Get().GetAllLAPIRAPIOrders()
 	fallbackStats, _ := db.Get().GetFallbackStats(24)
 	hourlyDist, _ := db.Get().GetHourlyDistribution(7)
@@ -101,8 +116,16 @@ func generateInsights() InsightResponse {
 			Alias: r.Alias, Model: r.Model, BaseCost: r.BaseCost, HighCost: r.HighCost,
 			RPMLimit: r.RPMLimit, RPHLimit: r.RPHLimit, RPDLimit: r.RPDLimit,
 			TPMLimit: r.TPMLimit, TPHLimit: r.TPHLimit, TPDLimit: r.TPDLimit,
-			Enabled: r.Enabled, Available: r.Available, PlatformID: r.PlatformID,
+			Enabled: r.Enabled, Available: r.Available, PlatformID: r.PlatformID, KeyIDs: r.KeyIDs,
 		}
+	}
+	platformByID := make(map[int64]models.Platform)
+	for _, p := range platforms {
+		platformByID[p.ID] = p
+	}
+	keyByID := make(map[int64]models.PlatformKey)
+	for _, k := range allKeys {
+		keyByID[k.ID] = k
 	}
 	counterByID := make(map[int64]scheduler.CounterSnapshot)
 	for _, c := range snap.Counters {
@@ -119,7 +142,7 @@ func generateInsights() InsightResponse {
 		lapiRAPIMap[o.LapiID] = append(lapiRAPIMap[o.LapiID], o.RAPIID)
 	}
 
-	health := buildHealth(snap, rapiStatByID, rapiCfgByID)
+	health := buildHealth(snap, rapiStatByID, rapiCfgByID, platformByID, keyByID)
 	efficiency := buildEfficiency(lapiRAPIMap, lapiAliasByID, rapiCfgByID, rapiStatByID, counterByID, fallbackStats)
 	capacity := buildCapacity(counterByID, rapiCfgByID, rapiStatByID, snap, hourlyDist)
 
@@ -131,26 +154,36 @@ func generateInsights() InsightResponse {
 	}
 }
 
-func buildHealth(snap scheduler.Snapshot, rapiStatByID map[int64]db.RAPIStat, rapiCfgByID map[int64]rapiCfg) HealthData {
+func buildHealth(snap scheduler.Snapshot, rapiStatByID map[int64]db.RAPIStat, rapiCfgByID map[int64]rapiCfg,
+	platformByID map[int64]models.Platform, keyByID map[int64]models.PlatformKey) HealthData {
 	h := HealthData{
 		CoolingRAPIs: make([]CoolingRAPI, 0),
 		CoolingKeys:  make([]CoolingKey, 0),
 		ErrorSummary: make([]ErrorRow, 0),
 	}
 
+	platformInfo := func(pid int64) (name, billing string) {
+		if p, ok := platformByID[pid]; ok {
+			return p.Name, p.BillingAddress
+		}
+		return "", ""
+	}
+
 	for _, rs := range snap.RAPIs {
 		if !rs.Cooling && !rs.Invalidated {
 			continue
 		}
-		alias := ""
+		alias, pid, keyIDs := "", int64(0), ""
 		if cfg, ok := rapiCfgByID[rs.ID]; ok {
-			alias = cfg.Alias
+			alias, pid, keyIDs = cfg.Alias, cfg.PlatformID, cfg.KeyIDs
 		}
+		pname, billing := platformInfo(pid)
 		h.CoolingRAPIs = append(h.CoolingRAPIs, CoolingRAPI{
 			ID: rs.ID, Alias: alias, Reason: rs.Reason,
 			ConsecutiveFailures: rs.ConsecutiveFailures,
 			RecoverAt:           rs.RecoverAt, LastSuccess: rs.LastSuccess,
 			LastFailure: rs.LastFailure, Invalidated: rs.Invalidated,
+			PlatformID: pid, PlatformName: pname, BillingAddress: billing, KeyIDs: keyIDs,
 		})
 	}
 
@@ -158,9 +191,17 @@ func buildHealth(snap scheduler.Snapshot, rapiStatByID map[int64]db.RAPIStat, ra
 		if !ks.Cooling {
 			continue
 		}
-		h.CoolingKeys = append(h.CoolingKeys, CoolingKey{
+		key, ok := keyByID[ks.ID]
+		ck := CoolingKey{
 			ID: ks.ID, Reason: ks.Reason, RecoverAt: ks.RecoverAt,
-		})
+		}
+		if ok {
+			ck.PlatformID = key.PlatformID
+			ck.Label = key.Label
+			ck.KeyIndex = key.KeyIndex
+			ck.PlatformName, ck.BillingAddress = platformInfo(key.PlatformID)
+		}
+		h.CoolingKeys = append(h.CoolingKeys, ck)
 	}
 
 	for _, s := range rapiStatByID {

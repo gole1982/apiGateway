@@ -57,6 +57,16 @@ type Platform struct {
 	// non-standard paths still get correct forwarding. Empty when no detection
 	// has been run; the gateway falls back to BuildURL() in that case.
 	FormatEndpoints string    `json:"format_endpoints,omitempty"`
+	// BillingAddress is the provider's billing console URL — shown in the UI as
+	// a clickable external link (alerts can jump straight to the billing page).
+	BillingAddress string `json:"billing_address,omitempty"`
+	// LoginAccount is the account used to log into the provider console.
+	// Returned to the UI on read (non-secret).
+	LoginAccount string `json:"login_account,omitempty"`
+	// LoginPassword is the provider console password. Stored encrypted
+	// (AES-256-GCM, same mechanism as Token) and NEVER selected on read —
+	// it is write-only: empty on read, set only via create/update payloads.
+	LoginPassword string `json:"login_password,omitempty"`
 	LastTokenFetch  time.Time `json:"last_token_fetch"`
 	Enabled         bool      `json:"enabled"`
 	Available       bool      `json:"available"`

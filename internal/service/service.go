@@ -74,7 +74,81 @@ func validatePlatformInput(p *models.Platform) error {
 		return errors.New("Base URL 不允许包含用户名/密码信息")
 	}
 
+	// --- Billing address (provider console URL, optional) ---
+	p.BillingAddress = strings.TrimSpace(p.BillingAddress)
+	if len(p.BillingAddress) > 512 {
+		return errors.New("账单地址长度不能超过512字符")
+	}
+	if p.BillingAddress != "" {
+		billParsed, err := url.ParseRequestURI(p.BillingAddress)
+		if err != nil {
+			return errors.New("账单地址格式不合法")
+		}
+		if billParsed.Scheme != "http" && billParsed.Scheme != "https" {
+			return errors.New("账单地址必须以 http:// 或 https:// 开头")
+		}
+		if billParsed.User != nil {
+			return errors.New("账单地址不允许包含用户名/密码信息")
+		}
+	}
+
+	// --- Login account (provider console login, optional) ---
+	p.LoginAccount = strings.TrimSpace(p.LoginAccount)
+	if utf8.RuneCountInString(p.LoginAccount) > 200 {
+		return errors.New("登录账号不能超过200个字符")
+	}
+
+	// --- Login password (provider console password, optional; kept as-is so
+	// an empty value means "unchanged" in UpdatePlatform) ---
+	p.LoginPassword = strings.TrimSpace(p.LoginPassword)
+	if utf8.RuneCountInString(p.LoginPassword) > 512 {
+		return errors.New("登录密码不能超过512个字符")
+	}
+
 	return nil
+}
+
+// recordUnread appends an in-memory unread event routed to a UI menu.
+func recordUnread(menu, kind string, entityID int64, title, detail string) {
+	if notifySvc != nil {
+		notifySvc.RecordUnread(menu, kind, title, detail, entityID)
+	}
+}
+
+// platformName returns a platform's display name, falling back to its id.
+func platformName(pid int64) string {
+	if p, err := db.Get().GetPlatformByID(pid); err == nil && p != nil {
+		return p.Name
+	}
+	return fmt.Sprintf("%d", pid)
+}
+
+// parseKeyIDs parses a comma-separated RAPI key_ids whitelist into a slice.
+func parseKeyIDs(s string) []int64 {
+	parts := strings.Split(s, ",")
+	out := make([]int64, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		var id int64
+		fmt.Sscanf(p, "%d", &id)
+		if id > 0 {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// intIn reports whether id is present in ids.
+func intIn(ids []int64, id int64) bool {
+	for _, v := range ids {
+		if v == id {
+			return true
+		}
+	}
+	return false
 }
 
 type Service struct {
@@ -369,7 +443,7 @@ func createWebHandler() http.Handler {
 			}
 			logger.DefaultConsole().Info("service", "[API] CreateRAPI success",
 				"id", rapi.ID, "alias", rapi.Alias, "model", rapi.Model, "platform_id", rapi.PlatformID)
-			db.Get().AddChangeLog("rapi", "create", rapi.ID, rapi.Alias, rapi.Model)
+			recordUnread(notify.MenuModels, "create", rapi.ID, "新增模型 "+rapi.Alias, rapi.Model)
 			// Auto-map: if model identity matches a LAPI, add to its routing chain
 			autoMapRAPItoLAPI(&rapi)
 			w.Write([]byte(`{"success":true}`))
@@ -395,7 +469,7 @@ func createWebHandler() http.Handler {
 				writeJSONError(w, 500, err)
 				return
 			}
-			db.Get().AddChangeLog("rapi", "update", rapi.ID, rapi.Alias, rapi.Model)
+			recordUnread(notify.MenuModels, "update", rapi.ID, "修改模型 "+rapi.Alias, rapi.Model)
 			if wasUnavailable {
 				rep := proxyGateway.RecoverRAPIs(r.Context(), []int64{rapi.ID}, 1, 8)
 				if len(rep.Recovered) > 0 {
@@ -442,7 +516,7 @@ func createWebHandler() http.Handler {
 				}
 				proxyGateway.InvalidateRAPI(rapiID)
 			}
-			db.Get().AddChangeLog("rapi", "delete", rapiID, rapiInfo.Alias, "")
+			recordUnread(notify.MenuModels, "delete", rapiID, "删除模型 "+rapiInfo.Alias, "")
 			w.Write([]byte(`{"success":true}`))
 		}
 	})
@@ -963,7 +1037,9 @@ func createWebHandler() http.Handler {
 				writeJSONError(w, 500, err)
 				return
 			}
-			db.Get().AddChangeLog("platform", "create", p.ID, p.Name, "")
+			recordUnread(notify.MenuPlatforms, "create", p.ID, "新增平台 "+p.Name, "")
+			// Never echo the plaintext login password back to the client.
+			p.LoginPassword = ""
 			data, _ := json.Marshal(p)
 			w.Write(data)
 
@@ -981,7 +1057,7 @@ func createWebHandler() http.Handler {
 				writeJSONError(w, 500, err)
 				return
 			}
-			db.Get().AddChangeLog("platform", "update", p.ID, p.Name, "")
+			recordUnread(notify.MenuPlatforms, "update", p.ID, "修改平台 "+p.Name, "")
 			w.Write([]byte(`{"success":true}`))
 
 		case http.MethodDelete:
@@ -1019,9 +1095,112 @@ func createWebHandler() http.Handler {
 					return
 				}
 			}
-			db.Get().AddChangeLog("platform", "delete", pID, platform.Name, "")
+			recordUnread(notify.MenuPlatforms, "delete", pID, "删除平台 "+platform.Name, "")
 			w.Write([]byte(`{"success":true}`))
 		}
+	})
+
+	// Upstream test for the unified add wizard: probes an arbitrary base_url+token
+	// (with optional model) without saving anything. model empty = /v1/models
+	// connectivity probe; model set = minimal chat completion against that model.
+	mux.HandleFunc("/api/upstream/test", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"error":"method not allowed"}`, 405)
+			return
+		}
+		var req struct {
+			BaseURL string `json:"base_url"`
+			Token   string `json:"token"`
+			Model   string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, `{"error":"invalid json"}`, 400)
+			return
+		}
+		req.BaseURL = strings.TrimSpace(req.BaseURL)
+		if req.BaseURL == "" {
+			writeJSONError(w, 400, fmt.Errorf("base_url 不能为空"))
+			return
+		}
+		if strings.TrimSpace(req.Token) == "" {
+			writeJSONError(w, 400, fmt.Errorf("token 不能为空"))
+			return
+		}
+
+		googleNative := apiformat.IsGoogleNativeBaseURL(req.BaseURL)
+		client := &http.Client{Timeout: 30 * time.Second}
+		start := time.Now()
+
+		if strings.TrimSpace(req.Model) == "" {
+			// Connectivity probe: GET /v1/models (or Google /v1beta/models).
+			var modelsURL string
+			hreq, _ := http.NewRequestWithContext(r.Context(), http.MethodGet, "", nil)
+			if googleNative {
+				modelsURL = apiformat.BuildGoogleListModelsURL(req.BaseURL, req.Token)
+				hreq.Header.Set(apiformat.GoogleAPIKeyHeader, req.Token)
+			} else {
+				normalized := req.BaseURL
+				for _, suffix := range []string{"/v1/chat/completions", "/v1/messages", "/v1beta/models", "/v1beta", "/v1/chat", "/v1"} {
+					if strings.HasSuffix(normalized, suffix) {
+						normalized = strings.TrimSuffix(normalized, suffix)
+						break
+					}
+				}
+				normalized = strings.TrimRight(normalized, "/")
+				modelsURL = normalized + "/v1/models"
+				hreq.Header.Set("Authorization", "Bearer "+req.Token)
+			}
+			hreq.URL, _ = url.Parse(modelsURL)
+			resp, err := client.Do(hreq)
+			if err != nil {
+				writeJSONError(w, 502, fmt.Errorf("连接失败: %v", err))
+				return
+			}
+			defer resp.Body.Close()
+			body, _ := io.ReadAll(resp.Body)
+			if len(body) > 8192 {
+				body = body[:8192]
+			}
+			json.NewEncoder(w).Encode(map[string]any{
+				"ok":         resp.StatusCode >= 200 && resp.StatusCode < 300,
+				"status":     resp.StatusCode,
+				"latency_ms": time.Since(start).Milliseconds(),
+				"body":       string(body),
+			})
+			return
+		}
+
+		// Model test: minimal chat completion.
+		format := apiformat.FormatOpenAI
+		if googleNative {
+			format = apiformat.FormatGemini
+		}
+		upstreamURL := apiformat.BuildURLs(req.BaseURL, req.Model, format)[0]
+		body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"ping"}],"max_tokens":16}`, req.Model)
+		hreq, _ := http.NewRequestWithContext(r.Context(), http.MethodPost, upstreamURL, strings.NewReader(body))
+		if googleNative {
+			hreq.Header.Set(apiformat.GoogleAPIKeyHeader, req.Token)
+		} else {
+			hreq.Header.Set("Authorization", "Bearer "+req.Token)
+		}
+		hreq.Header.Set("Content-Type", "application/json")
+		resp, err := client.Do(hreq)
+		if err != nil {
+			writeJSONError(w, 502, fmt.Errorf("请求失败: %v", err))
+			return
+		}
+		defer resp.Body.Close()
+		respBody, _ := io.ReadAll(resp.Body)
+		if len(respBody) > 8192 {
+			respBody = respBody[:8192]
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"ok":         resp.StatusCode >= 200 && resp.StatusCode < 300,
+			"status":     resp.StatusCode,
+			"latency_ms": time.Since(start).Milliseconds(),
+			"body":       string(respBody),
+		})
 	})
 
 	// Fetch models from platform's /v1/models endpoint
@@ -1223,7 +1402,7 @@ func createWebHandler() http.Handler {
 				logger.DefaultConsole().Error("service", "[BATCH] create RAPI failed",
 					"model", modelName, "error", err.Error())
 			} else {
-				db.Get().AddChangeLog("rapi", "create", rapi.ID, rapi.Alias, rapi.Model)
+				recordUnread(notify.MenuModels, "create", rapi.ID, "新增模型 "+rapi.Alias, rapi.Model)
 				autoMapRAPItoLAPI(&rapi)
 				created = append(created, map[string]interface{}{
 					"id":     rapi.ID,
@@ -1297,6 +1476,7 @@ func createWebHandler() http.Handler {
 				writeJSONError(w, 500, err)
 				return
 			}
+			recordUnread(notify.MenuKeys, "create", k.ID, fmt.Sprintf("新增密钥 #%d（%s）", k.KeyIndex, platformName(platformID)), k.Label)
 			// A usable key was added: automatically re-probe any models of this
 			// platform that were marked unavailable because all their keys were
 			// dead, and restore the ones that actually respond with the new key.
@@ -1346,6 +1526,7 @@ func createWebHandler() http.Handler {
 					writeJSONError(w, 500, err)
 					return
 				}
+				recordUnread(notify.MenuKeys, "update", kid, fmt.Sprintf("修改密钥（%s）", platformName(platformID)), k.Label)
 				w.Write([]byte(`{"success":true}`))
 				return
 			}
@@ -1394,6 +1575,7 @@ func createWebHandler() http.Handler {
 				writeJSONError(w, 500, err)
 				return
 			}
+			recordUnread(notify.MenuKeys, "update", platformID, fmt.Sprintf("更新密钥列表（%s）", platformName(platformID)), "")
 			// Mirrors POST: a non-empty key list restores the platform.
 			hasNonEmpty := false
 			for _, k := range keys {
@@ -1433,6 +1615,7 @@ func createWebHandler() http.Handler {
 			}
 			// Drop the in-memory scheduler entity (cooldown / recovery scan).
 			proxyGateway.RemoveKey(kid)
+			recordUnread(notify.MenuKeys, "delete", kid, fmt.Sprintf("删除密钥（%s）", platformName(platformID)), "")
 			data, _ := json.Marshal(map[string]interface{}{
 				"success":      true,
 				"removed_from": removedFrom,
@@ -1513,7 +1696,7 @@ func createWebHandler() http.Handler {
 			}
 			logger.DefaultConsole().Info("service", "[API] CreateLAPI success",
 				"id", lapi.ID, "alias", lapi.Alias)
-			db.Get().AddChangeLog("lapi", "create", lapi.ID, lapi.Alias, "")
+			recordUnread(notify.MenuInterfaces, "create", lapi.ID, "新增接口 "+lapi.Alias, "")
 			data, _ := json.Marshal(lapi)
 			w.Write(data)
 
@@ -1529,7 +1712,7 @@ func createWebHandler() http.Handler {
 				writeJSONError(w, 500, err)
 				return
 			}
-			db.Get().AddChangeLog("lapi", "update", lapi.ID, lapi.Alias, "")
+			recordUnread(notify.MenuInterfaces, "update", lapi.ID, "修改接口 "+lapi.Alias, "")
 			w.Write([]byte(`{"success":true}`))
 
 		case http.MethodDelete:
@@ -1552,7 +1735,7 @@ func createWebHandler() http.Handler {
 				writeJSONError(w, 500, err)
 				return
 			}
-			db.Get().AddChangeLog("lapi", "delete", lapiID, lapiInfo.Alias, "")
+			recordUnread(notify.MenuInterfaces, "delete", lapiID, "删除接口 "+lapiInfo.Alias, "")
 			w.Write([]byte(`{"success":true}`))
 		}
 	})
@@ -1869,7 +2052,7 @@ func createWebHandler() http.Handler {
 		}
 
 		cfg, _ := config.Load()
-		fmt.Fprintf(w, `{"proxy_port":%d,"web_port":%d,"rapi_count":%d,"lapi_count":%d,"total_requests":%d,"rapi_requested":%d,"lapi_requested":%d,"rapi_stats":{"requested_count":%d,"configured_count":%d},"lapi_stats":{"requested_count":%d,"configured_count":%d},"history":[`, cfg.ProxyPort, cfg.WebPort, len(rapis), len(lapis), totalReq, rapiRequested, lapiRequested, rapiRequested, len(rapis), lapiRequested, len(lapis))
+		fmt.Fprintf(w, `{"version":%q,"proxy_port":%d,"web_port":%d,"rapi_count":%d,"lapi_count":%d,"total_requests":%d,"rapi_requested":%d,"lapi_requested":%d,"rapi_stats":{"requested_count":%d,"configured_count":%d},"lapi_stats":{"requested_count":%d,"configured_count":%d},"history":[`, Version, cfg.ProxyPort, cfg.WebPort, len(rapis), len(lapis), totalReq, rapiRequested, lapiRequested, rapiRequested, len(rapis), lapiRequested, len(lapis))
 
 		for i, h := range history {
 			if i > 0 {
@@ -2060,40 +2243,114 @@ func createWebHandler() http.Handler {
 		w.Write(data)
 	})
 
-	// Change-log endpoints — transient "unread notifications" for the dashboard banner.
-	// GET  /api/change-log        → returns all unread entries (newest first)
-	// POST /api/change-log/clear  → marks all as read by deleting them
-	mux.HandleFunc("/api/change-log", func(w http.ResponseWriter, r *http.Request) {
+	// Flat key list for the independent "密钥管理" menu: every key joined with
+	// its platform name and the models it may serve (reverse of RAPI.key_ids),
+	// plus the key×model capability-block state so a broken key↔model pair shows
+	// in both the key and model views.
+	mux.HandleFunc("/api/keys", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method != http.MethodGet {
 			http.Error(w, `{"error":"method not allowed"}`, 405)
 			return
 		}
-		entries, err := db.Get().GetChangeLogs()
+		keys, err := db.Get().GetAllPlatformKeys()
 		if err != nil {
 			writeJSONError(w, 500, err)
 			return
 		}
-		if entries == nil {
-			entries = []db.ChangeLogEntry{}
+		if keys == nil {
+			keys = []models.PlatformKey{}
 		}
-		data, _ := json.Marshal(map[string]interface{}{"entries": entries})
-		w.Write(data)
+		platforms, _ := db.Get().GetPlatforms()
+		platName := make(map[int64]string, len(platforms))
+		for _, p := range platforms {
+			platName[p.ID] = p.Name
+		}
+		rapis, _ := db.Get().GetRAPIs()
+		blocks, _ := db.Get().GetKeyModelBlocks()
+		blockSet := make(map[string]models.KeyModelBlock, len(blocks))
+		for _, b := range blocks {
+			blockSet[fmt.Sprintf("%d:%d", b.KeyID, b.RAPIID)] = b
+		}
+
+		type keyModelView struct {
+			ID      int64  `json:"id"`
+			Alias   string `json:"alias"`
+			Model   string `json:"model"`
+			Blocked bool   `json:"blocked"`
+			Reason  string `json:"reason,omitempty"`
+		}
+		type keyView struct {
+			models.PlatformKey
+			PlatformName string         `json:"platform_name"`
+			Models       []keyModelView `json:"models"`
+		}
+
+		out := make([]keyView, 0, len(keys))
+		for _, k := range keys {
+			kv := keyView{PlatformKey: k, PlatformName: platName[k.PlatformID], Models: []keyModelView{}}
+			for _, ra := range rapis {
+				if ra.PlatformID != k.PlatformID {
+					continue
+				}
+				ids := parseKeyIDs(ra.KeyIDs)
+				if len(ids) > 0 && !intIn(ids, k.ID) {
+					continue
+				}
+				b, blocked := blockSet[fmt.Sprintf("%d:%d", k.ID, ra.ID)]
+				mv := keyModelView{ID: ra.ID, Alias: ra.Alias, Model: ra.Model, Blocked: blocked}
+				if blocked {
+					mv.Reason = b.Reason
+				}
+				kv.Models = append(kv.Models, mv)
+			}
+			out = append(out, kv)
+		}
+		json.NewEncoder(w).Encode(out)
 	})
 
-	mux.HandleFunc("/api/change-log/clear", func(w http.ResponseWriter, r *http.Request) {
+	// In-memory unread notifications (per-menu badges in the fixed top bar).
+	// GET  /api/unread        → items + per-menu counts + total
+	// POST /api/unread/read   → {menu: "keys"} or {all: true} marks read
+	mux.HandleFunc("/api/unread", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodGet {
+			http.Error(w, `{"error":"method not allowed"}`, 405)
+			return
+		}
+		var items []notify.UnreadItem
+		var counts map[string]int
+		var total int
+		if notifySvc != nil {
+			items = notifySvc.UnreadItems()
+			counts = notifySvc.UnreadCounts()
+			total = notifySvc.TotalUnread()
+		}
+		if items == nil {
+			items = []notify.UnreadItem{}
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{"items": items, "counts": counts, "total": total})
+	})
+
+	mux.HandleFunc("/api/unread/read", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method != http.MethodPost {
 			http.Error(w, `{"error":"method not allowed"}`, 405)
 			return
 		}
-		n, err := db.Get().ClearChangeLogs()
-		if err != nil {
-			writeJSONError(w, 500, err)
-			return
+		var req struct {
+			Menu string `json:"menu"`
+			All  bool   `json:"all"`
 		}
-		resp, _ := json.Marshal(map[string]interface{}{"success": true, "cleared": n})
-		w.Write(resp)
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if notifySvc != nil {
+			if req.All || req.Menu == "" {
+				notifySvc.MarkAllRead()
+			} else {
+				notifySvc.MarkMenuRead(req.Menu)
+			}
+		}
+		w.Write([]byte(`{"success":true}`))
 	})
 
 	return mux

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,6 +52,9 @@ func setupTestDB(t *testing.T) *DB {
 			supported_formats TEXT NOT NULL DEFAULT '["openai"]',
 			format_endpoints TEXT NOT NULL DEFAULT '',
 			sort_order INTEGER NOT NULL DEFAULT 0,
+			billing_address TEXT NOT NULL DEFAULT '',
+			login_account TEXT NOT NULL DEFAULT '',
+			login_password TEXT NOT NULL DEFAULT '',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);
@@ -182,9 +186,12 @@ func TestPlatformCRUD(t *testing.T) {
 	db := setupTestDB(t)
 
 	p := &models.Platform{
-		Name:    "openai",
-		BaseURL: "https://api.openai.com/v1",
-		Token:   "sk-test123",
+		Name:           "openai",
+		BaseURL:        "https://api.openai.com/v1",
+		Token:          "sk-test123",
+		BillingAddress: "https://console.openai.com/billing",
+		LoginAccount:   "ops@example.com",
+		LoginPassword:  "secret-pw-1",
 	}
 
 	// Create
@@ -195,13 +202,32 @@ func TestPlatformCRUD(t *testing.T) {
 		t.Fatal("CreatePlatform did not set ID")
 	}
 
-	// Read
+	// Read: billing/login_account returned, login_password NEVER returned (write-only)
 	got, err := db.GetPlatformByID(p.ID)
 	if err != nil {
 		t.Fatalf("GetPlatformByID: %v", err)
 	}
 	if got.Name != "openai" || got.BaseURL != "https://api.openai.com/v1" || got.Token != "sk-test123" {
 		t.Errorf("GetPlatformByID returned wrong data: %+v", got)
+	}
+	if got.BillingAddress != "https://console.openai.com/billing" || got.LoginAccount != "ops@example.com" {
+		t.Errorf("GetPlatformByID returned wrong account data: billing=%q account=%q", got.BillingAddress, got.LoginAccount)
+	}
+	if got.LoginPassword != "" {
+		t.Errorf("GetPlatformByID leaked login_password: %q", got.LoginPassword)
+	}
+
+	// Verify the stored password is encrypted (not plaintext) in the DB.
+	var storedPw string
+	if err := db.conn.QueryRow(`SELECT login_password FROM platform WHERE id = ?`, p.ID).Scan(&storedPw); err != nil {
+		t.Fatalf("select stored login_password: %v", err)
+	}
+	if storedPw == "" || storedPw == "secret-pw-1" || !strings.HasPrefix(storedPw, "enc:") {
+		t.Errorf("stored login_password is not encrypted: %q", storedPw)
+	}
+	// And it decrypts back to the original value.
+	if dec, err := crypto.Decrypt(storedPw); err != nil || dec != "secret-pw-1" {
+		t.Errorf("stored login_password does not decrypt back: dec=%q err=%v", dec, err)
 	}
 
 	// Update
@@ -212,6 +238,37 @@ func TestPlatformCRUD(t *testing.T) {
 	got2, _ := db.GetPlatformByID(p.ID)
 	if got2.BaseURL != "https://api.openai.com/v2" {
 		t.Errorf("UpdatePlatform did not update base_url: %s", got2.BaseURL)
+	}
+
+	// Update with empty login_password must KEEP the existing password.
+	got2.LoginPassword = ""
+	got2.LoginAccount = "ops2@example.com"
+	if err := db.UpdatePlatform(got2); err != nil {
+		t.Fatalf("UpdatePlatform (empty pw): %v", err)
+	}
+	got3, _ := db.GetPlatformByID(p.ID)
+	if got3.LoginAccount != "ops2@example.com" {
+		t.Errorf("UpdatePlatform did not update login_account: %q", got3.LoginAccount)
+	}
+	var pwAfter string
+	if err := db.conn.QueryRow(`SELECT login_password FROM platform WHERE id = ?`, p.ID).Scan(&pwAfter); err != nil {
+		t.Fatalf("select login_password after empty-pw update: %v", err)
+	}
+	if dec, err := crypto.Decrypt(pwAfter); err != nil || dec != "secret-pw-1" {
+		t.Errorf("empty login_password overwrote existing password: dec=%q err=%v", dec, err)
+	}
+
+	// Update with a NEW login_password must replace it.
+	got3.LoginPassword = "secret-pw-2"
+	if err := db.UpdatePlatform(got3); err != nil {
+		t.Fatalf("UpdatePlatform (new pw): %v", err)
+	}
+	var pwNew string
+	if err := db.conn.QueryRow(`SELECT login_password FROM platform WHERE id = ?`, p.ID).Scan(&pwNew); err != nil {
+		t.Fatalf("select login_password after new-pw update: %v", err)
+	}
+	if dec, err := crypto.Decrypt(pwNew); err != nil || dec != "secret-pw-2" {
+		t.Errorf("new login_password not applied: dec=%q err=%v", dec, err)
 	}
 
 	// List

@@ -181,21 +181,14 @@ func Init() error {
 			UNIQUE(minute_bucket, lapi_id)
 		);
 		CREATE INDEX IF NOT EXISTS idx_trends_minute ON request_trends(minute_bucket);
-
-		CREATE TABLE IF NOT EXISTS change_log (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			entity_type TEXT NOT NULL,
-			entity_id INTEGER NOT NULL DEFAULT 0,
-			action TEXT NOT NULL,
-			name TEXT NOT NULL DEFAULT '',
-			detail TEXT NOT NULL DEFAULT '',
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-		);
-		CREATE INDEX IF NOT EXISTS idx_change_log_created ON change_log(created_at);
 	`)
 	if err != nil {
 		return err
 	}
+
+	// Drop the legacy persisted change_log table: unread notifications are now
+	// kept in-memory only (see notify.NotificationService unread feed).
+	conn.Exec(`DROP TABLE IF EXISTS change_log`)
 
 	// Migration: if old rapi table had url/token columns, migrate them to platform
 	if err := instance.migrateOldRAPISchema(); err != nil {
@@ -262,6 +255,9 @@ func Init() error {
 	// Migration: key×model capability block table (platform revoked a key's
 	// access to a model; the pair is skipped until the block expires).
 	instance.migrateKeyModelBlocks()
+	// Migration: platform console/account columns (billing_address,
+	// login_account, login_password — the latter stored encrypted, write-only).
+	instance.migrateAddPlatformAccountColumns()
 
 	// Cleanup: remove orphan RAPIs whose platform no longer exists
 	instance.cleanupOrphanedRAPIs()
@@ -519,6 +515,26 @@ func (db *DB) migrateKeyModelBlocks() {
 			PRIMARY KEY (key_id, rapi_id)
 		)
 	`)
+}
+
+// migrateAddPlatformAccountColumns adds the provider-console columns to the
+// platform table: billing_address (console URL, e.g. billing page),
+// login_account (console login), login_password (console password, stored
+// encrypted — never selected on read, write-only). Idempotent.
+func (db *DB) migrateAddPlatformAccountColumns() {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	for name, definition := range map[string]string{
+		"billing_address": "TEXT NOT NULL DEFAULT ''",
+		"login_account":   "TEXT NOT NULL DEFAULT ''",
+		"login_password":  "TEXT NOT NULL DEFAULT ''",
+	} {
+		var count int
+		row := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('platform') WHERE name=?`, name)
+		if row.Scan(&count) == nil && count == 0 {
+			db.conn.Exec("ALTER TABLE platform ADD COLUMN " + name + " " + definition)
+		}
+	}
 }
 
 // BlockKeyForModel records (or refreshes) a key×model capability block: the
@@ -785,7 +801,9 @@ func (db *DB) GetPlatforms() ([]models.Platform, error) {
 	rows, err := db.conn.Query(`
 		SELECT id, name, base_url, token,
 		       last_token_fetch, enabled, available, notes, custom_headers,
-		       supported_formats, format_endpoints, created_at, updated_at
+		       supported_formats, format_endpoints,
+		       billing_address, login_account,
+		       created_at, updated_at
 		FROM platform ORDER BY sort_order ASC, id ASC
 	`)
 	if err != nil {
@@ -799,11 +817,14 @@ func (db *DB) GetPlatforms() ([]models.Platform, error) {
 		var enabled, available sql.NullInt64
 		var lastFetch, created, updated sql.NullTime
 		var notes, customHeaders, supportedFormats, formatEndpoints sql.NullString
+		var billingAddress, loginAccount sql.NullString
 
 		var encToken string
 		err := rows.Scan(&p.ID, &p.Name, &p.BaseURL, &encToken,
 			&lastFetch, &enabled, &available, &notes, &customHeaders,
-			&supportedFormats, &formatEndpoints, &created, &updated)
+			&supportedFormats, &formatEndpoints,
+			&billingAddress, &loginAccount,
+			&created, &updated)
 		if err != nil {
 			return nil, err
 		}
@@ -817,6 +838,10 @@ func (db *DB) GetPlatforms() ([]models.Platform, error) {
 		p.CustomHeaders = customHeaders.String
 		p.SupportedFormats = supportedFormats.String
 		p.FormatEndpoints = formatEndpoints.String
+		p.BillingAddress = billingAddress.String
+		p.LoginAccount = loginAccount.String
+		// login_password is intentionally NOT selected: it is write-only, so the
+		// list/read API can never leak the encrypted console password.
 		if lastFetch.Valid {
 			p.LastTokenFetch = lastFetch.Time
 		}
@@ -840,16 +865,21 @@ func (db *DB) GetPlatformByID(id int64) (*models.Platform, error) {
 	var enabled, available sql.NullInt64
 	var lastFetch, created, updated sql.NullTime
 	var notes, customHeaders, supportedFormats, formatEndpoints sql.NullString
+	var billingAddress, loginAccount sql.NullString
 
 	var encToken string
 	err := db.conn.QueryRow(`
 		SELECT id, name, base_url, token,
 		       last_token_fetch, enabled, available, notes, custom_headers,
-		       supported_formats, format_endpoints, created_at, updated_at
+		       supported_formats, format_endpoints,
+		       billing_address, login_account,
+		       created_at, updated_at
 		FROM platform WHERE id = ?
 	`, id).Scan(&p.ID, &p.Name, &p.BaseURL, &encToken,
 		&lastFetch, &enabled, &available, &notes, &customHeaders,
-		&supportedFormats, &formatEndpoints, &created, &updated)
+		&supportedFormats, &formatEndpoints,
+		&billingAddress, &loginAccount,
+		&created, &updated)
 
 	if err != nil {
 		return nil, err
@@ -864,6 +894,9 @@ func (db *DB) GetPlatformByID(id int64) (*models.Platform, error) {
 	p.CustomHeaders = customHeaders.String
 	p.SupportedFormats = supportedFormats.String
 	p.FormatEndpoints = formatEndpoints.String
+	p.BillingAddress = billingAddress.String
+	p.LoginAccount = loginAccount.String
+	// login_password is intentionally NOT selected (write-only).
 	if lastFetch.Valid {
 		p.LastTokenFetch = lastFetch.Time
 	}
@@ -886,15 +919,22 @@ func (db *DB) CreatePlatform(p *models.Platform) error {
 		return fmt.Errorf("encrypt token: %w", err)
 	}
 
+	// Login password is stored encrypted with the same mechanism as Token;
+	// an empty password is stored as empty (no ciphertext for empty input).
+	encLoginPw, err := crypto.Encrypt(p.LoginPassword)
+	if err != nil {
+		return fmt.Errorf("encrypt login password: %w", err)
+	}
+
 	formats := p.SupportedFormats
 	if formats == "" {
 		formats = `["openai"]`
 	}
 
 	result, err := db.conn.Exec(`
-		INSERT INTO platform (name, base_url, token, last_token_fetch, enabled, available, notes, custom_headers, supported_formats, format_endpoints)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, p.Name, p.BaseURL, encToken, time.Now(), boolToInt(p.Enabled), boolToInt(p.Available), p.Notes, p.CustomHeaders, formats, p.FormatEndpoints)
+		INSERT INTO platform (name, base_url, token, last_token_fetch, enabled, available, notes, custom_headers, supported_formats, format_endpoints, billing_address, login_account, login_password)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, p.Name, p.BaseURL, encToken, time.Now(), boolToInt(p.Enabled), boolToInt(p.Available), p.Notes, p.CustomHeaders, formats, p.FormatEndpoints, p.BillingAddress, p.LoginAccount, encLoginPw)
 
 	if err != nil {
 		return err
@@ -917,15 +957,30 @@ func (db *DB) UpdatePlatform(p *models.Platform) error {
 		return fmt.Errorf("encrypt token: %w", err)
 	}
 
+	// Login password semantics: an empty payload password means "keep the
+	// existing one" (mirrors the key-token edit semantics). Reuse the stored
+	// ciphertext from the DB so a password save never blanks it out.
+	encLoginPw := ""
+	if strings.TrimSpace(p.LoginPassword) != "" {
+		encLoginPw, err = crypto.Encrypt(p.LoginPassword)
+		if err != nil {
+			return fmt.Errorf("encrypt login password: %w", err)
+		}
+	} else {
+		if err := db.conn.QueryRow(`SELECT login_password FROM platform WHERE id = ?`, p.ID).Scan(&encLoginPw); err != nil && err != sql.ErrNoRows {
+			return fmt.Errorf("load existing login password: %w", err)
+		}
+	}
+
 	formats := p.SupportedFormats
 	if formats == "" {
 		formats = `["openai"]`
 	}
 
 	_, err = db.conn.Exec(`
-		UPDATE platform SET name = ?, base_url = ?, token = ?, enabled = ?, available = ?, notes = ?, custom_headers = ?, supported_formats = ?, format_endpoints = ?, updated_at = CURRENT_TIMESTAMP
+		UPDATE platform SET name = ?, base_url = ?, token = ?, enabled = ?, available = ?, notes = ?, custom_headers = ?, supported_formats = ?, format_endpoints = ?, billing_address = ?, login_account = ?, login_password = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?
-	`, p.Name, p.BaseURL, encToken, boolToInt(p.Enabled), boolToInt(p.Available), p.Notes, p.CustomHeaders, formats, p.FormatEndpoints, p.ID)
+	`, p.Name, p.BaseURL, encToken, boolToInt(p.Enabled), boolToInt(p.Available), p.Notes, p.CustomHeaders, formats, p.FormatEndpoints, p.BillingAddress, p.LoginAccount, encLoginPw, p.ID)
 
 	return err
 }
@@ -1640,6 +1695,60 @@ func (db *DB) GetPlatformKeys(platformID int64) ([]models.PlatformKey, error) {
 		       expires_at, is_free
 		FROM platform_keys WHERE platform_id = ? ORDER BY key_index ASC
 	`, platformID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	keys := make([]models.PlatformKey, 0)
+	for rows.Next() {
+		var k models.PlatformKey
+		var encToken string
+		var enabled sql.NullInt64
+		var failedAt sql.NullTime
+		var expiresAt sql.NullTime
+		var created, updated sql.NullTime
+		var isFree int
+		if err := rows.Scan(&k.ID, &k.PlatformID, &k.KeyIndex, &encToken, &k.Label, &enabled,
+			&k.FailureType, &k.FailureReason, &failedAt, &created, &updated,
+			&expiresAt, &isFree); err != nil {
+			return nil, err
+		}
+		var decErr error
+		if k.Token, decErr = crypto.Decrypt(encToken); decErr != nil {
+			return nil, fmt.Errorf("decrypt platform_key %d: %w", k.ID, decErr)
+		}
+		k.Enabled = enabled.Int64 != 0
+		k.IsFree = isFree != 0
+		if failedAt.Valid {
+			k.FailedAt = &failedAt.Time
+		}
+		if expiresAt.Valid {
+			k.ExpiresAt = &expiresAt.Time
+		}
+		if created.Valid {
+			k.CreatedAt = created.Time
+		}
+		if updated.Valid {
+			k.UpdatedAt = updated.Time
+		}
+		keys = append(keys, k)
+	}
+	return keys, nil
+}
+
+// GetAllPlatformKeys returns every platform key across all platforms.
+// Used by insights/health aggregation to avoid N+1 per-platform queries.
+func (db *DB) GetAllPlatformKeys() ([]models.PlatformKey, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	rows, err := db.conn.Query(`
+		SELECT id, platform_id, key_index, token, label, enabled,
+		       failure_type, failure_reason, failed_at, created_at, updated_at,
+		       expires_at, is_free
+		FROM platform_keys ORDER BY platform_id ASC, key_index ASC
+	`)
 	if err != nil {
 		return nil, err
 	}
@@ -2704,59 +2813,3 @@ func (db *DB) SetRAPISortOrder(ids []int64) error {
 
 // ============ Change Log ============
 
-// ChangeLogEntry records a single create/update/delete event on a managed entity
-// (platform / rapi / lapi). Entries are transient "unread notifications": the UI
-// shows them until the user expands the banner, at which point they are cleared.
-type ChangeLogEntry struct {
-	ID         int64     `json:"id"`
-	EntityType string    `json:"entity_type"` // platform | rapi | lapi
-	EntityID   int64     `json:"entity_id"`
-	Action     string    `json:"action"` // create | update | delete
-	Name       string    `json:"name"`
-	Detail     string    `json:"detail"`
-	CreatedAt  time.Time `json:"created_at"`
-}
-
-// AddChangeLog records one change event.
-func (db *DB) AddChangeLog(entityType, action string, entityID int64, name, detail string) {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	// Best-effort: a logging failure must not break the calling CUD flow.
-	db.conn.Exec(`INSERT INTO change_log (entity_type, entity_id, action, name, detail) VALUES (?, ?, ?, ?, ?)`,
-		entityType, entityID, action, name, detail)
-}
-
-// GetChangeLogs returns all unread change-log entries, newest first.
-func (db *DB) GetChangeLogs() ([]ChangeLogEntry, error) {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
-
-	rows, err := db.conn.Query(`SELECT id, entity_type, entity_id, action, name, detail, created_at FROM change_log ORDER BY id DESC`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	entries := make([]ChangeLogEntry, 0)
-	for rows.Next() {
-		var e ChangeLogEntry
-		if err := rows.Scan(&e.ID, &e.EntityType, &e.EntityID, &e.Action, &e.Name, &e.Detail, &e.CreatedAt); err != nil {
-			return nil, err
-		}
-		entries = append(entries, e)
-	}
-	return entries, rows.Err()
-}
-
-// ClearChangeLogs removes all change-log entries (called when the user expands
-// and acknowledges the banner). Returns the number of rows removed.
-func (db *DB) ClearChangeLogs() (int64, error) {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	res, err := db.conn.Exec(`DELETE FROM change_log`)
-	if err != nil {
-		return 0, err
-	}
-	n, _ := res.RowsAffected()
-	return n, nil
-}

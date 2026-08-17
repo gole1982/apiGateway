@@ -44,10 +44,187 @@
         }
 
         /* LAYOUT CONFIG */
-        .app-layout {
+        .topbar {
+            position: sticky;
+            top: 0;
+            z-index: 500;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            height: 64px;
+            padding: 0 24px;
+            background: rgba(8, 10, 24, 0.92);
+            border-bottom: 1px solid var(--border-glow);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+        }
+        .topbar-brand { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+        .topbar-brand .brand-logo { width: 30px; height: 30px; }
+        .topbar-version {
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            color: var(--text-muted);
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.08);
+            padding: 2px 8px;
+            border-radius: 20px;
+            white-space: nowrap;
+        }
+        .topbar-search { position: relative; flex: 1 1 auto; max-width: 480px; }
+        .topbar-search input {
+            width: 100%;
+            background: rgba(0,0,0,0.35);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 10px;
+            padding: 9px 14px 9px 36px;
+            color: #fff;
+            font-size: 0.9rem;
+            transition: all 0.2s ease;
+        }
+        .topbar-search input:focus {
+            outline: none;
+            border-color: var(--color-primary);
+            box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.12);
+        }
+        .topbar-search .search-icon-svg { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); }
+        .search-results {
+            position: absolute;
+            top: calc(100% + 8px);
+            left: 0;
+            right: 0;
+            background: var(--bg-solid);
+            border: 1px solid var(--border-glow);
+            border-radius: 12px;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.7);
+            max-height: 360px;
+            overflow-y: auto;
+            z-index: 600;
+            padding: 6px;
+        }
+        .search-result-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 9px 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.88rem;
+        }
+        .search-result-item:hover, .search-result-item.active { background: rgba(56, 189, 248, 0.08); }
+        .search-result-menu {
+            font-size: 0.72rem;
+            font-weight: 600;
+            padding: 1px 8px;
+            border-radius: 4px;
+            flex-shrink: 0;
+        }
+        .search-result-name { color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .search-result-sub { color: var(--text-muted); font-size: 0.74rem; margin-left: auto; flex-shrink: 0; }
+        .search-empty { padding: 16px; text-align: center; color: var(--text-muted); font-size: 0.82rem; }
+        .search-hint { padding: 6px 12px; color: var(--text-muted); font-size: 0.72rem; }
+
+        .topbar-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+        .topbar-icon {
+            position: relative;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.08);
+            color: var(--text-primary);
+            border-radius: 10px;
+            width: 38px;
+            height: 38px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-size: 1rem;
+            transition: all 0.2s ease;
+        }
+        .topbar-icon:hover { background: rgba(255,255,255,0.09); }
+        .unread-dot {
+            position: absolute;
+            top: -5px;
+            right: -5px;
+            min-width: 18px;
+            height: 18px;
+            padding: 0 4px;
+            border-radius: 20px;
+            background: var(--color-danger);
+            color: #fff;
+            font-size: 0.68rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: var(--font-mono);
+            box-shadow: 0 0 8px rgba(244, 63, 94, 0.5);
+        }
+        .unread-wrap { position: relative; }
+        .unread-panel {
+            position: absolute;
+            top: calc(100% + 10px);
+            right: 0;
+            width: 360px;
+            max-height: 480px;
+            overflow-y: auto;
+            background: var(--bg-solid);
+            border: 1px solid var(--border-glow);
+            border-radius: 14px;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.7);
+            z-index: 600;
+        }
+        .unread-panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 16px;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            font-weight: 600;
+            font-size: 0.9rem;
+        }
+        .unread-menu-group { padding: 8px 12px; }
+        .unread-menu-title {
+            font-size: 0.74rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 6px 4px;
+            display: flex;
+            justify-content: space-between;
+        }
+        .unread-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 7px 8px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.84rem;
+        }
+        .unread-item:hover { background: rgba(255,255,255,0.04); }
+        .unread-item-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+        .unread-item-title { color: #fff; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .unread-item-time { color: var(--text-muted); font-size: 0.68rem; flex-shrink: 0; }
+
+        .nav-badge {
+            margin-left: auto;
+            min-width: 18px;
+            height: 18px;
+            padding: 0 5px;
+            border-radius: 20px;
+            background: rgba(244,63,94,0.18);
+            color: var(--color-danger);
+            font-size: 0.7rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: var(--font-mono);
+        }
+
+        .content-row {
             display: grid;
             grid-template-columns: 260px 1fr;
-            min-height: 100vh;
+            min-height: calc(100vh - 64px);
         }
 
         /* SIDEBAR */
@@ -61,6 +238,10 @@
             backdrop-filter: blur(20px);
             -webkit-backdrop-filter: blur(20px);
             z-index: 100;
+            position: sticky;
+            top: 64px;
+            height: calc(100vh - 64px);
+            overflow-y: auto;
         }
         .brand {
             display: flex;
@@ -183,7 +364,7 @@
         main {
             padding: 35px 40px;
             overflow-y: auto;
-            max-height: 100vh;
+            max-height: calc(100vh - 64px);
         }
         header {
             display: flex;
@@ -1443,16 +1624,77 @@
     </style>
 </head>
 <body>
-    <div id="app" class="app-layout">
+    <div id="app">
+        <!-- FIXED TOP BAR (network-device style: static across menus) -->
+        <header class="topbar">
+            <div class="topbar-brand">
+                <div class="brand-logo">
+                    <svg viewBox="0 0 24 24"><path d="M12 2L2 22h20L12 2zm0 3.6L18.4 18H5.6L12 5.6zM11 10v4h2v-4h-2zm0 6v2h2v-2h-2z"/></svg>
+                </div>
+                <div class="brand-name">API Gateway</div>
+                <span class="topbar-version">v{{ appVersion }}</span>
+            </div>
+            <div class="topbar-search">
+                <svg class="search-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                <input type="text" placeholder="全局搜索：平台 / 密钥 / 模型 / 接口"
+                       v-model="globalSearchQuery"
+                       @input="onGlobalSearchInput"
+                       @focus="onGlobalSearchInput"
+                       @keydown.down.prevent="moveSearchSelection(1)"
+                       @keydown.up.prevent="moveSearchSelection(-1)"
+                       @keydown.enter.prevent="chooseSearchResult(searchSelection)"
+                       @keydown.esc.prevent="clearGlobalSearch"
+                       @blur="onSearchBlur" />
+                <div v-if="showSearchResults" class="search-results">
+                    <div v-if="globalSearchCandidates.length === 0" class="search-empty">无匹配结果</div>
+                    <div v-for="(c, i) in globalSearchCandidates" :key="c.key"
+                         class="search-result-item" :class="{ active: i === searchSelection }"
+                         @mousedown.prevent="chooseSearchResult(i)" @mouseenter="searchSelection = i">
+                        <span class="search-result-menu" :style="searchMenuStyle(c.menu)">{{ searchMenuLabel(c.menu) }}</span>
+                        <span class="search-result-name">{{ c.name }}</span>
+                        <span class="search-result-sub">{{ c.sub }}</span>
+                    </div>
+                </div>
+            </div>
+            <div class="topbar-actions">
+                <div class="unread-wrap">
+                    <button class="topbar-icon" @click="unreadPanelOpen = !unreadPanelOpen" title="未读信息">
+                        🔔
+                        <span v-if="totalUnread > 0" class="unread-dot">{{ totalUnread > 99 ? '99+' : totalUnread }}</span>
+                    </button>
+                    <div v-if="unreadPanelOpen" class="unread-panel">
+                        <div class="unread-panel-header">
+                            <span>未读信息</span>
+                            <button class="btn btn-secondary btn-sm" @click="markAllRead">全部已读</button>
+                        </div>
+                        <div v-if="unreadItems.length === 0" class="search-empty">暂无未读信息</div>
+                        <template v-for="(items, menu) in unreadGrouped" :key="menu">
+                            <div class="unread-menu-group">
+                                <div class="unread-menu-title">
+                                    <span>{{ searchMenuLabel(menu) }}</span>
+                                    <span>{{ items.length }}</span>
+                                </div>
+                                <div v-for="it in items" :key="it.id" class="unread-item" @click="openUnreadItem(it)">
+                                    <span class="unread-item-dot" :style="{ background: unreadDotColor(it.kind) }"></span>
+                                    <span class="unread-item-title" :title="it.title">{{ it.title }}</span>
+                                    <span class="unread-item-time">{{ unreadTime(it.created_at) }}</span>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+                <button class="btn btn-primary btn-sm" @click="openAddWizard">＋ 新增</button>
+                <button class="topbar-icon" @click="helpModal = true" title="帮助">?</button>
+                <button class="topbar-icon" @click="refreshData" title="刷新数据">
+                    <svg style="width:16px;height:16px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                </button>
+            </div>
+        </header>
+
+        <div class="content-row">
         <!-- SIDEBAR -->
         <aside>
             <div>
-                <div class="brand">
-                    <div class="brand-logo">
-                        <svg viewBox="0 0 24 24"><path d="M12 2L2 22h20L12 2zm0 3.6L18.4 18H5.6L12 5.6zM11 10v4h2v-4h-2zm0 6v2h2v-2h-2z"/></svg>
-                    </div>
-                    <div class="brand-name">API Gateway</div>
-                </div>
                 <ul class="nav-links">
                     <li class="nav-item">
                         <button :class="{ active: activeTab === 'dashboard' }" @click="setTab('dashboard')">
@@ -1464,18 +1706,28 @@
                         <button :class="{ active: activeTab === 'platforms' }" @click="setTab('platforms')">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 10h16M4 14h16M4 18h16M4 6h16"/></svg>
                             平台管理
+                            <span v-if="unreadCounts.platforms" class="nav-badge">{{ unreadCounts.platforms }}</span>
+                        </button>
+                    </li>
+                    <li class="nav-item">
+                        <button :class="{ active: activeTab === 'keys' }" @click="setTab('keys')">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="7.5" cy="15.5" r="5.5"/><path d="M21 2l-9.6 9.6"/><path d="M15.5 7.5l3 3L22 7l-3-3"/></svg>
+                            密钥管理
+                            <span v-if="unreadCounts.keys" class="nav-badge">{{ unreadCounts.keys }}</span>
                         </button>
                     </li>
                     <li class="nav-item">
                         <button :class="{ active: activeTab === 'rapis' }" @click="setTab('rapis')">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
                             模型管理
+                            <span v-if="unreadCounts.models" class="nav-badge">{{ unreadCounts.models }}</span>
                         </button>
                     </li>
                     <li class="nav-item">
                         <button :class="{ active: activeTab === 'lapis' }" @click="setTab('lapis')">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
                             接口管理
+                            <span v-if="unreadCounts.interfaces" class="nav-badge">{{ unreadCounts.interfaces }}</span>
                         </button>
                     </li>
                     <li class="nav-item">
@@ -1501,57 +1753,6 @@
 
         <!-- MAIN PANEL -->
         <main>
-            <header>
-                <div class="header-title">
-                    <h1>{{ getTabTitle() }}</h1>
-                    <p>{{ getTabSubtitle() }}</p>
-                </div>
-                <div class="header-actions">
-                    <button class="btn btn-secondary btn-sm" @click="refreshData">
-                        <svg style="width:16px;height:16px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
-                        刷新数据
-                    </button>
-                    <button v-if="activeTab === 'logs'" class="btn btn-primary btn-sm" @click="openPlayground">
-                        ⚡ 调试 Playground
-                    </button>
-                </div>
-            </header>
-
-            <!-- CHANGE NOTIFICATION BANNER: shows on platform/model/interface tabs.
-                 Collapsed → slim bar with NEW badge; expand → list entries + clear backend. -->
-            <div v-if="(activeTab === 'platforms' || activeTab === 'rapis' || activeTab === 'lapis') && changeLog.entries.length > 0"
-                 style="margin-bottom:16px;border:1px solid rgba(59,130,246,0.3);border-radius:10px;overflow:hidden;background:rgba(59,130,246,0.06);">
-                <!-- Collapsed bar -->
-                <div v-if="!changeLog.expanded"
-                     @click="expandChangeLog"
-                     style="display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;">
-                    <svg style="width:16px;height:16px;color:var(--color-info,#3b82f6);flex-shrink:0;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-                    <span style="font-size:0.88rem;font-weight:600;color:var(--text-primary);">变更提示</span>
-                    <span style="font-size:0.66rem;font-weight:700;color:#fff;background:var(--color-info,#3b82f6);border-radius:4px;padding:1px 6px;letter-spacing:0.5px;">NEW</span>
-                    <span style="font-size:0.8rem;color:var(--text-secondary);">{{ changeLog.entries.length }} 条未读变更</span>
-                    <span style="margin-left:auto;font-size:0.76rem;color:var(--text-muted);">点击展开查看 ›</span>
-                </div>
-                <!-- Expanded list -->
-                <div v-else style="padding:12px 14px;">
-                    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
-                        <span style="font-size:0.88rem;font-weight:600;color:var(--text-primary);">变更记录</span>
-                        <span style="font-size:0.72rem;color:var(--text-muted);">{{ changeLog.entries.length }} 条（已标记为已读）</span>
-                        <button class="btn btn-secondary btn-sm" style="margin-left:auto;padding:3px 10px;font-size:0.76rem;" @click="collapseChangeLog" :disabled="changeLog.clearing">收起</button>
-                    </div>
-                    <div style="max-height:240px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;">
-                        <div v-for="e in changeLog.entries" :key="e.id"
-                             style="display:flex;align-items:center;gap:10px;padding:6px 10px;background:rgba(0,0,0,0.2);border-radius:6px;">
-                            <span style="font-size:0.68rem;font-weight:600;padding:1px 6px;border-radius:4px;flex-shrink:0;"
-                                  :style="{ color: changeLogColor(e), background: 'rgba(255,255,255,0.04)', border: '1px solid ' + changeLogColor(e) }">
-                                {{ changeLogLabel(e) }}
-                            </span>
-                            <span style="font-family:var(--font-mono);font-size:0.8rem;color:var(--text-primary);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" :title="e.name">{{ e.name || '—' }}</span>
-                            <span v-if="e.detail" style="font-size:0.72rem;color:var(--text-muted);flex-shrink:0;">{{ e.detail }}</span>
-                            <span style="font-size:0.68rem;color:var(--text-muted);flex-shrink:0;white-space:nowrap;">{{ e.created_at }}</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
 
             <!-- TABS CONTENT -->
             <!-- 1. DASHBOARD OVERVIEW -->
@@ -1575,46 +1776,75 @@
 
                 <!-- Health row: Cooling + Error breakdown -->
                 <div v-show="!insightFilter || insightFilter === 'cooling' || insightFilter === 'error'" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;">
-                    <!-- Cooling RAPIs & Keys -->
+                    <!-- Cooling resources: hierarchical 平台 → 平台-key → 平台-key-模型 -->
                     <div v-show="!insightFilter || insightFilter === 'cooling'" class="glass-card" style="padding:18px;">
                         <div class="card-header-row" style="margin-bottom:12px;">
                             <span class="card-title">
                                 <svg style="width:15px;height:15px;" viewBox="0 0 24 24" fill="none" stroke="var(--color-warning)" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                                 冷却中的资源
                             </span>
-                            <span style="font-size:0.78rem;color:var(--text-muted);">调度器自动管理 · 指数退避</span>
+                            <span style="font-size:0.78rem;color:var(--text-muted);">平台 → 密钥 → 模型 · 点击跳转</span>
                         </div>
-                        <div v-if="insightData.health.cooling_rapis.length === 0 && insightData.health.cooling_keys.length === 0"
+                        <div v-if="coolingTree.length === 0"
                              style="text-align:center;color:var(--text-muted);padding:24px 0;font-size:0.86rem;">
                             <svg style="width:28px;height:28px;opacity:0.25;display:block;margin:0 auto 8px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
                             全部资源在线
                         </div>
-                        <div v-if="insightData.health.cooling_rapis.length > 0" style="margin-bottom:12px;">
-                            <div style="font-size:0.76rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.4px;margin-bottom:6px;">模型冷却</div>
-                            <div v-for="cr in insightData.health.cooling_rapis" :key="cr.id"
-                                 style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.03);font-size:0.84rem;">
-                                <span :style="{ width:'6px', height:'6px', borderRadius:'50%', flexShrink:0,
-                                    background: cr.invalidated ? 'var(--color-danger)' : 'var(--color-warning)',
-                                    boxShadow: '0 0 5px ' + (cr.invalidated ? 'var(--color-danger)' : 'var(--color-warning)') }"></span>
-                                <span style="font-family:var(--font-mono);font-weight:600;">{{ cr.alias || '模型-' + cr.id }}</span>
-                                <span v-if="cr.invalidated" style="font-size:0.72rem;padding:1px 5px;border-radius:3px;background:rgba(244,63,94,0.12);color:var(--color-danger);">已禁用</span>
-                                <span v-else style="font-size:0.72rem;color:var(--text-muted);">×{{ cr.consecutive_failures }}</span>
-                                <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-muted);font-size:0.78rem;" :title="cr.reason">{{ cr.reason }}</span>
-                                <span v-if="!cr.invalidated && cr.recover_at" style="font-size:0.76rem;font-family:var(--font-mono);color:var(--text-secondary);flex-shrink:0;">
-                                    {{ fmtCountdown(cr.recover_at) }}
-                                </span>
-                            </div>
-                        </div>
-                        <div v-if="insightData.health.cooling_keys.length > 0">
-                            <div style="font-size:0.76rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.4px;margin-bottom:6px;">密钥冷却</div>
-                            <div v-for="ck in insightData.health.cooling_keys" :key="ck.id"
-                                 style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.03);font-size:0.84rem;">
-                                <span style="width:6px;height:6px;border-radius:50%;flex-shrink:0;background:var(--color-warning);box-shadow:0 0 5px var(--color-warning);"></span>
-                                <span style="font-family:var(--font-mono);font-weight:600;">Key-{{ ck.id }}</span>
-                                <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-muted);font-size:0.78rem;" :title="ck.reason">{{ ck.reason }}</span>
-                                <span style="font-size:0.76rem;font-family:var(--font-mono);color:var(--text-secondary);flex-shrink:0;">
-                                    {{ fmtCountdown(ck.recover_at) }}
-                                </span>
+                        <div v-else style="display:flex;flex-direction:column;gap:8px;">
+                            <div v-for="grp in coolingTree" :key="'plat-'+grp.platform_id"
+                                 style="border:1px solid rgba(255,255,255,0.06);border-radius:8px;padding:8px 10px;">
+                                <!-- 平台层 -->
+                                <div style="display:flex;align-items:center;gap:8px;cursor:pointer;"
+                                     @click="jumpToPlatform(grp.platform_id)"
+                                     :title="'点击跳转到平台「' + grp.platform_name + '」配置'">
+                                    <svg style="width:13px;height:13px;flex-shrink:0;" viewBox="0 0 24 24" fill="none" stroke="var(--color-warning)" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
+                                    <span style="font-weight:700;font-size:0.86rem;">{{ grp.platform_name || ('平台-'+grp.platform_id) }}</span>
+                                    <span v-if="grp.keyCount > 0" style="font-size:0.72rem;padding:1px 7px;border-radius:4px;background:rgba(245,158,11,0.12);color:var(--color-warning);">密钥 ×{{ grp.keyCount }}</span>
+                                    <span v-if="grp.modelCount > 0" style="font-size:0.72rem;padding:1px 7px;border-radius:4px;background:rgba(56,189,248,0.12);color:var(--color-primary);">模型 ×{{ grp.modelCount }}</span>
+                                    <span style="flex:1;"></span>
+                                    <a v-if="grp.billing_address" :href="grp.billing_address" target="_blank" rel="noopener noreferrer"
+                                       @click.stop title="打开账单地址"
+                                       style="font-size:0.76rem;color:var(--color-primary);text-decoration:none;flex-shrink:0;border:1px solid rgba(56,189,248,0.25);padding:1px 7px;border-radius:4px;">账单 ↗</a>
+                                    <span style="font-size:0.74rem;color:var(--text-secondary);flex-shrink:0;">配置 ›</span>
+                                </div>
+                                <!-- 平台-key 层 -->
+                                <div v-for="k in grp.keys" :key="'key-'+k.id" style="margin-top:6px;">
+                                    <div style="cursor:pointer;display:flex;align-items:center;gap:8px;padding:5px 0 5px 10px;border-left:2px solid rgba(245,158,11,0.35);font-size:0.84rem;"
+                                         @click="jumpToPlatform(grp.platform_id)" :title="'点击跳转到平台「' + grp.platform_name + '」'">
+                                        <span style="width:6px;height:6px;border-radius:50%;flex-shrink:0;background:var(--color-warning);box-shadow:0 0 5px var(--color-warning);"></span>
+                                        <span style="font-family:var(--font-mono);font-weight:600;">{{ k.label || ('Key#'+k.key_index) }}</span>
+                                        <span style="font-size:0.72rem;color:var(--text-muted);flex-shrink:0;">#{{ k.key_index }}</span>
+                                        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-muted);font-size:0.78rem;" :title="k.reason">{{ k.reason }}</span>
+                                        <span v-if="k.recover_at" style="font-size:0.76rem;font-family:var(--font-mono);color:var(--text-secondary);flex-shrink:0;">{{ fmtCountdown(k.recover_at) }}</span>
+                                    </div>
+                                    <!-- 平台-key-模型 层 -->
+                                    <div v-if="k.models.length > 0" style="margin-left:22px;border-left:1px dashed rgba(255,255,255,0.08);padding-left:8px;">
+                                        <div v-for="m in k.models" :key="'km-'+m.id" style="cursor:pointer;display:flex;align-items:center;gap:8px;padding:4px 0;font-size:0.8rem;"
+                                             @click="jumpToPlatform(grp.platform_id)" :title="'点击跳转到平台「' + grp.platform_name + '」'">
+                                            <span :style="{ width:'5px', height:'5px', borderRadius:'50%', flexShrink:0,
+                                                background: m.invalidated ? 'var(--color-danger)' : 'var(--color-warning)',
+                                                boxShadow: '0 0 5px ' + (m.invalidated ? 'var(--color-danger)' : 'var(--color-warning)') }"></span>
+                                            <span style="font-family:var(--font-mono);font-weight:600;">{{ m.alias || ('模型-'+m.id) }}</span>
+                                            <span v-if="m.invalidated" style="font-size:0.7rem;padding:0 5px;border-radius:3px;background:rgba(244,63,94,0.12);color:var(--color-danger);">已禁用</span>
+                                            <span v-else style="font-size:0.7rem;color:var(--text-muted);">×{{ m.consecutive_failures }}</span>
+                                            <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-muted);font-size:0.75rem;" :title="m.reason">{{ m.reason }}</span>
+                                            <span v-if="!m.invalidated && m.recover_at" style="font-size:0.74rem;font-family:var(--font-mono);color:var(--text-secondary);flex-shrink:0;">{{ fmtCountdown(m.recover_at) }}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <!-- 平台-模型 层（冷却模型，未绑定到冷却中的具体 key） -->
+                                <div v-for="m in grp.keylessModels" :key="'pm-'+m.id"
+                                     style="cursor:pointer;display:flex;align-items:center;gap:8px;padding:5px 0 5px 10px;margin-top:6px;border-left:2px solid rgba(56,189,248,0.3);font-size:0.84rem;"
+                                     @click="jumpToPlatform(grp.platform_id)" :title="'点击跳转到平台「' + grp.platform_name + '」'">
+                                    <span :style="{ width:'6px', height:'6px', borderRadius:'50%', flexShrink:0,
+                                        background: m.invalidated ? 'var(--color-danger)' : 'var(--color-warning)',
+                                        boxShadow: '0 0 5px ' + (m.invalidated ? 'var(--color-danger)' : 'var(--color-warning)') }"></span>
+                                    <span style="font-family:var(--font-mono);font-weight:600;">{{ m.alias || ('模型-'+m.id) }}</span>
+                                    <span v-if="m.invalidated" style="font-size:0.72rem;padding:1px 5px;border-radius:3px;background:rgba(244,63,94,0.12);color:var(--color-danger);">已禁用</span>
+                                    <span v-else style="font-size:0.72rem;color:var(--text-muted);">×{{ m.consecutive_failures }}</span>
+                                    <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-muted);font-size:0.78rem;" :title="m.reason">{{ m.reason }}</span>
+                                    <span v-if="!m.invalidated && m.recover_at" style="font-size:0.76rem;font-family:var(--font-mono);color:var(--text-secondary);flex-shrink:0;">{{ fmtCountdown(m.recover_at) }}</span>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -1969,7 +2199,7 @@
                     <button class="btn btn-primary" @click="openPlatformModal(null)">+ 添加平台</button>
                 </div>
                 <div class="platforms-container" id="platforms-grid">
-                    <div v-for="plat in filteredPlatforms" :key="plat.id" class="glass-card platform-card card-drag-enabled"
+                    <div v-for="plat in filteredPlatforms" :key="plat.id" :id="'el-p'+plat.id" class="glass-card platform-card card-drag-enabled"
                          draggable="true"
                          :title="(plat.notes ? plat.notes : '') + (plat.notes && plat.base_url ? ' | ' : '') + (plat.base_url ? plat.base_url : '')"
                          @dragstart="onCardDragStart($event, 'platforms', plat.id)"
@@ -2002,9 +2232,9 @@
 
                         <!-- 行2：两个徽章 -->
                         <div class="platform-badges">
-                            <!-- API令牌：密钥数 → 点击打开密钥管理 -->
+                            <!-- API令牌：密钥数 → 跳转独立的密钥管理页（按该平台过滤） -->
                             <button class="plat-badge plat-badge-key"
-                                    @click="openKeysModal(plat)">
+                                    @click="openKeysTab(plat)">
                                 <svg style="width:12px;height:12px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8" cy="15" r="4"/><path d="M12 15h8M16 11v8"/></svg>
                                 {{ (plat._keys && plat._keys.length) || 0 }} 个密钥
                                 <span v-if="platKeyAlerts(plat).perm > 0" style="color:var(--color-danger);font-size:0.68rem;font-weight:700;" title="该平台有永久失效 Key，需处理">🔴{{ platKeyAlerts(plat).perm }}</span>
@@ -2039,6 +2269,186 @@
                 </div>
             </div>
 
+            <!-- 2b. KEYS tab — independent key management (migrated from the platform keysModal) -->
+            <div v-if="activeTab === 'keys'" class="tab-pane">
+                <div style="margin-bottom:20px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+                    <div class="search-container" style="flex:1;min-width:240px;">
+                        <svg class="search-icon-svg" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+                        <input type="text" class="form-control" placeholder="模糊过滤密钥标签、Token 或平台名称..." v-model="keysSearchQuery">
+                    </div>
+                    <select class="form-control" v-model="keyPlatformFilter" style="max-width:220px;">
+                        <option value="">全部平台</option>
+                        <option v-for="p in platforms" :key="'kf-'+p.id" :value="String(p.id)">{{ p.name }}</option>
+                    </select>
+                </div>
+
+                <p style="font-size:0.82rem;color:var(--text-secondary);margin-bottom:14px;line-height:1.6;">
+                    在同一平台下配置多个 API Key，网关按顺序（#0 → #1 → …）轮试。单 Key 遭遇
+                    <span style="color:var(--color-warning);font-weight:600;">429 / 503</span> 时自动切换到下一个可用 Key，
+                    所有 Key 冷却则整体模型降级 failover。选择规则：同一平台优先尝试<b style="color:var(--color-primary,#a855f7);">免费</b> Key，同资费组中优先尝试<b>先到期</b>的 Key（用完额度再轮换）。到期后 Key 自动禁用。
+                </p>
+
+                <div v-if="keysByPlatform.length === 0" class="glass-card" style="padding:32px;text-align:center;color:var(--text-muted);">
+                    <svg style="width:30px;height:30px;opacity:0.25;display:block;margin:0 auto 8px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7.5" cy="15.5" r="5.5"/><path d="M21 2l-9.6 9.6"/></svg>
+                    {{ keysList.length === 0 ? '尚未配置任何密钥，请在下方对应平台中添加。' : '没有匹配的密钥。' }}
+                </div>
+
+                <div v-for="grp in keysByPlatform" :key="'kg-'+grp.platform_id" class="glass-card" style="padding:14px 16px;margin-bottom:16px;">
+                    <!-- 平台分组头 -->
+                    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
+                        <svg style="width:14px;height:14px;flex-shrink:0;color:var(--color-secondary);" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
+                        <span style="font-weight:700;font-size:0.92rem;">{{ grp.platform_name || ('平台-'+grp.platform_id) }}</span>
+                        <span style="font-size:0.72rem;padding:1px 7px;border-radius:4px;background:rgba(168,85,247,0.12);color:var(--color-secondary);">密钥 ×{{ grp.keys.length }}</span>
+                        <span v-if="grp.permCount > 0" style="color:var(--color-danger);font-size:0.72rem;font-weight:700;" title="该平台有永久失效 Key，需处理">🔴{{ grp.permCount }}</span>
+                        <span v-else-if="grp.coolCount > 0" style="color:var(--color-warning);font-size:0.72rem;font-weight:700;" title="该平台有冷却中的 Key">🟡{{ grp.coolCount }}</span>
+                        <span style="flex:1;"></span>
+                        <a v-if="grp.billing_address" :href="grp.billing_address" target="_blank" rel="noopener noreferrer" @click.stop title="打开账单地址"
+                           style="font-size:0.76rem;color:var(--color-primary);text-decoration:none;border:1px solid rgba(56,189,248,0.25);padding:1px 7px;border-radius:4px;">账单 ↗</a>
+                        <button class="btn btn-secondary btn-sm" @click="openPlatformModal(platforms.find(p => String(p.id) === String(grp.platform_id)))" title="编辑该平台配置">管理平台</button>
+                    </div>
+
+                    <!-- 空状态 -->
+                    <div v-if="grp.keys.length === 0" style="text-align:center;color:var(--text-muted);padding:20px 0;font-size:0.88rem;">
+                        暂无密钥记录，请在下方添加第一个 Key。
+                    </div>
+
+                    <!-- 密钥行 -->
+                    <div v-for="k in grp.keys" :key="k.id" :id="'el-k'+k.id" class="key-row" :class="{ disabled: !k.enabled }">
+                        <div class="key-index-dot">{{ k.key_index }}</div>
+                        <div style="min-width:0;flex:1;">
+                            <!-- 编辑态 -->
+                            <div v-if="keysEditId === k.id" style="margin-top:2px;">
+                                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                                    <input type="text" class="form-control" v-model="keysEditForm.label" placeholder="备注标签" style="max-width:150px;font-size:0.8rem;" maxlength="100">
+                                    <label class="checkbox-container" style="margin:0;gap:6px;font-size:0.8rem;">
+                                        <input type="checkbox" v-model="keysEditForm.is_free">
+                                        <span :style="{ color: keysEditForm.is_free ? 'var(--color-primary,#a855f7)' : 'var(--text-muted)' }">{{ keysEditForm.is_free ? '免费' : '付费' }}</span>
+                                    </label>
+                                    <input type="date" class="form-control" v-model="keysEditForm.expires_at" style="max-width:150px;font-size:0.8rem;" title="留空=永久">
+                                    <input type="text" class="form-control" v-model="keysEditForm.token" placeholder="新 Token（留空=不变）" style="max-width:220px;font-family:var(--font-mono);font-size:0.8rem;" autocomplete="off" spellcheck="false">
+                                    <button class="btn btn-primary btn-sm" @click="saveKeyEditFlat(k)">保存</button>
+                                    <button class="btn btn-secondary btn-sm" @click="keysEditId = null">取消</button>
+                                </div>
+                            </div>
+                            <!-- 展示态 -->
+                            <div v-else style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                                <div class="key-token-display" :title="k.token">{{ maskToken(k.token) }}</div>
+                                <div class="key-label-tag">{{ k.label || '未命名' }}</div>
+                                <!-- 免费 / 付费徽标 -->
+                                <span v-if="k.is_free"
+                                      style="display:inline-flex;align-items:center;gap:3px;font-size:0.7rem;padding:1px 8px;border-radius:12px;font-weight:600;background:rgba(168,85,247,0.1);color:var(--color-primary,#a855f7);border:1px solid rgba(168,85,247,0.3);">
+                                    免费
+                                </span>
+                                <span v-else
+                                      style="display:inline-flex;align-items:center;gap:3px;font-size:0.7rem;padding:1px 8px;border-radius:12px;font-weight:600;background:rgba(100,116,139,0.1);color:var(--text-secondary);border:1px solid rgba(100,116,139,0.25);">
+                                    付费
+                                </span>
+                                <!-- 有效期徽标 -->
+                                <span v-if="k.expires_at && isKeyExpired(k)"
+                                      :title="'已于 ' + formatKeyExpiry(k.expires_at) + ' 过期'"
+                                      style="display:inline-flex;align-items:center;gap:3px;font-size:0.7rem;padding:1px 8px;border-radius:12px;font-weight:600;background:rgba(239,68,68,0.12);color:var(--color-danger);border:1px solid rgba(239,68,68,0.35);">
+                                    ⌛ 已过期 {{ formatKeyExpiry(k.expires_at) }}
+                                </span>
+                                <span v-else-if="k.expires_at"
+                                      :title="'到期 ' + formatKeyExpiry(k.expires_at)"
+                                      style="display:inline-flex;align-items:center;gap:3px;font-size:0.7rem;padding:1px 8px;border-radius:12px;font-weight:600;background:rgba(59,130,246,0.1);color:#3b82f6;border:1px solid rgba(59,130,246,0.3);">
+                                    ⏱ 到期 {{ formatKeyExpiry(k.expires_at) }}
+                                </span>
+                                <span v-else
+                                      style="display:inline-flex;align-items:center;gap:3px;font-size:0.7rem;padding:1px 8px;border-radius:12px;font-weight:600;background:rgba(100,116,139,0.08);color:var(--text-muted);border:1px solid rgba(100,116,139,0.2);">
+                                    ♾ 永久
+                                </span>
+                                <!-- 失败状态徽标 -->
+                                <span v-if="k.failure_type === 2"
+                                      :title="k.failure_reason"
+                                      style="display:inline-flex;align-items:center;gap:3px;font-size:0.7rem;padding:1px 8px;border-radius:12px;font-weight:600;background:rgba(239,68,68,0.1);color:var(--color-danger);border:1px solid rgba(239,68,68,0.3);">
+                                    🔴 永久失效·需处理
+                                </span>
+                                <span v-else-if="k.failure_type === 1"
+                                      :title="k.failure_reason"
+                                      style="display:inline-flex;align-items:center;gap:3px;font-size:0.7rem;padding:1px 8px;border-radius:12px;font-weight:600;background:rgba(245,158,11,0.1);color:var(--color-warning);border:1px solid rgba(245,158,11,0.3);">
+                                    🟡 临时冷却
+                                </span>
+                                <span v-else-if="!k.enabled"
+                                      style="display:inline-flex;align-items:center;gap:3px;font-size:0.7rem;padding:1px 8px;border-radius:12px;font-weight:600;background:rgba(100,116,139,0.1);color:var(--text-muted);border:1px solid rgba(100,116,139,0.25);">
+                                    ⚫ 已禁用
+                                </span>
+                                <span v-else
+                                      style="display:inline-flex;align-items:center;gap:3px;font-size:0.7rem;padding:1px 8px;border-radius:12px;font-weight:600;background:rgba(34,197,94,0.1);color:var(--color-success);border:1px solid rgba(34,197,94,0.3);">
+                                    🟢 正常
+                                </span>
+                            </div>
+                            <div v-if="k.failure_reason" style="font-size:0.72rem;color:var(--text-muted);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                                {{ k.failure_reason }}
+                            </div>
+                            <!-- 关联模型：白名单引用或平台下可用模型 -->
+                            <div v-if="k.models && k.models.length" style="margin-top:5px;display:flex;flex-wrap:wrap;gap:4px;">
+                                <span v-for="m in k.models" :key="'km-'+k.id+'-'+m.id"
+                                      :title="m.blocked ? ('已被限制服务该模型：' + (m.reason || '')) : ('可服务模型 ' + m.model)"
+                                      :style="{ display:'inline-flex', alignItems:'center', fontSize:'0.7rem', padding:'1px 7px', borderRadius:'4px',
+                                          background: m.blocked ? 'rgba(239,68,68,0.1)' : 'rgba(56,189,248,0.08)',
+                                          color: m.blocked ? 'var(--color-danger)' : 'var(--color-primary)',
+                                          border:'1px solid ' + (m.blocked ? 'rgba(239,68,68,0.25)' : 'rgba(56,189,248,0.2)') }">
+                                    <span v-if="m.blocked" style="margin-right:3px;">🔒</span>{{ m.alias || ('模型-'+m.id) }}
+                                </span>
+                            </div>
+                        </div>
+                        <div class="key-actions">
+                            <label class="checkbox-container" style="margin:0;gap:6px;font-size:0.8rem;" :title="k.enabled ? '点击禁用' : '点击启用'">
+                                <input type="checkbox" :checked="k.enabled" @change="toggleKeyFlat(k)">
+                                <span :style="{ color: k.enabled ? 'var(--color-success)' : 'var(--text-muted)' }">
+                                    {{ k.enabled ? '启用' : '禁用' }}
+                                </span>
+                            </label>
+                        </div>
+                        <div class="key-actions">
+                            <button class="btn btn-secondary btn-sm" @click="openKeyEditFlat(k)" title="修改标签/免费属性/有效期/Token">编辑</button>
+                            <button v-if="k.failure_type === 2"
+                                    class="btn btn-secondary btn-sm"
+                                    @click="probeKeyFlat(k)"
+                                    title="重置失败状态（会发探测请求验证 key 是否恢复）"
+                                    style="white-space:nowrap;">
+                                重置状态
+                            </button>
+                            <button class="btn btn-secondary btn-sm btn-icon" @click="copyToken(k.token)" title="复制密钥">
+                                <svg style="width:13px;height:13px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                            </button>
+                            <button class="btn btn-danger btn-sm btn-icon" @click="deleteKeyFlat(k)" title="删除此 Key">
+                                <svg style="width:13px;height:13px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 添加新 Key（本平台） -->
+                    <div class="add-key-row" style="grid-template-columns: 2fr 1.5fr 1fr 1fr auto;">
+                        <div>
+                            <label style="font-size:0.78rem;color:var(--text-secondary);display:block;margin-bottom:5px;">API Key / Token</label>
+                            <input type="text" class="form-control" placeholder="sk-..." v-model="keysAdd[grp.platform_id].token" style="font-family:var(--font-mono);font-size:0.85rem;">
+                        </div>
+                        <div>
+                            <label style="font-size:0.78rem;color:var(--text-secondary);display:block;margin-bottom:5px;">备注标签 (可选)</label>
+                            <input type="text" class="form-control" placeholder="例如: 账号A、主Key" v-model="keysAdd[grp.platform_id].label">
+                        </div>
+                        <div>
+                            <label style="font-size:0.78rem;color:var(--text-secondary);display:block;margin-bottom:5px;">是否免费 Key</label>
+                            <label class="checkbox-container" style="margin:0;gap:6px;font-size:0.85rem;">
+                                <input type="checkbox" v-model="keysAdd[grp.platform_id].is_free">
+                                <span :style="{ color: keysAdd[grp.platform_id].is_free ? 'var(--color-primary,#a855f7)' : 'var(--text-muted)' }">
+                                    {{ keysAdd[grp.platform_id].is_free ? '免费' : '付费' }}
+                                </span>
+                            </label>
+                        </div>
+                        <div>
+                            <label style="font-size:0.78rem;color:var(--text-secondary);display:block;margin-bottom:5px;">有效期 (可选, 留空=永久)</label>
+                            <input type="date" class="form-control" v-model="keysAdd[grp.platform_id].expires_at" style="font-size:0.85rem;">
+                        </div>
+                        <div style="display:flex;align-items:flex-end;">
+                            <button class="btn btn-primary" :disabled="!keysAdd[grp.platform_id].token.trim()" @click="addKeyFlat(grp.platform_id)" style="white-space:nowrap;">+ 添加</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- 3. RAPI tab -->
             <div v-if="activeTab === 'rapis'" class="tab-pane">
                 <div style="margin-bottom:20px;display:flex;justify-content:space-between;align-items:center;">
@@ -2063,7 +2473,7 @@
                             </tr>
                         </thead>
                         <tbody>
-                            <tr v-for="rapi in filteredRapis" :key="rapi.id"
+                            <tr v-for="rapi in filteredRapis" :key="rapi.id" :id="'el-r'+rapi.id"
                                 draggable="true"
                                 @dragstart="onCardDragStart($event, 'rapis', rapi.id)"
                                 @dragover.prevent="onCardDragOver($event)"
@@ -2172,7 +2582,7 @@
                             </tr>
                         </thead>
                         <tbody>
-                            <tr v-for="lapi in filteredLapis" :key="lapi.id"
+                            <tr v-for="lapi in filteredLapis" :key="lapi.id" :id="'el-l'+lapi.id"
                                 draggable="true"
                                 @dragstart="onCardDragStart($event, 'lapis', lapi.id)"
                                 @dragover.prevent="onCardDragOver($event)"
@@ -2280,6 +2690,7 @@
                                 <option v-for="l in lapis" :value="l.alias">{{ l.alias }}</option>
                             </select>
                             <button class="btn btn-secondary" style="padding:10px;" @click="clearLogs" title="清空数据库全部日志记录">🗑️ 清理</button>
+                            <button class="btn btn-primary" style="padding:10px;" @click="openPlayground">⚡ Playground</button>
                         </div>
 
                         <div class="logs-list-items">
@@ -2420,82 +2831,55 @@
                             </small>
                         </div>
 
-                        <!-- ═══ API 密钥区 ═══ -->
+                        <!-- ═══ 平台账号 / 账单区 ═══ -->
                         <div style="margin-top:16px;">
-                            <!-- 密钥列表 -->
-                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-                                <label style="font-weight:600;">API 密钥列表</label>
-                                <small style="color:var(--text-muted);">多个 Key 按顺序轮换，遭遇 429/503 自动切换</small>
+                            <!-- 账单地址 + 外链 -->
+                            <div class="form-group" style="margin-bottom:12px;">
+                                <label style="margin:0 0 6px 0;display:block;">账单地址 (Billing URL)</label>
+                                <div style="display:flex;gap:8px;">
+                                    <input type="text" class="form-control" placeholder="https://console.provider.com/billing（可选）"
+                                           v-model="platformModal.form.billing_address"
+                                           maxlength="512" autocomplete="off" spellcheck="false" style="flex:1;">
+                                    <a v-if="platformModal.form.billing_address" :href="platformModal.form.billing_address" target="_blank" rel="noopener noreferrer"
+                                       class="btn btn-secondary btn-sm" style="white-space:nowrap;display:inline-flex;align-items:center;gap:5px;">
+                                        <svg style="width:13px;height:13px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                                        打开
+                                    </a>
+                                </div>
                             </div>
-                            <div v-if="platformModal.inlineKeys.length === 0" style="text-align:center;color:var(--text-muted);padding:16px 0;font-size:0.9rem;border:1px dashed rgba(255,255,255,0.1);border-radius:8px;">
-                                暂无密钥，请在下方添加第一个 Key
-                            </div>
-                            <div v-for="(k, idx) in platformModal.inlineKeys" :key="idx" class="key-row" :class="{ disabled: !k.enabled }" style="margin-bottom:6px;">
-                                <div class="key-index-dot">{{ idx }}</div>
-                                <div style="min-width:0;flex:1;">
-                                    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-                                        <div class="key-token-display" :title="k.token">{{ maskToken(k.token) }}</div>
-                                        <div class="key-label-tag">{{ k.label || '未命名' }}</div>
-                                        <span v-if="k.is_free"
-                                              style="display:inline-flex;align-items:center;gap:3px;font-size:0.7rem;padding:1px 8px;border-radius:12px;font-weight:600;background:rgba(168,85,247,0.1);color:var(--color-primary,#a855f7);border:1px solid rgba(168,85,247,0.3);">
-                                            免费
-                                        </span>
-                                        <span v-if="k.expires_at && isKeyExpired(k)"
-                                              style="display:inline-flex;align-items:center;gap:3px;font-size:0.7rem;padding:1px 8px;border-radius:12px;font-weight:600;background:rgba(239,68,68,0.12);color:var(--color-danger);border:1px solid rgba(239,68,68,0.35);">
-                                            ⌛ 已过期 {{ formatKeyExpiry(k.expires_at) }}
-                                        </span>
-                                        <span v-else-if="k.expires_at"
-                                              style="display:inline-flex;align-items:center;gap:3px;font-size:0.7rem;padding:1px 8px;border-radius:12px;font-weight:600;background:rgba(59,130,246,0.1);color:#3b82f6;border:1px solid rgba(59,130,246,0.3);">
-                                            ⏱ 到期 {{ formatKeyExpiry(k.expires_at) }}
-                                        </span>
+
+                            <div class="form-control-row">
+                                <div class="form-group" style="flex:1;">
+                                    <label style="margin:0 0 6px 0;display:block;">登录账号 (可选)</label>
+                                    <input type="text" class="form-control" placeholder="提供商控制台登录账号"
+                                           v-model="platformModal.form.login_account"
+                                           maxlength="200" autocomplete="off" spellcheck="false">
+                                </div>
+                                <div class="form-group" style="flex:1;">
+                                    <label style="margin:0 0 6px 0;display:block;">登录密码 (可选，留空=不修改)</label>
+                                    <div style="display:flex;gap:8px;">
+                                        <input :type="platformModal.pwVisible ? 'text' : 'password'" class="form-control"
+                                               placeholder="••••••••" v-model="platformModal.form.login_password"
+                                               maxlength="512" autocomplete="new-password" spellcheck="false" style="flex:1;">
+                                        <button class="btn btn-secondary btn-sm btn-icon" type="button"
+                                                @click="platformModal.pwVisible = !platformModal.pwVisible"
+                                                :title="platformModal.pwVisible ? '隐藏密码' : '显示密码'">
+                                            <svg v-if="platformModal.pwVisible" style="width:14px;height:14px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                                            <svg v-else style="width:14px;height:14px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                                        </button>
                                     </div>
                                 </div>
-                                <div class="key-actions">
-                                    <label class="checkbox-container" style="margin:0;gap:6px;font-size:0.8rem;">
-                                        <input type="checkbox" v-model="k.enabled">
-                                        <span :style="{ color: k.enabled ? 'var(--color-success)' : 'var(--text-muted)' }">{{ k.enabled ? '启用' : '禁用' }}</span>
-                                    </label>
-                                </div>
-                                <div class="key-actions">
-                                    <button class="btn btn-secondary btn-sm btn-icon" @click="copyToken(k.token)" title="复制密钥">
-                                        <svg style="width:13px;height:13px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                                    </button>
-                                    <button class="btn btn-danger btn-sm btn-icon" @click="removeInlineKey(idx)" title="删除">
-                                        <svg style="width:13px;height:13px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-                                    </button>
-                                </div>
                             </div>
-                            <!-- 添加新 Key 行 -->
-                            <div class="add-key-row" style="margin-top:10px;">
+
+                            <!-- 密钥管理入口：跳转到独立的"密钥管理"页（按当前平台过滤） -->
+                            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;padding-top:14px;border-top:1px dashed rgba(255,255,255,0.1);">
                                 <div>
-                                    <label style="font-size:0.82rem;color:var(--text-secondary);display:block;margin-bottom:6px;">API Key / Token</label>
-                                    <input type="text" class="form-control" placeholder="sk-..."
-                                           v-model="platformModal.newToken"
-                                           style="font-family:var(--font-mono);font-size:0.85rem;"
-                                           maxlength="512" autocomplete="new-password" spellcheck="false">
+                                    <label style="font-weight:600;display:block;">API 密钥</label>
+                                    <small style="color:var(--text-muted);">多个 Key 按顺序轮换，遭遇 429/503 自动切换</small>
                                 </div>
-                                <div>
-                                    <label style="font-size:0.82rem;color:var(--text-secondary);display:block;margin-bottom:6px;">备注标签 (可选)</label>
-                                    <input type="text" class="form-control" placeholder="例如: 账号A、主Key"
-                                           v-model="platformModal.newLabel"
-                                           maxlength="100" autocomplete="off">
-                                </div>
-                                <div>
-                                    <label style="font-size:0.82rem;color:var(--text-secondary);display:block;margin-bottom:6px;">是否免费 Key</label>
-                                    <label class="checkbox-container" style="margin:0;gap:6px;font-size:0.85rem;">
-                                        <input type="checkbox" v-model="platformModal.newIsFree">
-                                        <span :style="{ color: platformModal.newIsFree ? 'var(--color-primary,#a855f7)' : 'var(--text-muted)' }">
-                                            {{ platformModal.newIsFree ? '免费' : '付费' }}
-                                        </span>
-                                    </label>
-                                </div>
-                                <div>
-                                    <label style="font-size:0.82rem;color:var(--text-secondary);display:block;margin-bottom:6px;">有效期 (可选, 留空=永久)</label>
-                                    <input type="date" class="form-control" v-model="platformModal.newExpiresAt" style="font-size:0.85rem;">
-                                </div>
-                                <div style="display:flex;align-items:flex-end;">
-                                    <button class="btn btn-primary" :disabled="!platformModal.newToken.trim()" @click="addInlineKey" style="white-space:nowrap;">+ 添加</button>
-                                </div>
+                                <button v-if="platformModal.item" class="btn btn-primary" @click="openKeysTab(platformModal.item)">
+                                    🔑 管理密钥
+                                </button>
                             </div>
                         </div>
 
@@ -2507,153 +2891,8 @@
                 </div>
             </div>
 
-            <!-- 1b. PLATFORM KEYS MANAGEMENT MODAL (still accessible via card button for existing platforms) -->
-            <div v-if="keysModal.show" class="modal-overlay" @click.self="closeKeysModal">
-                <div class="modal-container" style="max-width:640px;">
-                    <div class="modal-header">
-                        <h3>🔑 密钥管理 — {{ keysModal.platform?.name }}</h3>
-                        <button class="btn btn-secondary btn-sm" @click="closeKeysModal">✕</button>
-                    </div>
-                    <div class="modal-body">
-                        <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:16px;line-height:1.6;">
-                            在同一平台下配置多个 API Key，网关按顺序（#0 → #1 → …）轮试。单 Key 遭遇
-                            <span style="color:var(--color-warning);font-weight:600;">429 / 503</span> 时自动切换到下一个可用 Key，
-                            所有 Key 冷却则整体模型降级 failover。
-                        </p>
-
-                        <!-- 现有 Key 列表 -->
-                        <div v-if="keysModal.keys.length === 0" style="text-align:center;color:var(--text-muted);padding:28px 0;font-size:0.9rem;">
-                            暂无密钥记录，请在下方添加第一个 Key。
-                        </div>
-                        <div v-for="k in keysModal.keys" :key="k.id" class="key-row" :class="{ disabled: !k.enabled }">
-                            <div class="key-index-dot">{{ k.key_index }}</div>
-                            <div style="min-width:0;flex:1;">
-                                <div v-if="keysModal.editingId === k.id" style="margin-top:2px;">
-                                    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-                                        <input type="text" class="form-control" v-model="keysModal.editForm.label" placeholder="备注标签" style="max-width:150px;font-size:0.8rem;" maxlength="100">
-                                        <label class="checkbox-container" style="margin:0;gap:6px;font-size:0.8rem;">
-                                            <input type="checkbox" v-model="keysModal.editForm.is_free">
-                                            <span :style="{ color: keysModal.editForm.is_free ? 'var(--color-primary,#a855f7)' : 'var(--text-muted)' }">{{ keysModal.editForm.is_free ? '免费' : '付费' }}</span>
-                                        </label>
-                                        <input type="date" class="form-control" v-model="keysModal.editForm.expires_at" style="max-width:150px;font-size:0.8rem;" title="留空=永久">
-                                        <input type="text" class="form-control" v-model="keysModal.editForm.token" placeholder="新 Token（留空=不变）" style="max-width:220px;font-family:var(--font-mono);font-size:0.8rem;" autocomplete="off" spellcheck="false">
-                                        <button class="btn btn-primary btn-sm" @click="saveKeyEdit(k)">保存</button>
-                                        <button class="btn btn-secondary btn-sm" @click="keysModal.editingId = null">取消</button>
-                                    </div>
-                                </div>
-                                <div v-else style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                                    <div class="key-token-display" :title="k.token">{{ maskToken(k.token) }}</div>
-                                    <div class="key-label-tag">{{ k.label || '未命名' }}</div>
-                                    <!-- 免费 / 付费徽标 -->
-                                    <span v-if="k.is_free"
-                                          style="display:inline-flex;align-items:center;gap:3px;font-size:0.7rem;padding:1px 8px;border-radius:12px;font-weight:600;background:rgba(168,85,247,0.1);color:var(--color-primary,#a855f7);border:1px solid rgba(168,85,247,0.3);">
-                                        免费
-                                    </span>
-                                    <span v-else
-                                          style="display:inline-flex;align-items:center;gap:3px;font-size:0.7rem;padding:1px 8px;border-radius:12px;font-weight:600;background:rgba(100,116,139,0.1);color:var(--text-secondary);border:1px solid rgba(100,116,139,0.25);">
-                                        付费
-                                    </span>
-                                    <!-- 有效期徽标 -->
-                                    <span v-if="k.expires_at && isKeyExpired(k)"
-                                          :title="'已于 ' + formatKeyExpiry(k.expires_at) + ' 过期'"
-                                          style="display:inline-flex;align-items:center;gap:3px;font-size:0.7rem;padding:1px 8px;border-radius:12px;font-weight:600;background:rgba(239,68,68,0.12);color:var(--color-danger);border:1px solid rgba(239,68,68,0.35);">
-                                        ⌛ 已过期 {{ formatKeyExpiry(k.expires_at) }}
-                                    </span>
-                                    <span v-else-if="k.expires_at"
-                                          :title="'到期 ' + formatKeyExpiry(k.expires_at)"
-                                          style="display:inline-flex;align-items:center;gap:3px;font-size:0.7rem;padding:1px 8px;border-radius:12px;font-weight:600;background:rgba(59,130,246,0.1);color:#3b82f6;border:1px solid rgba(59,130,246,0.3);">
-                                        ⏱ 到期 {{ formatKeyExpiry(k.expires_at) }}
-                                    </span>
-                                    <span v-else
-                                          style="display:inline-flex;align-items:center;gap:3px;font-size:0.7rem;padding:1px 8px;border-radius:12px;font-weight:600;background:rgba(100,116,139,0.08);color:var(--text-muted);border:1px solid rgba(100,116,139,0.2);">
-                                        ♾ 永久
-                                    </span>
-                                    <!-- 失败状态徽标 -->
-                                    <span v-if="k.failure_type === 2"
-                                          :title="k.failure_reason"
-                                          style="display:inline-flex;align-items:center;gap:3px;font-size:0.7rem;padding:1px 8px;border-radius:12px;font-weight:600;background:rgba(239,68,68,0.1);color:var(--color-danger);border:1px solid rgba(239,68,68,0.3);">
-                                        🔴 永久失效·需处理
-                                    </span>
-                                    <span v-else-if="k.failure_type === 1"
-                                          :title="k.failure_reason"
-                                          style="display:inline-flex;align-items:center;gap:3px;font-size:0.7rem;padding:1px 8px;border-radius:12px;font-weight:600;background:rgba(245,158,11,0.1);color:var(--color-warning);border:1px solid rgba(245,158,11,0.3);">
-                                        🟡 临时冷却
-                                    </span>
-                                    <span v-else-if="!k.enabled"
-                                          style="display:inline-flex;align-items:center;gap:3px;font-size:0.7rem;padding:1px 8px;border-radius:12px;font-weight:600;background:rgba(100,116,139,0.1);color:var(--text-muted);border:1px solid rgba(100,116,139,0.25);">
-                                        ⚫ 已禁用
-                                    </span>
-                                    <span v-else
-                                          style="display:inline-flex;align-items:center;gap:3px;font-size:0.7rem;padding:1px 8px;border-radius:12px;font-weight:600;background:rgba(34,197,94,0.1);color:var(--color-success);border:1px solid rgba(34,197,94,0.3);">
-                                        🟢 正常
-                                    </span>
-                                </div>
-                                <div v-if="k.failure_reason" style="font-size:0.72rem;color:var(--text-muted);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
-                                    {{ k.failure_reason }}
-                                </div>
-                            </div>
-                            <div class="key-actions">
-                                <label class="checkbox-container" style="margin:0;gap:6px;font-size:0.8rem;" :title="k.enabled ? '点击禁用' : '点击启用'">
-                                    <input type="checkbox" :checked="k.enabled" @change="toggleKey(k)">
-                                    <span :style="{ color: k.enabled ? 'var(--color-success)' : 'var(--text-muted)' }">
-                                        {{ k.enabled ? '启用' : '禁用' }}
-                                    </span>
-                                </label>
-                            </div>
-                            <div class="key-actions">
-                                <button class="btn btn-secondary btn-sm" @click="openKeyEdit(k)" title="修改标签/免费属性/有效期/Token">编辑</button>
-                                <button v-if="k.failure_type === 2"
-                                        class="btn btn-secondary btn-sm"
-                                        @click="probeKey(k)"
-                                        title="重置失败状态（会发探测请求验证 key 是否恢复）"
-                                        style="white-space:nowrap;">
-                                    重置状态
-                                </button>
-                                <button class="btn btn-secondary btn-sm btn-icon" @click="copyToken(k.token)" title="复制密钥">
-                                    <svg style="width:13px;height:13px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                                </button>
-                                <button class="btn btn-danger btn-sm btn-icon" @click="deleteKey(k)" title="删除此 Key">
-                                    <svg style="width:13px;height:13px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-                                </button>
-                            </div>
-                        </div>
-
-                        <!-- 添加新 Key -->
-                        <div class="add-key-row">
-                            <div>
-                                <label style="font-size:0.82rem;color:var(--text-secondary);display:block;margin-bottom:6px;">API Key / Token</label>
-                                <input type="text" class="form-control" placeholder="sk-..." v-model="keysModal.newToken" style="font-family:var(--font-mono);font-size:0.85rem;">
-                            </div>
-                            <div>
-                                <label style="font-size:0.82rem;color:var(--text-secondary);display:block;margin-bottom:6px;">备注标签 (可选)</label>
-                                <input type="text" class="form-control" placeholder="例如: 账号A、主Key" v-model="keysModal.newLabel">
-                            </div>
-                            <div>
-                                <label style="font-size:0.82rem;color:var(--text-secondary);display:block;margin-bottom:6px;">是否免费 Key</label>
-                                <label class="checkbox-container" style="margin:0;gap:6px;font-size:0.85rem;">
-                                    <input type="checkbox" v-model="keysModal.newIsFree">
-                                    <span :style="{ color: keysModal.newIsFree ? 'var(--color-primary,#a855f7)' : 'var(--text-muted)' }">
-                                        {{ keysModal.newIsFree ? '免费' : '付费' }}
-                                    </span>
-                                </label>
-                            </div>
-                            <div>
-                                <label style="font-size:0.82rem;color:var(--text-secondary);display:block;margin-bottom:6px;">有效期 (可选, 留空=永久)</label>
-                                <input type="date" class="form-control" v-model="keysModal.newExpiresAt" style="font-size:0.85rem;">
-                            </div>
-                            <div style="display:flex;align-items:flex-end;">
-                                <button class="btn btn-primary" :disabled="!keysModal.newToken.trim()" @click="addKey" style="white-space:nowrap;">+ 添加</button>
-                            </div>
-                        </div>
-                        <p style="font-size:0.75rem;color:var(--text-muted);margin-top:8px;line-height:1.5;">
-                            选择规则：同一平台优先尝试<b style="color:var(--color-primary,#a855f7);">免费</b> Key，同资费组中优先尝试<b>先到期</b>的 Key（用完额度再轮换）。到期后 Key 自动禁用。
-                        </p>
-                    </div>
-                    <div class="modal-footer">
-                        <button class="btn btn-secondary" @click="closeKeysModal">关闭</button>
-                    </div>
-                </div>
-            </div>
+            <!-- 1b. (removed) platform keys CRUD moved to the dedicated "密钥管理" tab;
+                 the platform edit modal's "管理密钥" button now jumps there. -->
 
             <!-- 2. RAPI EDIT MODAL -->
             <div v-if="rapiModal.show" class="modal-overlay" @click.self="closeRapiModal">
@@ -3159,7 +3398,9 @@
                     </div>
                 </div>
             </div>
+
         </main>
+        </div><!-- /content-row -->
 
         <!-- TOKEN PEEK MODAL -->
         <div v-if="peekModal.show" class="modal-overlay" @click.self="closePeekModal">
@@ -3258,16 +3499,11 @@
                 const platformModal = reactive({
                     show: false,
                     item: null,
-                    form: { name: '', base_url: '', notes: '' },
+                    form: { name: '', base_url: '', notes: '', billing_address: '', login_account: '', login_password: '' },
                     headers: [],      // platform-level custom headers staging list
-                    inlineKeys: [],   // staging list for static token keys (not yet persisted)
-                    newToken: '',
-                    newLabel: '',
-                    newIsFree: false,
-                    newExpiresAt: ''
+                    pwVisible: false // login password eye toggle
                 });
                 const addToLapiModal = reactive({ show: false, rapi: null, selectedLapiId: null });
-                const keysModal = reactive({ show: false, platform: null, keys: [], newToken: '', newLabel: '', newIsFree: false, newExpiresAt: '', editingId: null, editForm: { label: '', is_free: false, expires_at: '', token: '' } });
                 const rapiModal = reactive({ show: false, item: null, form: { platform_id: '', alias: '', model: '', series: '', model_name: '', version: '' }, headers: [], keyIDs: [] });
                 // Key-model direct test modal (per-RAPI 测试 button).
                 const rapiTestModal = reactive({ show: false, rapi: null, keyId: 0, body: '', sending: false, status: 0, latency: 0, response: '', clearOnSuccess: true });
@@ -3387,10 +3623,6 @@
                 const wizardCollapsed = reactive({ manual: false, validSelected: false, invalidSelected: false, validUnselected: false });
                 const toggleSection = (key) => { wizardCollapsed[key] = !wizardCollapsed[key]; };
                 const playgroundModal = reactive({ show: false, sending: false, status: 0, response: '', form: { model: '', body: '{\n  "messages": [\n    {\n      "role": "user",\n      "content": "用中文写一首关于API网关高可用的四句短诗。"\n    }\n  ],\n  "temperature": 0.7\n}', stream: false } });
-                // Change-notification banner: transient unread feed for platform/rapi/lapi CUD events.
-                // Collapsed by default with a NEW badge; expanding displays entries and clears the
-                // backend so subsequent polls return empty (notification "delivered").
-                const changeLog = reactive({ entries: [], expanded: false, clearing: false });
 
                 // TRAFFIC CHART instance
                 let trafficChart = null;
@@ -3614,6 +3846,7 @@
                     switch (activeTab.value) {
                         case 'dashboard': return '仪表盘系统';
                         case 'platforms': return '平台配置管理';
+                        case 'keys': return '密钥集中管理';
                         case 'rapis': return '目标模型映射';
                         case 'lapis': return '本地路由接口 (LAPI)';
                         case 'logs': return '日志追踪与故障排查';
@@ -3625,6 +3858,7 @@
                     switch (activeTab.value) {
                         case 'dashboard': return '实时代理吞吐、模型响应健康度及统计报表';
                         case 'platforms': return '管理外部 API 服务商，缓存 Token 及动态口令';
+                        case 'keys': return '跨平台集中管理 API Key：轮换、资费、有效期与失败状态';
                         case 'rapis': return '设置模型端点、Key 能力白名单与直测验证';
                         case 'lapis': return '向最终用户暴露的统一别名接口，可编排冗余容灾链';
                         case 'logs': return '查询完整的请求转发时序 Trace，深度查看 failover 详细细节';
@@ -3684,6 +3918,72 @@
                     });
                     return alerts;
                 });
+
+                // Build hierarchical cooling tree: 平台 → 平台-key → 平台-key-模型
+                const coolingTree = computed(() => {
+                    const d = insightData.value.health;
+                    const platMap = {};
+                    const tree = [];
+                    const getPlat = (pid, pname, billing) => {
+                        if (!platMap[pid]) {
+                            const p = { platform_id: pid, platform_name: pname || '', billing_address: billing || '',
+                                        keys: [], keylessModels: [], keyCount: 0, modelCount: 0 };
+                            platMap[pid] = p;
+                            tree.push(p);
+                        }
+                        return platMap[pid];
+                    };
+                    // 平台-key 层
+                    const keyIdx = {};
+                    for (const ck of d.cooling_keys || []) {
+                        const p = getPlat(ck.platform_id, ck.platform_name, ck.billing_address);
+                        const k = {
+                            id: ck.id, platform_id: ck.platform_id, key_index: ck.key_index, label: ck.label,
+                            reason: ck.reason, recover_at: ck.recover_at, models: []
+                        };
+                        p.keys.push(k);
+                        keyIdx[k.id] = k;
+                        p.keyCount++;
+                    }
+                    // 平台-key-模型 层：把冷却模型挂到其 key 池中正在冷却的 key 下
+                    for (const cr of d.cooling_rapis || []) {
+                        const p = getPlat(cr.platform_id, cr.platform_name, cr.billing_address);
+                        p.modelCount++;
+                        const ids = String(cr.key_ids || '').split(',').map(s => s.trim()).filter(Boolean).map(Number);
+                        let attached = false;
+                        if (ids.length > 0) {
+                            for (const kid of ids) {
+                                const k = keyIdx[kid];
+                                if (k && Number(k.platform_id) === Number(cr.platform_id)) {
+                                    k.models.push(cr);
+                                    attached = true;
+                                }
+                            }
+                        } else if (p.keys.length > 0) {
+                            // 空白名单 = 使用平台全部 key：挂在平台第一个冷却 key 下
+                            p.keys[0].models.push(cr);
+                            attached = true;
+                        }
+                        if (!attached) p.keylessModels.push(cr);
+                    }
+                    tree.sort((a, b) => (a.platform_name || '').localeCompare(b.platform_name || '', 'zh'));
+                    tree.forEach(p => p.keys.sort((a, b) => a.key_index - b.key_index));
+                    return tree;
+                });
+
+                // Jump from an alert to the platform edit modal (平台管理 tab)
+                const jumpToPlatform = async (pid) => {
+                    activeTab.value = 'platforms';
+                    if (!platforms.value.find(p => Number(p.id) === Number(pid))) {
+                        await loadPlatforms();
+                    }
+                    const plat = platforms.value.find(p => Number(p.id) === Number(pid));
+                    if (!plat) {
+                        showToast('提示', '平台不存在或已被删除', 'error');
+                        return;
+                    }
+                    openPlatformModal(plat);
+                };
 
                 // Compute per-RAPI utilization bars from insights counters + rapi config
                 const rapiUtilization = computed(() => {
@@ -3808,6 +4108,7 @@
                         const r = await fetch('/api/status');
                         if (r.ok) {
                             stats.value = await r.json();
+                            if (stats.value.version) appVersion.value = stats.value.version;
                             gatewayLive.value = true;
                             // draw trend chart
                             if (activeTab.value === 'dashboard') {
@@ -3839,64 +4140,56 @@
                                         ? JSON.parse(p.supported_formats) : [];
                                 } catch (_) { p._platformFormats = []; }
                             }));
+                            // Ensure each platform has a per-platform add-form entry for the
+                            // "密钥管理" tab v-model bindings (keysAdd is keyed by platform id).
+                            for (const p of list) {
+                                if (!keysAdd[p.id]) keysAdd[p.id] = { token: '', label: '', is_free: false, expires_at: '' };
+                            }
                             platforms.value = list;
                         }
                     } catch (e) {}
                 };
 
-                // PLATFORM KEY MANAGEMENT
-                const openKeysModal = async (plat) => {
-                    keysModal.platform = plat;
-                    keysModal.newToken = '';
-                    keysModal.newLabel = '';
-                    keysModal.newIsFree = false;
-                    keysModal.newExpiresAt = '';
-                    try {
-                        const r = await fetch(`/api/platforms/${plat.id}/keys`);
-                        keysModal.keys = r.ok ? (await r.json()) : [];
-                    } catch (e) {
-                        keysModal.keys = [];
-                    }
-                    keysModal.show = true;
+                // PLATFORM KEY MANAGEMENT (flat, lives on the dedicated "密钥管理" tab)
+                // Jump to the keys tab filtered to a specific platform — used by the
+                // platform card badge and the platform edit modal's "管理密钥" button.
+                const openKeysTab = (plat) => {
+                    if (platformModal.item) closePlatformModal();
+                    keyPlatformFilter.value = plat ? String(plat.id) : '';
+                    keysSearchQuery.value = '';
+                    setTab('keys');
                 };
-                const closeKeysModal = () => { keysModal.show = false; keysModal.editingId = null; };
 
-                const addKey = async () => {
-                    if (!keysModal.newToken.trim()) return;
+                const addKeyFlat = async (pid) => {
+                    const f = keysAdd[pid];
+                    if (!f || !f.token.trim()) return;
                     try {
                         const body = {
-                            token: keysModal.newToken.trim(),
-                            label: keysModal.newLabel.trim(),
+                            token: f.token.trim(),
+                            label: f.label.trim(),
                             enabled: true,
-                            is_free: !!keysModal.newIsFree,
-                            expires_at: keysModal.newExpiresAt ? keysModal.newExpiresAt + 'T23:59:59Z' : null
+                            is_free: !!f.is_free,
+                            expires_at: f.expires_at ? f.expires_at + 'T23:59:59Z' : null
                         };
-                        const r = await fetch(`/api/platforms/${keysModal.platform.id}/keys`, {
+                        const r = await fetch(`/api/platforms/${pid}/keys`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify(body)
                         });
                         if (r.ok) {
-                            const created = await r.json();
-                            keysModal.keys.push(created);
-                            keysModal.newToken = '';
-                            keysModal.newLabel = '';
-                            keysModal.newIsFree = false;
-                            keysModal.newExpiresAt = '';
-                            // sync badge
-                            if (keysModal.platform) keysModal.platform._keys = [...keysModal.keys];
+                            f.token = ''; f.label = ''; f.is_free = false; f.expires_at = '';
                             showToast('成功', 'Key 已添加，已自动探测并恢复受影响的模型。', 'success');
                             refreshData();
                         } else {
-                            const err = await r.json();
+                            const err = await r.json().catch(() => ({}));
                             showToast('错误', err.error || '添加 Key 失败', 'error');
                         }
                     } catch (e) {}
                 };
 
-                const deleteKey = async (k) => {
+                const deleteKeyFlat = async (k) => {
                     // Warn about models whose whitelist references this key, and flag
-                    // any model that would be left with no usable key at all.
+                    // any that would be left with no usable key at all.
                     const keyIDStr = String(k.id);
                     const usedBy = rapis.value.filter(r => String(r.key_ids || '').split(',').map(s => s.trim()).filter(Boolean).includes(keyIDStr));
                     let warn = '';
@@ -3917,13 +4210,9 @@
                     }
                     if (!confirm(`确定删除 Key #${k.key_index}（${k.label || (k.token || '').slice(0,12)}…）吗？${warn}`)) return;
                     try {
-                        const r = await fetch(`/api/platforms/${keysModal.platform.id}/keys?key_id=${k.id}`, { method: 'DELETE' });
+                        const r = await fetch(`/api/platforms/${k.platform_id}/keys?key_id=${k.id}`, { method: 'DELETE' });
                         if (r.ok) {
                             const data = await r.json().catch(() => ({}));
-                            // Reload keys to get fresh key_index ordering.
-                            const kr = await fetch(`/api/platforms/${keysModal.platform.id}/keys`);
-                            keysModal.keys = kr.ok ? await kr.json() : [];
-                            if (keysModal.platform) keysModal.platform._keys = [...keysModal.keys];
                             const removed = (data.removed_from || []).length;
                             showToast('成功', removed > 0
                                 ? `Key 已删除，并已从 ${removed} 个模型的白名单中剥离。`
@@ -3933,89 +4222,37 @@
                     } catch (e) {}
                 };
 
-                const toggleKey = async (k) => {
-                    const newEnabled = !k.enabled;
-                    try {
-                        // Single-key update (PUT ?key_id=N) instead of whole-list replace,
-                        // so concurrent edits in other tabs can't clobber sibling keys.
-                        const r = await fetch(`/api/platforms/${keysModal.platform.id}/keys?key_id=${k.id}`, {
-                            method: 'PUT',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                token: k.token || '',
-                                label: k.label || '',
-                                enabled: newEnabled,
-                                is_free: !!k.is_free,
-                                expires_at: k.expires_at || null
-                            })
-                        });
-                        if (r.ok) {
-                            k.enabled = newEnabled;
-                            if (keysModal.platform) keysModal.platform._keys = [...keysModal.keys];
-                            showToast('成功', `Key #${k.key_index} 已${newEnabled ? '启用' : '禁用'}。`, 'success');
-                        } else {
-                            const err = await r.json().catch(() => ({}));
-                            showToast('操作失败', err.error || `服务器返回 ${r.status}`, 'error');
-                        }
-                    } catch (e) {}
+                const openKeyEditFlat = (k) => {
+                    keysEditId.value = k.id;
+                    keysEditForm.label = k.label || '';
+                    keysEditForm.is_free = !!k.is_free;
+                    keysEditForm.expires_at = k.expires_at ? String(k.expires_at).slice(0, 10) : '';
+                    keysEditForm.token = '';
                 };
-
-                const openKeyEdit = (k) => {
-                    keysModal.editingId = k.id;
-                    keysModal.editForm = {
-                        label: k.label || '',
-                        is_free: !!k.is_free,
-                        expires_at: k.expires_at ? String(k.expires_at).slice(0, 10) : '',
-                        token: ''
-                    };
-                };
-                const saveKeyEdit = async (k) => {
+                const saveKeyEditFlat = async (k) => {
                     try {
                         const body = {
-                            token: (keysModal.editForm.token || '').trim(),
-                            label: (keysModal.editForm.label || '').trim(),
+                            token: (keysEditForm.token || '').trim(),
+                            label: (keysEditForm.label || '').trim(),
                             enabled: k.enabled,
-                            is_free: !!keysModal.editForm.is_free,
-                            expires_at: keysModal.editForm.expires_at ? keysModal.editForm.expires_at + 'T23:59:59Z' : null
+                            is_free: !!keysEditForm.is_free,
+                            expires_at: keysEditForm.expires_at ? keysEditForm.expires_at + 'T23:59:59Z' : null
                         };
-                        const r = await fetch(`/api/platforms/${keysModal.platform.id}/keys?key_id=${k.id}`, {
+                        const r = await fetch(`/api/platforms/${k.platform_id}/keys?key_id=${k.id}`, {
                             method: 'PUT',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify(body)
                         });
                         if (r.ok) {
-                            const kr = await fetch(`/api/platforms/${keysModal.platform.id}/keys`);
-                            keysModal.keys = kr.ok ? await kr.json() : keysModal.keys;
-                            if (keysModal.platform) keysModal.platform._keys = [...keysModal.keys];
-                            keysModal.editingId = null;
+                            keysEditId.value = null;
                             showToast('成功', `Key #${k.key_index} 属性已更新`, 'success');
+                            refreshData();
                         } else {
                             const err = await r.json().catch(() => ({}));
                             showToast('保存失败', err.error || `服务器返回 ${r.status}`, 'error');
                         }
                     } catch (e) {
                         showToast('保存失败', '网络请求失败', 'error');
-                    }
-                };
-
-                const probeKey = async (k) => {
-                    if (!confirm(`确定重置 Key #${k.key_index} 的失败状态吗？系统会发送探测请求验证 key 是否恢复。`)) return;
-                    try {
-                        const r = await fetch(`/api/platforms/${k.platform_id}/keys/${k.id}/probe`, {
-                            method: 'POST',
-                        });
-                        if (r.ok) {
-                            showToast('成功', 'Key 已恢复正常，失败状态已清除', 'success');
-                            // 刷新 key 列表
-                            const kr = await fetch(`/api/platforms/${k.platform_id}/keys`);
-                            keysModal.keys = kr.ok ? await kr.json() : [];
-                            if (keysModal.platform) keysModal.platform._keys = [...keysModal.keys];
-                        } else {
-                            const err = await r.json().catch(() => ({}));
-                            showToast('重置失败', err.error || `平台返回 ${r.status}`, 'error');
-                        }
-                    } catch (e) {
-                        showToast('错误', '请求失败: ' + e.message, 'error');
                     }
                 };
 
@@ -4135,53 +4372,375 @@
                     } catch (e) {}
                 };
 
-                // ============ CHANGE NOTIFICATION BANNER ============
-                // Loads unread change-log entries. Skipped while the user has the banner expanded
-                // (viewing the current batch) so the displayed list doesn't flicker/reset.
-                const loadChangeLog = async () => {
-                    if (changeLog.expanded) return;
+                // ============ FIXED TOP BAR: UNREAD / SEARCH / KEYS / ADD WIZARD ============
+                const appVersion = ref('dev');
+                const unread = reactive({ items: [], counts: {}, total: 0 });
+                const totalUnread = computed(() => unread.total);
+                const unreadItems = computed(() => unread.items);
+                const unreadCounts = computed(() => unread.counts);
+                const unreadPanelOpen = ref(false);
+                const helpModal = ref(false);
+                const keysList = ref([]);
+                const keyPlatformFilter = ref('');
+                // Flat key-management state for the dedicated "密钥管理" tab.
+                const keysSearchQuery = ref('');
+                const keysAdd = reactive({});          // pid → {token,label,is_free,expires_at}
+                const keysEditId = ref(null);
+                const keysEditForm = reactive({ label: '', is_free: false, expires_at: '', token: '' });
+
+                const loadUnread = async () => {
                     try {
-                        const r = await fetch('/api/change-log');
+                        const r = await fetch('/api/unread');
                         if (r.ok) {
-                            const data = await r.json();
-                            changeLog.entries = data.entries || [];
+                            const d = await r.json();
+                            unread.items = d.items || [];
+                            unread.counts = d.counts || {};
+                            unread.total = d.total || 0;
                         }
                     } catch (e) {}
                 };
-                // Expand the banner: show entries and clear them on the backend. Per spec, opening
-                // the notification marks all as delivered — there is no archive.
-                const expandChangeLog = async () => {
-                    if (changeLog.entries.length === 0) return;
-                    changeLog.expanded = true;
-                    changeLog.clearing = true;
+                const unreadGrouped = computed(() => {
+                    const groups = {};
+                    for (const it of unread.items) {
+                        (groups[it.menu] = groups[it.menu] || []).push(it);
+                    }
+                    return groups;
+                });
+                const markMenuRead = async (menu) => {
                     try {
-                        await fetch('/api/change-log/clear', { method: 'POST' });
-                    } catch (e) {} finally {
-                        changeLog.clearing = false;
+                        await fetch('/api/unread/read', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ menu }) });
+                    } catch (e) {}
+                    loadUnread();
+                };
+                const markAllRead = async () => {
+                    try {
+                        await fetch('/api/unread/read', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ all: true }) });
+                    } catch (e) {}
+                    loadUnread();
+                };
+                const unreadDotColor = (kind) => kind === 'delete' || kind === 'failure' ? 'var(--color-danger)' : kind === 'update' ? 'var(--color-warning)' : 'var(--color-success)';
+                const unreadTime = (t) => t ? new Date(t).toLocaleString('zh-CN', { hour12: false }) : '';
+                const menuToTab = { platforms: 'platforms', keys: 'keys', models: 'rapis', interfaces: 'lapis' };
+                const openUnreadItem = (it) => {
+                    unreadPanelOpen.value = false;
+                    markMenuRead(it.menu);
+                    setTab(menuToTab[it.menu] || it.menu);
+                };
+
+                // ---- Global fuzzy search across platforms/keys/models/interfaces ----
+                const globalSearchQuery = ref('');
+                const searchSelection = ref(0);
+                const searchVisible = ref(false);
+                const menuMeta = {
+                    platforms: { label: '平台', color: '#38bdf8', bg: 'rgba(56,189,248,0.12)' },
+                    keys: { label: '密钥', color: '#a855f7', bg: 'rgba(168,85,247,0.12)' },
+                    models: { label: '模型', color: '#10b981', bg: 'rgba(16,185,129,0.12)' },
+                    interfaces: { label: '接口', color: '#f59e0b', bg: 'rgba(245,158,11,0.12)' }
+                };
+                const searchMenuLabel = (m) => (menuMeta[m] || {}).label || m;
+                const searchMenuStyle = (m) => {
+                    const meta = menuMeta[m] || {};
+                    return `color:${meta.color || '#94a3b8'};background:${meta.bg || 'rgba(255,255,255,0.05)'};`;
+                };
+                const searchThresholdReached = (q) => {
+                    let cjk = 0, ascii = 0;
+                    for (const ch of q) {
+                        if (/[\u4e00-\u9fff]/.test(ch)) cjk++;
+                        else if (/[\x00-\x7f]/.test(ch)) ascii++;
+                    }
+                    return cjk >= 1 || ascii >= 2;
+                };
+                const globalSearchCandidates = computed(() => {
+                    const q = (globalSearchQuery.value || '').trim().toLowerCase();
+                    if (!searchThresholdReached(q)) return [];
+                    const out = [];
+                    for (const p of platforms.value) {
+                        if ((p.name || '').toLowerCase().includes(q) || (p.base_url || '').toLowerCase().includes(q))
+                            out.push({ menu: 'platforms', key: 'p' + p.id, name: p.name, sub: (p.base_url || '').slice(0, 42) });
+                    }
+                    for (const k of keysList.value) {
+                        const label = k.label || ('密钥 #' + k.key_index);
+                        if (label.toLowerCase().includes(q) || (k.platform_name || '').toLowerCase().includes(q))
+                            out.push({ menu: 'keys', key: 'k' + k.id, name: label, sub: k.platform_name || '' });
+                    }
+                    for (const r of rapis.value) {
+                        if ((r.alias || '').toLowerCase().includes(q) || (r.model || '').toLowerCase().includes(q))
+                            out.push({ menu: 'models', key: 'm' + r.id, name: r.alias, sub: r.model || '' });
+                    }
+                    for (const l of lapis.value) {
+                        if ((l.alias || '').toLowerCase().includes(q))
+                            out.push({ menu: 'interfaces', key: 'l' + l.id, name: l.alias, sub: '' });
+                    }
+                    return out.slice(0, 30);
+                });
+                const showSearchResults = computed(() => searchVisible.value && globalSearchCandidates.value.length > 0);
+                const onGlobalSearchInput = () => {
+                    searchVisible.value = searchThresholdReached(globalSearchQuery.value);
+                    searchSelection.value = 0;
+                };
+                const onSearchBlur = () => setTimeout(() => { searchVisible.value = false; }, 150);
+                const clearGlobalSearch = () => { globalSearchQuery.value = ''; searchVisible.value = false; };
+                const moveSearchSelection = (dir) => {
+                    const n = globalSearchCandidates.value.length;
+                    if (n === 0) return;
+                    searchSelection.value = (searchSelection.value + dir + n) % n;
+                };
+                const highlightEntity = (menu, idStr) => {
+                    const prefix = { platforms: 'el-p', keys: 'el-k', models: 'el-r', interfaces: 'el-l' }[menu];
+                    if (!prefix) return;
+                    nextTick(() => {
+                        const el = document.getElementById(prefix + idStr);
+                        if (!el) return;
+                        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        el.style.outline = '2px solid var(--color-primary)';
+                        el.style.outlineOffset = '2px';
+                        setTimeout(() => { el.style.outline = ''; el.style.outlineOffset = ''; }, 2600);
+                    });
+                };
+                const chooseSearchResult = (i) => {
+                    const c = globalSearchCandidates.value[i];
+                    if (!c) return;
+                    searchVisible.value = false;
+                    globalSearchQuery.value = '';
+                    setTab(menuToTab[c.menu]);
+                    highlightEntity(c.menu, c.key.slice(1));
+                };
+
+                // ---- Independent keys menu ----
+                const loadKeys = async () => {
+                    try {
+                        const r = await fetch('/api/keys');
+                        if (r.ok) keysList.value = await r.json();
+                    } catch (e) {}
+                };
+                const filteredKeys = computed(() => {
+                    let list = keysList.value;
+                    if (keyPlatformFilter.value) list = list.filter(k => String(k.platform_id) === keyPlatformFilter.value);
+                    const q = (keysSearchQuery.value || '').trim().toLowerCase();
+                    if (q) {
+                        list = list.filter(k => (k.label || '').toLowerCase().includes(q)
+                            || (k.token || '').toLowerCase().includes(q)
+                            || (k.platform_name || '').toLowerCase().includes(q));
+                    }
+                    return list;
+                });
+                // Group the filtered key list by platform so the page renders one
+                // section per platform (incl. zero-key platforms when no text filter
+                // is active, so users can add the first key to any platform).
+                const keysByPlatform = computed(() => {
+                    const q = (keysSearchQuery.value || '').trim().toLowerCase();
+                    const plats = platforms.value.filter(p => !keyPlatformFilter.value || String(p.id) === keyPlatformFilter.value);
+                    return plats.map(p => {
+                        let keys = keysList.value.filter(k => String(k.platform_id) === String(p.id));
+                        if (q) {
+                            keys = keys.filter(k => (k.label || '').toLowerCase().includes(q)
+                                || (k.token || '').toLowerCase().includes(q)
+                                || (p.name || '').toLowerCase().includes(q));
+                        }
+                        const perm = keys.filter(k => k.failure_type === 2).length;
+                        const cool = keys.filter(k => k.failure_type === 1).length;
+                        return { platform_id: p.id, platform_name: p.name, billing_address: p.billing_address, keys, permCount: perm, coolCount: cool };
+                    }).filter(grp => !q || grp.keys.length > 0);
+                });
+                const keyHealthLabel = (k) => {
+                    if (k.failure_type === 2) return '🔴 永久失效';
+                    if (k.failure_type === 1) return '🟡 冷却中';
+                    if (!k.enabled) return '⚫ 已禁用';
+                    if (k.expires_at && isKeyExpired(k)) return '⌛ 已过期';
+                    return '🟢 正常';
+                };
+                const probeKeyFlat = async (k) => {
+                    if (!confirm(`确定重置 Key #${k.key_index} 的失败状态吗？系统会发送探测请求验证 key 是否恢复。`)) return;
+                    try {
+                        const r = await fetch(`/api/platforms/${k.platform_id}/keys/${k.id}/probe`, { method: 'POST' });
+                        if (r.ok) showToast('成功', 'Key 已恢复正常，失败状态已清除', 'success');
+                        else { const err = await r.json().catch(() => ({})); showToast('重置失败', err.error || `平台返回 ${r.status}`, 'error'); }
+                    } catch (e) { showToast('错误', '请求失败: ' + e.message, 'error'); }
+                    refreshData();
+                };
+                const toggleKeyFlat = async (k) => {
+                    const newEnabled = !k.enabled;
+                    try {
+                        const r = await fetch(`/api/platforms/${k.platform_id}/keys?key_id=${k.id}`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ token: '', label: k.label || '', enabled: newEnabled, is_free: !!k.is_free, expires_at: k.expires_at || null })
+                        });
+                        if (r.ok) showToast('成功', `Key #${k.key_index} 已${newEnabled ? '启用' : '禁用'}`, 'success');
+                        else { const err = await r.json().catch(() => ({})); showToast('操作失败', err.error || `服务器返回 ${r.status}`, 'error'); }
+                    } catch (e) {}
+                    refreshData();
+                };
+
+                // ---- Unified add wizard (single modal, three sections) ----
+                const addWizard = reactive({
+                    show: false, busy: false, confirmMode: false, confirmItems: [],
+                    platMode: 'existing', platId: '', platForm: { name: '', base_url: '', token: '', notes: '' }, platDomainWarn: '', platTest: { running: false, status: 0, ok: false, msg: '' },
+                    keyMode: 'existing', keyId: '', keyForm: { token: '', label: '', is_free: false }, keyTest: { running: false, status: 0, ok: false, msg: '' },
+                    modelMode: 'existing', modelId: '', modelForm: { alias: '', model: '', series: '', model_name: '', version: '' }, modelTest: { running: false, status: 0, ok: false, msg: '' }
+                });
+                const openAddWizard = () => {
+                    Object.assign(addWizard, {
+                        show: true, busy: false, confirmMode: false, confirmItems: [],
+                        platMode: 'existing', platId: platforms.value[0] ? String(platforms.value[0].id) : '', platForm: { name: '', base_url: '', token: '', notes: '' }, platDomainWarn: '', platTest: { running: false, status: 0, ok: false, msg: '' },
+                        keyMode: 'existing', keyId: '', keyForm: { token: '', label: '', is_free: false }, keyTest: { running: false, status: 0, ok: false, msg: '' },
+                        modelMode: 'existing', modelId: '', modelForm: { alias: '', model: '', series: '', model_name: '', version: '' }, modelTest: { running: false, status: 0, ok: false, msg: '' }
+                    });
+                };
+                const closeAddWizard = () => { addWizard.show = false; addWizard.confirmMode = false; };
+                const wizardPlatformContext = () => {
+                    if (addWizard.platMode === 'existing') {
+                        const p = platforms.value.find(x => String(x.id) === String(addWizard.platId));
+                        if (!p) return null;
+                        const firstKey = (p._keys && p._keys[0]) ? p._keys[0] : null;
+                        return { id: p.id, name: p.name, base_url: p.base_url, token: (firstKey && firstKey.token) || p.token };
+                    }
+                    return { id: 0, name: addWizard.platForm.name || addWizard.platForm.base_url, base_url: addWizard.platForm.base_url, token: addWizard.platForm.token };
+                };
+                const wizardKeyOptions = computed(() => keysList.value.filter(k => addWizard.platMode === 'existing' && String(k.platform_id) === String(addWizard.platId)));
+                const wizardModelOptions = computed(() => rapis.value.filter(r => addWizard.platMode === 'existing' && String(r.platform_id) === String(addWizard.platId)));
+                const wizardKeyToken = () => {
+                    if (addWizard.keyMode === 'existing') {
+                        const k = keysList.value.find(x => String(x.id) === String(addWizard.keyId));
+                        return k ? k.token : '';
+                    }
+                    return addWizard.keyForm.token;
+                };
+                const checkPlatDomain = () => {
+                    addWizard.platDomainWarn = '';
+                    if (addWizard.platMode !== 'new' || !addWizard.platForm.base_url) return;
+                    try {
+                        const host = new URL(addWizard.platForm.base_url).host;
+                        for (const p of platforms.value) {
+                            try {
+                                if (new URL(p.base_url).host === host && p.base_url !== addWizard.platForm.base_url.trim()) {
+                                    addWizard.platDomainWarn = `已存在同域名的平台「${p.name}」，但 URL 不完全一致，请确认是否新增`;
+                                    break;
+                                }
+                            } catch (e) {}
+                        }
+                    } catch (e) {}
+                };
+                const runWizardTest = async (baseURL, token, model) => {
+                    try {
+                        const r = await fetch('/api/upstream/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ base_url: baseURL, token, model }) });
+                        return await r.json().catch(() => ({ status: r.status, ok: false }));
+                    } catch (e) { return { status: 0, ok: false, msg: String(e) }; }
+                };
+                const testWizardPlatform = async () => {
+                    const ctx = wizardPlatformContext();
+                    if (!ctx || !ctx.base_url || !ctx.token) { showToast('提示', '请先填写平台 base_url 与 token', 'warning'); return; }
+                    addWizard.platTest.running = true;
+                    const d = await runWizardTest(ctx.base_url, ctx.token, '');
+                    addWizard.platTest = { running: false, status: d.status || 0, ok: !!d.ok, msg: d.ok ? '连接正常' : (d.error || String(d.body || d.msg || '').slice(0, 200)) };
+                    if (d.ok) showToast('测试成功', '平台连接正常', 'success'); else showToast('测试失败', `状态 ${d.status || '—'}`, 'error');
+                };
+                const testWizardKey = async () => {
+                    const ctx = wizardPlatformContext();
+                    const token = wizardKeyToken();
+                    if (!ctx || !ctx.base_url || !token) { showToast('提示', '请先填写密钥 token', 'warning'); return; }
+                    addWizard.keyTest.running = true;
+                    const d = await runWizardTest(ctx.base_url, token, '');
+                    addWizard.keyTest = { running: false, status: d.status || 0, ok: !!d.ok, msg: d.ok ? '密钥可用' : (d.error || String(d.body || d.msg || '').slice(0, 200)) };
+                    if (d.ok) showToast('测试成功', '密钥可用', 'success'); else showToast('测试失败', `状态 ${d.status || '—'}`, 'error');
+                };
+                const testWizardModel = async () => {
+                    const ctx = wizardPlatformContext();
+                    const token = wizardKeyToken();
+                    const model = addWizard.modelMode === 'existing' ? (rapis.value.find(x => String(x.id) === String(addWizard.modelId)) || {}).model : addWizard.modelForm.model;
+                    if (!ctx || !ctx.base_url || !token) { showToast('提示', '请先选择平台与密钥', 'warning'); return; }
+                    if (!model) { showToast('提示', '请先填写模型名称', 'warning'); return; }
+                    addWizard.modelTest.running = true;
+                    const d = await runWizardTest(ctx.base_url, token, model);
+                    addWizard.modelTest = { running: false, status: d.status || 0, ok: !!d.ok, msg: d.ok ? '模型可用' : (d.error || String(d.body || d.msg || '').slice(0, 200)) };
+                    if (d.ok) showToast('测试成功', '模型可用', 'success'); else showToast('测试失败', `状态 ${d.status || '—'}`, 'error');
+                };
+                const wizardHasNew = computed(() => addWizard.platMode === 'new' || addWizard.keyMode === 'new' || addWizard.modelMode === 'new');
+                const buildConfirmItems = () => {
+                    const items = [];
+                    const platName = addWizard.platMode === 'new' ? (addWizard.platForm.name || addWizard.platForm.base_url) : ((platforms.value.find(x => String(x.id) === String(addWizard.platId)) || {}).name || '所选平台');
+                    if (addWizard.platMode === 'new') items.push('新平台：' + (addWizard.platForm.name || addWizard.platForm.base_url));
+                    if (addWizard.keyMode === 'new') items.push(`${platName}-新key：` + (addWizard.keyForm.label || maskToken(addWizard.keyForm.token) || '未命名'));
+                    if (addWizard.modelMode === 'new') items.push(`${platName}-新模型：` + (addWizard.modelForm.alias || addWizard.modelForm.model || '未命名'));
+                    return items;
+                };
+                const runWizardOverallTest = async () => {
+                    addWizard.busy = true;
+                    const ctx = wizardPlatformContext();
+                    const token = wizardKeyToken();
+                    let ok = false, status = 0, msg = '';
+                    try {
+                        let model = '';
+                        if (addWizard.modelMode === 'existing' && addWizard.modelId) model = (rapis.value.find(x => String(x.id) === String(addWizard.modelId)) || {}).model || '';
+                        if (addWizard.modelMode === 'new') model = addWizard.modelForm.model;
+                        if (!ctx || !ctx.base_url || !token) { msg = '请先选择/填写平台与密钥'; }
+                        else {
+                            const d = await runWizardTest(ctx.base_url, token, model || '');
+                            ok = !!d.ok; status = d.status || 0; msg = d.ok ? '测试通过' : (d.error || String(d.body || '').slice(0, 200));
+                        }
+                    } catch (e) { msg = String(e); }
+                    addWizard.busy = false;
+                    if (!ok) showToast('测试未通过', msg || `状态 ${status}`, 'error');
+                    return ok;
+                };
+                const submitAddWizard = async () => {
+                    if (addWizard.confirmMode) { await doWizardSave(); return; }
+                    const ok = await runWizardOverallTest();
+                    if (!ok) return;
+                    if (wizardHasNew.value) {
+                        addWizard.confirmItems = buildConfirmItems();
+                        addWizard.confirmMode = true;
+                    } else {
+                        showToast('测试通过', '所选平台/密钥/模型均可用', 'success');
                     }
                 };
-                const collapseChangeLog = () => {
-                    changeLog.expanded = false;
-                    changeLog.entries = [];  // backend already cleared on expand
-                };
-                // Human-readable label for a change-log entry.
-                const changeLogLabel = (e) => {
-                    const typeMap = { platform: '平台', rapi: '模型', lapi: '接口' };
-                    const actionMap = { create: '新增', update: '修改', delete: '删除' };
-                    return (typeMap[e.entity_type] || e.entity_type) + '·' + (actionMap[e.action] || e.action);
-                };
-                const changeLogColor = (e) => {
-                    if (e.action === 'create') return 'var(--color-success)';
-                    if (e.action === 'delete') return 'var(--color-danger)';
-                    return 'var(--color-warning)';
+                const doWizardSave = async () => {
+                    addWizard.busy = true;
+                    let platId = 0, keyId = 0;
+                    try {
+                        // 1) platform
+                        if (addWizard.platMode === 'new') {
+                            const r = await fetch('/api/platforms', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(addWizard.platForm) });
+                            if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || '平台创建失败'); }
+                            const p = await r.json();
+                            platId = p.id;
+                        } else {
+                            platId = Number(addWizard.platId);
+                        }
+                        // 2) key
+                        if (addWizard.keyMode === 'new') {
+                            const r = await fetch(`/api/platforms/${platId}/keys`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(addWizard.keyForm) });
+                            if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || '密钥创建失败'); }
+                            const k = await r.json();
+                            keyId = k.id;
+                        } else {
+                            keyId = Number(addWizard.keyId) || 0;
+                        }
+                        // 3) model
+                        if (addWizard.modelMode === 'new') {
+                            const body = { ...addWizard.modelForm, platform_id: platId };
+                            if (keyId) body.key_ids = String(keyId);
+                            const r = await fetch('/api/rapis', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+                            if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || '模型创建失败'); }
+                        }
+                        showToast('已添加', '新增内容已保存，旧内容已复用', 'success');
+                        addWizard.show = false;
+                        addWizard.confirmMode = false;
+                        refreshData();
+                    } catch (e) {
+                        showToast('保存失败', e.message || '未知错误', 'error');
+                    }
+                    addWizard.busy = false;
                 };
 
                 const refreshData = () => {
                     loadStats();
-                    loadChangeLog();
+                    loadUnread();
                     loadKeyModelBlocks();
+                    loadKeys();
                     if (activeTab.value === 'dashboard') { loadDashboard(); loadInsights(); loadAnalytics(); }
                     if (activeTab.value === 'platforms') { loadPlatforms(); loadRapis(); }
+                    if (activeTab.value === 'keys') { loadPlatforms(); loadRapis(); }
                     if (activeTab.value === 'rapis') {
                         loadPlatforms();
                         loadRapis();
@@ -4280,18 +4839,20 @@
                 };
 
                 // PLATFORM CONFIG CRUD
-                const openPlatformModal = async (item) => {
+                // Keys are managed on the dedicated "密钥管理" tab (openKeysTab jumps
+                // there with a platform filter); this modal no longer fetches or stages keys.
+                const openPlatformModal = (item) => {
                     platformModal.item = item;
-                    platformModal.newToken = '';
-                    platformModal.newLabel = '';
-                    platformModal.newIsFree = false;
-                    platformModal.newExpiresAt = '';
+                    platformModal.pwVisible = false;
                     if (item) {
                         platformModal.form = {
                             id: item.id,
                             name: item.name,
                             base_url: item.base_url,
                             notes: item.notes || '',
+                            billing_address: item.billing_address || '',
+                            login_account: item.login_account || '',
+                            login_password: '', // never echoed back — empty = unchanged on save
                             enabled: item.enabled,
                             available: item.available
                         };
@@ -4299,45 +4860,15 @@
                             platformModal.headers = item.custom_headers && item.custom_headers !== ''
                                 ? JSON.parse(item.custom_headers) : [];
                         } catch (_) { platformModal.headers = []; }
-                        try {
-                            const kr = await fetch(`/api/platforms/${item.id}/keys`);
-                            platformModal.inlineKeys = kr.ok ? (await kr.json()) : [];
-                        } catch (e) {
-                            platformModal.inlineKeys = [];
-                        }
                     } else {
-                        platformModal.form = { name: '', base_url: '', notes: '', enabled: true, available: true };
+                        platformModal.form = { name: '', base_url: '', notes: '', billing_address: '', login_account: '', login_password: '', enabled: true, available: true };
                         platformModal.headers = [];
-                        platformModal.inlineKeys = [];
                     }
                     platformModal.show = true;
                 };
 
                 const closePlatformModal = () => {
                     platformModal.show = false;
-                };
-
-                // Inline key helpers (within the platform modal, static mode)
-                const addInlineKey = () => {
-                    const token = platformModal.newToken.trim();
-                    const label = platformModal.newLabel.trim();
-                    if (!token) return;
-                    const expiresAt = platformModal.newExpiresAt ? platformModal.newExpiresAt + 'T23:59:59Z' : null;
-                    platformModal.inlineKeys.push({
-                        token,
-                        label,
-                        enabled: true,
-                        is_free: !!platformModal.newIsFree,
-                        expires_at: expiresAt
-                    });
-                    platformModal.newToken = '';
-                    platformModal.newLabel = '';
-                    platformModal.newIsFree = false;
-                    platformModal.newExpiresAt = '';
-                };
-
-                const removeInlineKey = (idx) => {
-                    platformModal.inlineKeys.splice(idx, 1);
                 };
 
                 // Format seconds-since-push into a human-readable string
@@ -4405,6 +4936,10 @@
                         showToast('验证失败', 'Base URL 必须以 http:// 或 https:// 开头', 'error');
                         return;
                     }
+                    // Trim the new console/account fields (password empty = unchanged)
+                    form.billing_address = (form.billing_address || '').trim();
+                    form.login_account = (form.login_account || '').trim();
+                    form.login_password = (form.login_password || '').trim();
                     // Serialize platform-level custom headers from the staging list
                     form.custom_headers = JSON.stringify(platformModal.headers || []);
 
@@ -4419,30 +4954,6 @@
                             showToast('错误', err.error || '保存平台配置失败', 'error');
                             return;
                         }
-                        const saved = await r.json();
-                        const platformId = saved.id || form.id;
-
-                        // For static mode: persist inline keys list via PUT /api/platforms/{id}/keys
-                        if (platformId) {
-                            try {
-                                await fetch(`/api/platforms/${platformId}/keys`, {
-                                    method: 'PUT',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify(platformModal.inlineKeys.map((k, i) => ({
-                                        // Keep the existing row id so whole-list replace preserves
-                                        // RAPI key_ids whitelists (ids must stay stable across saves).
-                                        id: k.id || 0,
-                                        token: k.token,
-                                        label: k.label || '',
-                                        enabled: k.enabled !== false,
-                                        key_index: i,
-                                        is_free: !!k.is_free,
-                                        expires_at: k.expires_at || null
-                                    })))
-                                });
-                            } catch (e) {}
-                        }
-
                         showToast('成功', '平台配置已成功保存', 'success');
                         refreshData();
                         closePlatformModal();
@@ -5257,10 +5768,15 @@
                 };
 
                 // SYSTEM TOAST HELPER
+                // Only errors and warnings surface in the toast box; normal info is logged only.
                 const showToast = (title, message, type = 'primary') => {
-                    const id = Date.now();
-                    toasts.value.push({ id, title, message, type });
-                    setTimeout(() => removeToast(id), 5000);
+                    if (type === 'error' || type === 'warning') {
+                        const id = Date.now();
+                        toasts.value.push({ id, title, message, type });
+                        setTimeout(() => removeToast(id), 5000);
+                    } else {
+                        console.log(`[${type}] ${title}: ${message}`);
+                    }
                 };
                 
                 const removeToast = (id) => {
@@ -5385,7 +5901,10 @@
                     source.onmessage = (event) => {
                         try {
                             const raw = JSON.parse(event.data);
-                            showToast(raw.type || '系统事件', raw.message, 'primary');
+                            // Route by severity: errors/warnings surface in the toast box,
+                            // normal info events are logged only (showToast does the routing).
+                            const level = raw.level === 'error' ? 'error' : raw.level === 'warning' ? 'warning' : 'primary';
+                            showToast(raw.message || raw.title || '系统事件', raw.title || '', level);
                             loadStats();
                             if (activeTab.value === 'logs') loadLogs();
                         } catch (e) {}
@@ -5404,14 +5923,15 @@
                     loadAnalytics();
                     loadPlatforms();
                     loadRapis();
-                    loadChangeLog();
+                    loadKeys();
+                    loadUnread();
                     setupSSE();
 
                     setInterval(loadStats, 10000);
                     setInterval(loadDashboard, 30000);
                     setInterval(loadInsights, 30000);
                     setInterval(loadAnalytics, 30000);
-                    setInterval(loadChangeLog, 20000);
+                    setInterval(loadUnread, 8000);
                 });
 
                 return {
@@ -5447,8 +5967,11 @@
                     sortedUnselectedRapis,
                     addToLapiSortedLapis,
 
-                    // Change notification banner
-                    changeLog, loadChangeLog, expandChangeLog, collapseChangeLog, changeLogLabel, changeLogColor,
+                    // Fixed top bar: unread / search / keys / add wizard
+                    appVersion, unread, totalUnread, unreadItems, unreadCounts, unreadPanelOpen, unreadGrouped, markMenuRead, markAllRead, openUnreadItem, unreadDotColor, unreadTime,
+                    globalSearchQuery, globalSearchCandidates, showSearchResults, searchSelection, onGlobalSearchInput, onSearchBlur, moveSearchSelection, chooseSearchResult, clearGlobalSearch, searchMenuLabel, searchMenuStyle,
+                    keysList, keysByPlatform, keysSearchQuery, keysEditId, keysEditForm, keysAdd, filteredKeys, keyPlatformFilter, loadKeys, keyHealthLabel, probeKeyFlat, toggleKeyFlat, addKeyFlat, deleteKeyFlat, openKeyEditFlat, saveKeyEditFlat, jumpToPlatform,
+                    addWizard, openAddWizard, closeAddWizard, checkPlatDomain, testWizardPlatform, testWizardKey, testWizardModel, submitAddWizard, doWizardSave, wizardHasNew, wizardKeyOptions, wizardModelOptions, helpModal,
                     
                     // Log selection
                     selectedLog,
@@ -5481,6 +6004,7 @@
                     insightFilter, levelFilter,
                     hasAnyInsights, hasCriticalInsights, hasWarningInsights,
                     filteredEfficiency, filteredCapacity, capacityGrouped, queueInsights,
+                    coolingTree, jumpToPlatform,
                     dashSuccessText,
                     dashSuccessColor,
                     dashLatencyColor,
@@ -5489,10 +6013,9 @@
                     dashAlerts,
                     
                     // Modals toggle & save
-                    keysModal, openKeysModal, closeKeysModal, addKey, deleteKey, toggleKey, probeKey, maskToken, formatKeyExpiry, isKeyExpired,
-                    copyToken, openKeyEdit, saveKeyEdit,
+                    maskToken, formatKeyExpiry, isKeyExpired,
+                    copyToken,
                     platformModal, openPlatformModal, closePlatformModal, savePlatform, deletePlatform, togglePlatform, restorePlatform, fetchPlatformModels,
-                    addInlineKey, removeInlineKey,
                     rapiModal, openRapiModal, closeRapiModal, saveRapi, deleteRapi, toggleRapi, restoreRapi,
                     rapiTestModal, openRapiTestModal, closeRapiTestModal, sendRapiTest, rapiTestKeys,
                     selectedPlatformKeys, rapiKeySelectionLabel,
