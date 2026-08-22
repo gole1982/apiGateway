@@ -431,10 +431,15 @@ func createWebHandler() http.Handler {
 				http.Error(w, `{"error":"invalid json"}`, 400)
 				return
 			}
-			// Alias is used for LAPI matching — must be lowercase.
-			// Model is the upstream model name — preserve original casing.
-			rapi.Alias = strings.ToLower(strings.TrimSpace(rapi.Alias))
-			rapi.Model = strings.TrimSpace(rapi.Model)
+			trimRAPINaming(&rapi)
+			// Alias is now derived server-side from the unified naming rule
+			// (厂商/系列/版本/后缀 → 备注 → 上游模型名) and stays lowercase for
+			// LAPI matching. Model preserves its original casing upstream.
+			rapi.Alias = deriveRAPIAlias(&rapi, 0)
+			if rapi.Alias == "" {
+				writeJSONError(w, 400, fmt.Errorf("请至少填写厂商/系列/版本/后缀、模型备注或上游模型名之一"))
+				return
+			}
 			if err := db.Get().CreateRAPI(&rapi); err != nil {
 				logger.DefaultConsole().Error("service", "[API] CreateRAPI failed",
 					"alias", rapi.Alias, "platform_id", rapi.PlatformID, "error", err.Error())
@@ -454,10 +459,14 @@ func createWebHandler() http.Handler {
 				http.Error(w, `{"error":"invalid json"}`, 400)
 				return
 			}
-			// Alias is used for LAPI matching — must be lowercase.
-			// Model is the upstream model name — preserve original casing.
-			rapi.Alias = strings.ToLower(strings.TrimSpace(rapi.Alias))
-			rapi.Model = strings.TrimSpace(rapi.Model)
+			trimRAPINaming(&rapi)
+			// Alias is derived from the unified naming rule (see POST above);
+			// excludeID keeps the row's own alias out of the dedup check.
+			rapi.Alias = deriveRAPIAlias(&rapi, rapi.ID)
+			if rapi.Alias == "" {
+				writeJSONError(w, 400, fmt.Errorf("请至少填写厂商/系列/版本/后缀、模型备注或上游模型名之一"))
+				return
+			}
 			// Remember whether the model was unavailable before the edit, so a
 			// key_ids whitelist change that adds a usable key can trigger an
 			// automatic re-probe (previously it stayed dead until manual retry).
@@ -1386,11 +1395,14 @@ func createWebHandler() http.Handler {
 		created := make([]map[string]interface{}, 0)
 		var errors []string
 		for _, modelName := range req.Models {
-			// Alias is lowercase for matching; Model preserves original casing from platform.
 			modelName = strings.TrimSpace(modelName)
+			// Alias is lowercase for matching; Model preserves original casing from
+			// platform. The provider's original name also becomes the model remark
+			// (模型备注) so the auto-derived display name falls back to it.
 			rapi := models.RAPI{
 				Alias:            strings.ToLower(modelName),
 				Model:            modelName,
+				Notes:            modelName,
 				PlatformID:       req.PlatformID,
 				Enabled:          true,
 				Available:        true,
@@ -2359,14 +2371,47 @@ func createWebHandler() http.Handler {
 //go:embed dashboard.html
 var dashboardHTML string
 
-// autoMapRAPItoLAPI checks if a newly created RAPI's model identity (series, model_name, version)
-// matches an existing LAPI. If so, the RAPI is automatically appended to that LAPI's routing chain.
+// trimRAPINaming trims whitespace from the unified naming fields.
+func trimRAPINaming(rapi *models.RAPI) {
+	rapi.Vendor = strings.TrimSpace(rapi.Vendor)
+	rapi.Series = strings.TrimSpace(rapi.Series)
+	rapi.ModelName = strings.TrimSpace(rapi.ModelName)
+	rapi.Version = strings.TrimSpace(rapi.Version)
+	rapi.Suffix = strings.TrimSpace(rapi.Suffix)
+	rapi.Notes = strings.TrimSpace(rapi.Notes)
+	rapi.Model = strings.TrimSpace(rapi.Model)
+}
+
+// deriveRAPIAlias computes the internal per-platform unique alias from the
+// unified naming rule: lower(计算名 || 模型备注 || 上游模型名). When the result
+// collides with another model of the same platform, -2/-3/... is appended.
+// Returns "" when nothing names the model. excludeID lets updates skip the
+// row itself.
+func deriveRAPIAlias(rapi *models.RAPI, excludeID int64) string {
+	name := models.ComputeModelName(rapi.Vendor, rapi.Series, rapi.Version, rapi.Suffix, rapi.Notes, rapi.Model)
+	base := strings.ToLower(strings.TrimSpace(name))
+	if base == "" {
+		return ""
+	}
+	alias := base
+	for i := 2; ; i++ {
+		exists, err := db.Get().RAPIAliasExists(rapi.PlatformID, alias, excludeID)
+		if err != nil || !exists {
+			return alias
+		}
+		alias = fmt.Sprintf("%s-%d", base, i)
+	}
+}
+
+// autoMapRAPItoLAPI checks if a newly created RAPI's naming identity
+// (vendor, series, version, suffix) matches an existing LAPI. If so, the RAPI
+// is automatically appended to that LAPI's routing chain.
 // Fallback: when identity fields are all empty (e.g. batch-created RAPIs), match by alias.
 func autoMapRAPItoLAPI(rapi *models.RAPI) {
 	var lapi *models.LAPI
 	var err error
 
-	if rapi.Series == "" && rapi.ModelName == "" && rapi.Version == "" {
+	if rapi.Vendor == "" && rapi.Series == "" && rapi.Version == "" && rapi.Suffix == "" {
 		// No identity fields — fall back to alias matching.
 		if rapi.Alias == "" {
 			return
@@ -2376,7 +2421,7 @@ func autoMapRAPItoLAPI(rapi *models.RAPI) {
 			return
 		}
 	} else {
-		lapi, err = db.Get().FindLAPIByModelIdentity(rapi.Series, rapi.ModelName, rapi.Version)
+		lapi, err = db.Get().FindLAPIByModelIdentity(rapi.Vendor, rapi.Series, rapi.Version, rapi.Suffix)
 		if err != nil || lapi == nil {
 			return // No matching LAPI
 		}
@@ -2399,8 +2444,8 @@ func autoMapRAPItoLAPI(rapi *models.RAPI) {
 		return
 	}
 	logger.DefaultConsole().Info("service", "[AUTO-MAP] rapi auto-added to lapi",
-		"rapi", rapi.Alias, "series", rapi.Series, "name", rapi.ModelName,
-		"version", rapi.Version, "lapi", lapi.Alias)
+		"rapi", rapi.Alias, "vendor", rapi.Vendor, "series", rapi.Series,
+		"version", rapi.Version, "suffix", rapi.Suffix, "lapi", lapi.Alias)
 }
 
 func writeJSONError(w http.ResponseWriter, status int, err error) {

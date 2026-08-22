@@ -81,9 +81,11 @@ type RAPI struct {
 	Alias             string `json:"alias"`
 	Model             string `json:"model"`
 	Notes             string `json:"notes"`
-	Series            string `json:"series"`     // 系列 (e.g. "glm", "claude")
-	ModelName         string `json:"model_name"` // 名 (e.g. "sonnet", empty for glm)
-	Version           string `json:"version"`    // 版本 (e.g. "5.2", "4.7")
+	Vendor            string `json:"vendor"`  // 厂商 (e.g. "openai", "z.ai")
+	Series            string `json:"series"`  // 系列 (e.g. "glm", "claude")
+	ModelName         string `json:"model_name"` // 名 (legacy, values migrated into Suffix)
+	Version           string `json:"version"` // 版本 (e.g. "5.2", "4.7")
+	Suffix            string `json:"suffix"`  // 后缀 (e.g. "luna xhigh", "sonnet")
 	PlatformID        int64  `json:"platform_id"`
 	Enabled           bool   `json:"enabled"`
 	Available         bool   `json:"available"`
@@ -140,6 +142,11 @@ type RAPIWithPlatform struct {
 	Alias             string `json:"alias"`
 	Model             string `json:"model"`
 	Notes             string `json:"notes"`
+	Vendor            string `json:"vendor"`
+	Series            string `json:"series"`
+	ModelName         string `json:"model_name"`
+	Version           string `json:"version"`
+	Suffix            string `json:"suffix"`
 	PlatformID        int64  `json:"platform_id"`
 	Enabled           bool   `json:"enabled"`
 	Available         bool   `json:"available"`
@@ -198,11 +205,50 @@ type LAPI struct {
 	ID        int64     `json:"id"`
 	Alias     string    `json:"alias"`
 	Notes     string    `json:"notes"`
-	Series    string    `json:"series"`     // 系列 (e.g. "glm", "claude")
-	ModelName string    `json:"model_name"` // 名 (e.g. "sonnet", empty for glm)
-	Version   string    `json:"version"`    // 版本 (e.g. "5.2", "4.7")
+	Vendor    string    `json:"vendor"`  // 厂商
+	Series    string    `json:"series"`  // 系列
+	ModelName string    `json:"model_name"` // 名 (legacy, values migrated into Suffix)
+	Version   string    `json:"version"` // 版本
+	Suffix    string    `json:"suffix"`  // 后缀
 	Enabled   bool      `json:"enabled"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// ComputeModelName builds the unified display name from the four naming
+// components: "{vendor}/" + non-empty [series, version, suffix] joined with "-".
+// Empty components are skipped entirely (no stray separators). When all four
+// components are empty the remark (notes) is used as the name; when the remark
+// is empty too, fallback (usually the upstream model string) is returned.
+func ComputeModelName(vendor, series, version, suffix, notes, fallback string) string {
+	parts := make([]string, 0, 3)
+	for _, p := range []string{series, version, suffix} {
+		if p != "" {
+			parts = append(parts, p)
+		}
+	}
+	name := ""
+	if vendor != "" {
+		name = vendor + "/"
+	}
+	name += joinDash(parts)
+	if name != "" {
+		return name
+	}
+	if notes != "" {
+		return notes
+	}
+	return fallback
+}
+
+func joinDash(parts []string) string {
+	out := ""
+	for i, p := range parts {
+		if i > 0 {
+			out += "-"
+		}
+		out += p
+	}
+	return out
 }
 
 type ProxyRequest struct {

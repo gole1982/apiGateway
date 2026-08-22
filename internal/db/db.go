@@ -245,6 +245,9 @@ func Init() error {
 	}
 	// Migration: add series/name/version columns to rapi and lapi tables
 	instance.migrateAddModelIdentityColumns()
+	// Migration: unified model naming (vendor/suffix columns, model_name→suffix,
+	// backfill rapi.notes from the original upstream model string)
+	instance.migrateUnifiedModelNaming()
 	// Migration: add supported_formats to platform table (platform-level authority)
 	instance.migrateAddPlatformSupportedFormats()
 	instance.migrateAddPlatformFormatEndpoints()
@@ -1023,7 +1026,7 @@ func (db *DB) GetRAPIs() ([]models.RAPIWithPlatform, error) {
 	defer db.mu.RUnlock()
 
 	return db.queryRAPIsWithPlatform(`
-		SELECT r.id, r.alias, r.model, r.platform_id, r.enabled, r.available, r.unavailable_reason,
+		SELECT r.id, r.alias, r.model, r.vendor, r.series, r.model_name, r.version, r.suffix, r.platform_id, r.enabled, r.available, r.unavailable_reason,
 		       r.base_cost, r.high_cost, r.rpm_limit, r.rph_limit, r.rpd_limit, r.tpm_limit, r.tph_limit, r.tpd_limit, r.time_period_rules, r.created_at, r.updated_at,
 		       p.name, p.base_url, p.token, p.last_token_fetch,
 		       0 AS order_index, r.supported_formats, r.custom_headers, r.key_ids, r.notes, r.source, p.custom_headers, p.supported_formats, p.format_endpoints
@@ -1038,7 +1041,7 @@ func (db *DB) GetRAPIByID(id int64) (*models.RAPIWithPlatform, error) {
 	defer db.mu.RUnlock()
 
 	results, err := db.queryRAPIsWithPlatform(`
-		SELECT r.id, r.alias, r.model, r.platform_id, r.enabled, r.available, r.unavailable_reason,
+		SELECT r.id, r.alias, r.model, r.vendor, r.series, r.model_name, r.version, r.suffix, r.platform_id, r.enabled, r.available, r.unavailable_reason,
 		       r.base_cost, r.high_cost, r.rpm_limit, r.rph_limit, r.rpd_limit, r.tpm_limit, r.tph_limit, r.tpd_limit, r.time_period_rules, r.created_at, r.updated_at,
 		       p.name, p.base_url, p.token, p.last_token_fetch,
 		       0 AS order_index, r.supported_formats, r.custom_headers, r.key_ids, r.notes, r.source, p.custom_headers, p.supported_formats, p.format_endpoints
@@ -1068,9 +1071,10 @@ func (db *DB) queryRAPIsWithPlatform(query string, args ...interface{}) ([]model
 		var rEnabled, rAvailable sql.NullInt64
 		var lastFetch, created, updated sql.NullTime
 		var pName, pURL, pToken sql.NullString
+		var vendor, series, modelName, version, suffix sql.NullString
 		var timePeriodRules, supportedFormats, customHeaders, keyIDs, unavailableReason, notes, platformCustomHeaders, source, platformSupportedFormats, platformFormatEndpoints sql.NullString
 
-		err := rows.Scan(&r.ID, &r.Alias, &r.Model, &r.PlatformID, &rEnabled, &rAvailable, &unavailableReason,
+		err := rows.Scan(&r.ID, &r.Alias, &r.Model, &vendor, &series, &modelName, &version, &suffix, &r.PlatformID, &rEnabled, &rAvailable, &unavailableReason,
 			&r.BaseCost, &r.HighCost, &r.RPMLimit, &r.RPHLimit, &r.RPDLimit, &r.TPMLimit, &r.TPHLimit, &r.TPDLimit, &timePeriodRules, &created, &updated,
 			&pName, &pURL, &pToken, &lastFetch, &r.OrderIndex, &supportedFormats, &customHeaders, &keyIDs, &notes, &source, &platformCustomHeaders, &platformSupportedFormats, &platformFormatEndpoints)
 		if err != nil {
@@ -1079,6 +1083,11 @@ func (db *DB) queryRAPIsWithPlatform(query string, args ...interface{}) ([]model
 
 		r.Enabled = rEnabled.Int64 != 0 // default to true if NULL
 		r.Available = rAvailable.Int64 != 0
+		r.Vendor = vendor.String
+		r.Series = series.String
+		r.ModelName = modelName.String
+		r.Version = version.String
+		r.Suffix = suffix.String
 		r.UnavailableReason = unavailableReason.String
 		r.PlatformFormatEndpoints = platformFormatEndpoints.String
 		r.TimePeriodRules = timePeriodRules.String
@@ -1126,9 +1135,9 @@ func (db *DB) CreateRAPI(r *models.RAPI) error {
 	}
 
 	result, err := db.conn.Exec(`
-		INSERT INTO rapi (alias, model, notes, series, model_name, version, platform_id, enabled, available, base_cost, high_cost, rpm_limit, rph_limit, rpd_limit, tpm_limit, tph_limit, tpd_limit, time_period_rules, supported_formats, custom_headers, key_ids, source)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, r.Alias, r.Model, r.Notes, r.Series, r.ModelName, r.Version, r.PlatformID, boolToInt(r.Enabled), boolToInt(r.Available), r.BaseCost, r.HighCost, r.RPMLimit, r.RPHLimit, r.RPDLimit, r.TPMLimit, r.TPHLimit, r.TPDLimit, r.TimePeriodRules, formats, r.CustomHeaders, r.KeyIDs, source)
+		INSERT INTO rapi (alias, model, notes, vendor, series, model_name, version, suffix, platform_id, enabled, available, base_cost, high_cost, rpm_limit, rph_limit, rpd_limit, tpm_limit, tph_limit, tpd_limit, time_period_rules, supported_formats, custom_headers, key_ids, source)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, r.Alias, r.Model, r.Notes, r.Vendor, r.Series, r.ModelName, r.Version, r.Suffix, r.PlatformID, boolToInt(r.Enabled), boolToInt(r.Available), r.BaseCost, r.HighCost, r.RPMLimit, r.RPHLimit, r.RPDLimit, r.TPMLimit, r.TPHLimit, r.TPDLimit, r.TimePeriodRules, formats, r.CustomHeaders, r.KeyIDs, source)
 
 	if err != nil {
 		return err
@@ -1149,13 +1158,27 @@ func (db *DB) UpdateRAPI(r *models.RAPI) error {
 	defer db.mu.Unlock()
 
 	_, err := db.conn.Exec(`
-		UPDATE rapi SET alias = ?, model = ?, notes = ?, series = ?, model_name = ?, version = ?, platform_id = ?, enabled = ?, available = ?,
+		UPDATE rapi SET alias = ?, model = ?, notes = ?, vendor = ?, series = ?, model_name = ?, version = ?, suffix = ?, platform_id = ?, enabled = ?, available = ?,
 			base_cost = ?, high_cost = ?, rpm_limit = ?, rph_limit = ?, rpd_limit = ?, tpm_limit = ?, tph_limit = ?, tpd_limit = ?, time_period_rules = ?, supported_formats = ?, custom_headers = ?, key_ids = ?, source = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?
-	`, r.Alias, r.Model, r.Notes, r.Series, r.ModelName, r.Version, r.PlatformID, boolToInt(r.Enabled), boolToInt(r.Available),
+	`, r.Alias, r.Model, r.Notes, r.Vendor, r.Series, r.ModelName, r.Version, r.Suffix, r.PlatformID, boolToInt(r.Enabled), boolToInt(r.Available),
 		r.BaseCost, r.HighCost, r.RPMLimit, r.RPHLimit, r.RPDLimit, r.TPMLimit, r.TPHLimit, r.TPDLimit, r.TimePeriodRules, r.SupportedFormats, r.CustomHeaders, r.KeyIDs, r.Source, r.ID)
 
 	return err
+}
+
+// RAPIAliasExists reports whether a rapi alias is already taken within a
+// platform. excludeID lets updates ignore the row itself (0 = no exclusion).
+func (db *DB) RAPIAliasExists(platformID int64, alias string, excludeID int64) (bool, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	var cnt int
+	err := db.conn.QueryRow(
+		`SELECT COUNT(*) FROM rapi WHERE platform_id = ? AND LOWER(alias) = LOWER(?) AND id != ?`,
+		platformID, alias, excludeID,
+	).Scan(&cnt)
+	return cnt > 0, err
 }
 
 func (db *DB) SetPlatformEnabled(id int64, enabled bool) error {
@@ -1282,7 +1305,7 @@ func (db *DB) GetEnabledRAPIsForLAPI(lapiID int64) ([]models.RAPIWithPlatform, e
 	defer db.mu.RUnlock()
 
 	return db.queryRAPIsWithPlatform(`
-		SELECT r.id, r.alias, r.model, r.platform_id, r.enabled, r.available, r.unavailable_reason,
+		SELECT r.id, r.alias, r.model, r.vendor, r.series, r.model_name, r.version, r.suffix, r.platform_id, r.enabled, r.available, r.unavailable_reason,
 		       r.base_cost, r.high_cost, r.rpm_limit, r.rph_limit, r.rpd_limit, r.tpm_limit, r.tph_limit, r.tpd_limit, r.time_period_rules, r.created_at, r.updated_at,
 		       p.name, p.base_url, p.token, p.last_token_fetch,
 		       o.order_index, r.supported_formats, r.custom_headers, r.key_ids, r.notes, r.source, p.custom_headers, p.supported_formats, p.format_endpoints
@@ -1398,7 +1421,7 @@ func (db *DB) GetRAPIsByPlatform(platformID int64) ([]models.RAPIWithPlatform, e
 	defer db.mu.RUnlock()
 
 	return db.queryRAPIsWithPlatform(`
-		SELECT r.id, r.alias, r.model, r.platform_id, r.enabled, r.available, r.unavailable_reason,
+		SELECT r.id, r.alias, r.model, r.vendor, r.series, r.model_name, r.version, r.suffix, r.platform_id, r.enabled, r.available, r.unavailable_reason,
 		       r.base_cost, r.high_cost, r.rpm_limit, r.rph_limit, r.rpd_limit, r.tpm_limit, r.tph_limit, r.tpd_limit, r.time_period_rules, r.created_at, r.updated_at,
 		       p.name, p.base_url, p.token, p.last_token_fetch,
 		       0 AS order_index, r.supported_formats, r.custom_headers, r.key_ids, r.notes, r.source, p.custom_headers, p.supported_formats, p.format_endpoints
@@ -1416,7 +1439,7 @@ func (db *DB) GetLAPIs() ([]models.LAPI, error) {
 	defer db.mu.RUnlock()
 
 	rows, err := db.conn.Query(`
-		SELECT id, alias, notes, series, model_name, version, enabled, created_at FROM lapi ORDER BY id ASC
+		SELECT id, alias, notes, vendor, series, model_name, version, suffix, enabled, created_at FROM lapi ORDER BY sort_order ASC, id ASC
 	`)
 	if err != nil {
 		return nil, err
@@ -1428,17 +1451,19 @@ func (db *DB) GetLAPIs() ([]models.LAPI, error) {
 		var u models.LAPI
 		var enabled int
 		var created sql.NullTime
-		var notesNull, seriesNull, nameNull, versionNull sql.NullString
+		var notesNull, vendorNull, seriesNull, nameNull, versionNull, suffixNull sql.NullString
 
-		err := rows.Scan(&u.ID, &u.Alias, &notesNull, &seriesNull, &nameNull, &versionNull, &enabled, &created)
+		err := rows.Scan(&u.ID, &u.Alias, &notesNull, &vendorNull, &seriesNull, &nameNull, &versionNull, &suffixNull, &enabled, &created)
 		if err != nil {
 			return nil, err
 		}
 		u.Enabled = enabled == 1
 		u.Notes = notesNull.String
+		u.Vendor = vendorNull.String
 		u.Series = seriesNull.String
 		u.ModelName = nameNull.String
 		u.Version = versionNull.String
+		u.Suffix = suffixNull.String
 
 		if created.Valid {
 			u.CreatedAt = created.Time
@@ -1456,19 +1481,21 @@ func (db *DB) GetLAPIByID(id int64) (*models.LAPI, error) {
 	var u models.LAPI
 	var enabled int
 	var created sql.NullTime
-	var notesNull, seriesNull, nameNull, versionNull sql.NullString
+	var notesNull, vendorNull, seriesNull, nameNull, versionNull, suffixNull sql.NullString
 
 	err := db.conn.QueryRow(`
-		SELECT id, alias, notes, series, model_name, version, enabled, created_at FROM lapi WHERE id = ?
-	`, id).Scan(&u.ID, &u.Alias, &notesNull, &seriesNull, &nameNull, &versionNull, &enabled, &created)
+		SELECT id, alias, notes, vendor, series, model_name, version, suffix, enabled, created_at FROM lapi WHERE id = ?
+	`, id).Scan(&u.ID, &u.Alias, &notesNull, &vendorNull, &seriesNull, &nameNull, &versionNull, &suffixNull, &enabled, &created)
 	if err != nil {
 		return nil, err
 	}
 	u.Enabled = enabled == 1
 	u.Notes = notesNull.String
+	u.Vendor = vendorNull.String
 	u.Series = seriesNull.String
 	u.ModelName = nameNull.String
 	u.Version = versionNull.String
+	u.Suffix = suffixNull.String
 	if created.Valid {
 		u.CreatedAt = created.Time
 	}
@@ -1481,12 +1508,12 @@ func (db *DB) GetLAPIByAlias(alias string) (*models.LAPI, error) {
 
 	var u models.LAPI
 	var enabled int
-	var notes, seriesNull, nameNull, versionNull sql.NullString
+	var notes, vendorNull, seriesNull, nameNull, versionNull, suffixNull sql.NullString
 	var created sql.NullTime
 
 	err := db.conn.QueryRow(`
-		SELECT id, alias, notes, series, model_name, version, enabled, created_at FROM lapi WHERE LOWER(alias) = LOWER(?)
-	`, alias).Scan(&u.ID, &u.Alias, &notes, &seriesNull, &nameNull, &versionNull, &enabled, &created)
+		SELECT id, alias, notes, vendor, series, model_name, version, suffix, enabled, created_at FROM lapi WHERE LOWER(alias) = LOWER(?)
+	`, alias).Scan(&u.ID, &u.Alias, &notes, &vendorNull, &seriesNull, &nameNull, &versionNull, &suffixNull, &enabled, &created)
 	u.Enabled = enabled == 1
 
 	if err != nil {
@@ -1494,9 +1521,11 @@ func (db *DB) GetLAPIByAlias(alias string) (*models.LAPI, error) {
 	}
 
 	u.Notes = notes.String
+	u.Vendor = vendorNull.String
 	u.Series = seriesNull.String
 	u.ModelName = nameNull.String
 	u.Version = versionNull.String
+	u.Suffix = suffixNull.String
 
 	if created.Valid {
 		u.CreatedAt = created.Time
@@ -1505,11 +1534,12 @@ func (db *DB) GetLAPIByAlias(alias string) (*models.LAPI, error) {
 	return &u, nil
 }
 
-// FindLAPIByModelIdentity finds a LAPI whose (series, model_name, version) matches the given values.
-// Used for auto-mapping: when a new RAPI is created with matching identity, it is added to this LAPI.
-// Returns nil if no match found or if all three fields are empty.
-func (db *DB) FindLAPIByModelIdentity(series, modelName, version string) (*models.LAPI, error) {
-	if series == "" && modelName == "" && version == "" {
+// FindLAPIByModelIdentity finds a LAPI whose (vendor, series, version, suffix)
+// naming identity matches the given values. Used for auto-mapping: when a new
+// RAPI is created with matching identity, it is added to this LAPI.
+// Returns nil if no match found or if all four fields are empty.
+func (db *DB) FindLAPIByModelIdentity(vendor, series, version, suffix string) (*models.LAPI, error) {
+	if vendor == "" && series == "" && version == "" && suffix == "" {
 		return nil, nil // No identity to match
 	}
 	db.mu.RLock()
@@ -1517,23 +1547,25 @@ func (db *DB) FindLAPIByModelIdentity(series, modelName, version string) (*model
 
 	var u models.LAPI
 	var enabled int
-	var notes, seriesNull, nameNull, versionNull sql.NullString
+	var notes, vendorNull, seriesNull, nameNull, versionNull, suffixNull sql.NullString
 	var created sql.NullTime
 
 	err := db.conn.QueryRow(`
-		SELECT id, alias, notes, series, model_name, version, enabled, created_at FROM lapi
-		WHERE COALESCE(series,'') = ? AND COALESCE(model_name,'') = ? AND COALESCE(version,'') = ?
+		SELECT id, alias, notes, vendor, series, model_name, version, suffix, enabled, created_at FROM lapi
+		WHERE COALESCE(vendor,'') = ? AND COALESCE(series,'') = ? AND COALESCE(version,'') = ? AND COALESCE(suffix,'') = ?
 		LIMIT 1
-	`, series, modelName, version).Scan(&u.ID, &u.Alias, &notes, &seriesNull, &nameNull, &versionNull, &enabled, &created)
+	`, vendor, series, version, suffix).Scan(&u.ID, &u.Alias, &notes, &vendorNull, &seriesNull, &nameNull, &versionNull, &suffixNull, &enabled, &created)
 	if err != nil {
 		return nil, err // sql.ErrNoRows if not found
 	}
 
 	u.Enabled = enabled == 1
 	u.Notes = notes.String
+	u.Vendor = vendorNull.String
 	u.Series = seriesNull.String
 	u.ModelName = nameNull.String
 	u.Version = versionNull.String
+	u.Suffix = suffixNull.String
 	if created.Valid {
 		u.CreatedAt = created.Time
 	}
@@ -1549,8 +1581,8 @@ func (db *DB) CreateLAPI(u *models.LAPI) error {
 		enabledVal = 0
 	}
 	result, err := db.conn.Exec(`
-		INSERT INTO lapi (alias, notes, series, model_name, version, enabled) VALUES (?, ?, ?, ?, ?, ?)
-	`, u.Alias, u.Notes, u.Series, u.ModelName, u.Version, enabledVal)
+		INSERT INTO lapi (alias, notes, vendor, series, model_name, version, suffix, enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, u.Alias, u.Notes, u.Vendor, u.Series, u.ModelName, u.Version, u.Suffix, enabledVal)
 
 	if err != nil {
 		return err
@@ -1572,7 +1604,7 @@ func (db *DB) UpdateLAPI(l *models.LAPI) error {
 	if !l.Enabled {
 		enabledVal = 0
 	}
-	_, err := db.conn.Exec("UPDATE lapi SET alias = ?, notes = ?, series = ?, model_name = ?, version = ?, enabled = ? WHERE id = ?", l.Alias, l.Notes, l.Series, l.ModelName, l.Version, enabledVal, l.ID)
+	_, err := db.conn.Exec("UPDATE lapi SET alias = ?, notes = ?, vendor = ?, series = ?, model_name = ?, version = ?, suffix = ?, enabled = ? WHERE id = ?", l.Alias, l.Notes, l.Vendor, l.Series, l.ModelName, l.Version, l.Suffix, enabledVal, l.ID)
 	return err
 }
 
@@ -1608,7 +1640,7 @@ func (db *DB) GetRAPIsForLAPI(lapiID int64) ([]models.RAPIWithPlatform, error) {
 	defer db.mu.RUnlock()
 
 	return db.queryRAPIsWithPlatform(`
-		SELECT r.id, r.alias, r.model, r.platform_id, r.enabled, r.available, r.unavailable_reason,
+		SELECT r.id, r.alias, r.model, r.vendor, r.series, r.model_name, r.version, r.suffix, r.platform_id, r.enabled, r.available, r.unavailable_reason,
 		       r.base_cost, r.high_cost, r.rpm_limit, r.rph_limit, r.rpd_limit, r.tpm_limit, r.tph_limit, r.tpd_limit, r.time_period_rules, r.created_at, r.updated_at,
 		       p.name, p.base_url, p.token, p.last_token_fetch,
 		       o.order_index, r.supported_formats, r.custom_headers, r.key_ids, r.notes, r.source, p.custom_headers, p.supported_formats, p.format_endpoints
@@ -2567,6 +2599,33 @@ func (db *DB) migrateAddModelIdentityColumns() {
 	}
 }
 
+// migrateUnifiedModelNaming adds the vendor/suffix naming columns to rapi and
+// lapi, migrates legacy model_name values into suffix, and backfills empty
+// rapi.notes with the original upstream model string (auto-discovered models
+// keep their original name as the 模型备注). Idempotent.
+func (db *DB) migrateUnifiedModelNaming() {
+	for _, table := range []string{"rapi", "lapi"} {
+		for _, col := range []string{"vendor", "suffix"} {
+			var count int
+			row := db.conn.QueryRow(
+				fmt.Sprintf(`SELECT COUNT(*) FROM pragma_table_info('%s') WHERE name='%s'`, table, col),
+			)
+			if row.Scan(&count) == nil && count == 0 {
+				db.conn.Exec(fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s TEXT NOT NULL DEFAULT ''`, table, col))
+			}
+		}
+		// Legacy "名 (model_name)" values become the suffix (e.g. sonnet),
+		// preserving display data such as claude-sonnet-4.7 → claude-4.7-sonnet.
+		db.conn.Exec(fmt.Sprintf(`UPDATE %s SET suffix = model_name WHERE suffix = '' AND model_name != ''`, table))
+	}
+	// Backfill empty rapi.notes as the model remark (模型备注):
+	// - auto-discovered models keep their original upstream name as the remark;
+	// - manually added models whose alias differs from the upstream name keep
+	//   the user's own naming (用户命名) as the remark.
+	db.conn.Exec(`UPDATE rapi SET notes = model WHERE notes = '' AND model != '' AND (source != 'manual' OR alias = '' OR alias = LOWER(model))`)
+	db.conn.Exec(`UPDATE rapi SET notes = alias WHERE notes = '' AND alias != '' AND source = 'manual' AND alias != LOWER(model)`)
+}
+
 // migrateRAPIUniqueAliasToPerPlatform changes the rapi.alias uniqueness constraint from
 // a global UNIQUE(alias) to UNIQUE(platform_id, alias), allowing different platforms to
 // share the same model alias (e.g. glm-5.2 on JD and on ZhipuAI).
@@ -2748,13 +2807,13 @@ func (db *DB) migrateEncryptTokens() error {
 	return tx.Commit()
 }
 
-// migrateAddSortOrderColumns adds sort_order column to platform and rapi tables if missing,
+// migrateAddSortOrderColumns adds sort_order column to platform, rapi and lapi tables if missing,
 // and initialises existing rows with their current id order.
 func (db *DB) migrateAddSortOrderColumns() {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	for _, tbl := range []string{"platform", "rapi"} {
+	for _, tbl := range []string{"platform", "rapi", "lapi"} {
 		row := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name='sort_order'`, tbl)
 		var cnt int
 		if err := row.Scan(&cnt); err != nil || cnt > 0 {
@@ -2806,6 +2865,103 @@ func (db *DB) SetRAPISortOrder(ids []int64) error {
 	for i, id := range ids {
 		if _, err := tx.Exec(`UPDATE rapi SET sort_order = ? WHERE id = ?`, i, id); err != nil {
 			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// SetLAPISortOrder persists a new display order for lapis.
+// ids must contain every lapi id; each receives order index = its position in the slice.
+func (db *DB) SetLAPISortOrder(ids []int64) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for i, id := range ids {
+		if _, err := tx.Exec(`UPDATE lapi SET sort_order = ? WHERE id = ?`, i, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// ReorderKeysByGlobalOrder persists the given global key order by re-deriving each
+// platform's key_index from the positions of its keys in ids. Keys not listed keep
+// their relative order after the listed ones. key_index is renumbered per platform
+// in two phases (offset by +100000, then final 0..n) because the UNIQUE(platform_id,
+// key_index) constraint would otherwise fail on transient collisions mid-update.
+func (db *DB) ReorderKeysByGlobalOrder(ids []int64) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Current per-platform order (id ASC position) as the fallback tail.
+	rows, err := tx.Query(`SELECT id, platform_id FROM platform_keys ORDER BY platform_id ASC, key_index ASC`)
+	if err != nil {
+		return err
+	}
+	type keyRef struct {
+		id         int64
+		platformID int64
+	}
+	var all []keyRef
+	platformOf := make(map[int64]int64)
+	for rows.Next() {
+		var kr keyRef
+		if err := rows.Scan(&kr.id, &kr.platformID); err != nil {
+			rows.Close()
+			return err
+		}
+		all = append(all, kr)
+		platformOf[kr.id] = kr.platformID
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	posInReq := make(map[int64]int, len(ids))
+	for i, id := range ids {
+		posInReq[id] = i
+	}
+	// Final per-platform id sequences: requested ids first (in request order),
+	// then any remaining ids in their current order.
+	perPlatform := make(map[int64][]int64)
+	for _, id := range ids {
+		pid, ok := platformOf[id]
+		if !ok {
+			continue // unknown id — ignore
+		}
+		perPlatform[pid] = append(perPlatform[pid], id)
+	}
+	for _, kr := range all {
+		if _, listed := posInReq[kr.id]; listed {
+			continue
+		}
+		perPlatform[kr.platformID] = append(perPlatform[kr.platformID], kr.id)
+	}
+
+	// Phase 1: move every key_index out of the way.
+	for _, kr := range all {
+		if _, err := tx.Exec(`UPDATE platform_keys SET key_index = key_index + 100000 WHERE id = ?`, kr.id); err != nil {
+			return err
+		}
+	}
+	// Phase 2: write final contiguous indices.
+	for _, seq := range perPlatform {
+		for i, id := range seq {
+			if _, err := tx.Exec(`UPDATE platform_keys SET key_index = ? WHERE id = ?`, i, id); err != nil {
+				return err
+			}
 		}
 	}
 	return tx.Commit()

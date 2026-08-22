@@ -719,36 +719,7 @@
             border-color: rgba(100, 116, 139, 0.15);
         }
 
-        /* PLATFORMS GRID UI */
-        .platforms-container {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-            gap: 25px;
-        }
-        .platform-card {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-        .platform-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .platform-meta {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            min-width: 0;
-        }
-        .platform-name {
-            font-size: 1rem;
-            font-weight: 700;
-            color: #fff;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
+        /* PLATFORM TABLE UI */
         /* 静态 = 锁图标蓝色；动态 = 闪电图标橙色 */
         .platform-type {
             display: inline-flex;
@@ -813,10 +784,6 @@
         .plat-toggle.on  .plat-toggle-dot { background: var(--color-success); }
         .plat-toggle.off .plat-toggle-dot { background: var(--text-muted); }
         .plat-toggle.invalid .plat-toggle-dot { background: var(--color-danger); }
-        .platform-badges {
-            display: flex;
-            gap: 8px;
-        }
         .plat-badge {
             display: inline-flex;
             align-items: center;
@@ -874,68 +841,6 @@
             border: 1px solid rgba(245, 158, 11, 0.20);
             cursor: default;
         }
-        .platform-actions {
-            display: flex;
-            gap: 8px;
-            border-top: 1px solid rgba(255, 255, 255, 0.04);
-            padding-top: 10px;
-        }
-        .platform-actions > .btn,
-        .platform-actions > .plat-toggle {
-            flex: 1 1 0;
-            justify-content: center;
-        }
-        .platform-header-right {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            flex-shrink: 0;
-        }
-        /* KEY BADGE — kept for keys modal compat */
-        .key-count-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 5px;
-            background: rgba(168, 85, 247, 0.12);
-            color: var(--color-secondary);
-            border: 1px solid rgba(168, 85, 247, 0.22);
-            border-radius: 20px;
-            padding: 3px 10px;
-            font-size: 0.76rem;
-            font-weight: 600;
-            font-family: var(--font-mono);
-            cursor: pointer;
-            transition: all 0.2s ease;
-        }
-        .key-count-badge:hover {
-            background: rgba(168, 85, 247, 0.22);
-            border-color: rgba(168, 85, 247, 0.45);
-        }
-
-        /* KEYS MODAL SPECIFIC */
-        .key-row {
-            display: grid;
-            grid-template-columns: 28px 1fr auto auto;
-            align-items: center;
-            gap: 10px;
-            padding: 10px 14px;
-            background: rgba(0, 0, 0, 0.22);
-            border: 1px solid rgba(255,255,255,0.04);
-            border-radius: 10px;
-            margin-bottom: 8px;
-            transition: border-color 0.2s;
-        }
-        .key-row:hover { border-color: rgba(168, 85, 247, 0.2); }
-        .key-row.disabled { opacity: 0.45; }
-        .key-index-dot {
-            width: 22px; height: 22px;
-            background: var(--bg-solid-light);
-            border: 1px solid rgba(168, 85, 247, 0.35);
-            border-radius: 50%;
-            display: flex; align-items: center; justify-content: center;
-            font-size: 0.72rem; font-weight: 700; font-family: var(--font-mono);
-            color: var(--color-secondary);
-        }
         .key-token-display {
             font-family: var(--font-mono);
             font-size: 0.82rem;
@@ -949,7 +854,6 @@
             color: var(--text-muted);
             margin-top: 1px;
         }
-        .key-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
         /* RAPI quick-add pill buttons in LAPI route modal */
         .rapi-quick-btn {
             display: inline-flex; align-items: center;
@@ -962,14 +866,6 @@
         .rapi-quick-btn:hover { border-color: var(--color-primary); color: var(--text-primary); background: rgba(56,189,248,0.07); }
         .rapi-quick-btn-match { border-color: rgba(56,189,248,0.35); color: var(--color-primary); background: rgba(56,189,248,0.06); }
         .rapi-quick-btn-match:hover { background: rgba(56,189,248,0.14); }
-        .add-key-row {
-            display: grid;
-            grid-template-columns: 1fr 1fr auto;
-            gap: 10px;
-            margin-top: 14px;
-            padding-top: 14px;
-            border-top: 1px solid rgba(255,255,255,0.05);
-        }
 
         /* FORMS */
         .form-group {
@@ -1684,7 +1580,10 @@
                     </div>
                 </div>
                 <button class="btn btn-primary btn-sm" @click="openAddWizard">＋ 新增</button>
-                <button class="topbar-icon" @click="helpModal = true" title="帮助">?</button>
+                <a class="topbar-icon" href="https://github.com/gole1982/apiGateway" target="_blank" rel="noopener noreferrer" title="GitHub 项目主页"
+                   style="display:inline-flex;align-items:center;justify-content:center;text-decoration:none;color:inherit;">
+                    <svg style="width:16px;height:16px;" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
+                </a>
                 <button class="topbar-icon" @click="refreshData" title="刷新数据">
                     <svg style="width:16px;height:16px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
                 </button>
@@ -2191,86 +2090,231 @@
 
             <!-- 2. PLATFORMS tab -->
             <div v-if="activeTab === 'platforms'" class="tab-pane">
+                <!-- 平台详情页：完整信息 + 关联实体 + 操作按钮（修改/删除需先点"修改"） -->
+                <template v-if="detail.type === 'platform' && platformDetail">
+                    <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;flex-wrap:wrap;">
+                        <button class="btn btn-secondary btn-sm" @click="closeDetail">← 返回列表</button>
+                        <span style="font-size:1.1rem;font-weight:700;color:var(--color-primary);">{{ platformDetail.name }}</span>
+                        <span :class="['plat-toggle', platformDetail.enabled ? (platformDetail.available ? 'on' : 'invalid') : 'off']" style="pointer-events:none;">
+                            <span class="plat-toggle-dot"></span>
+                            {{ platformDetail.enabled ? (platformDetail.available ? '生效' : '失效') : '禁用' }}
+                        </span>
+                        <span v-if="!platformDetail.available && platformDetail.unavailable_reason"
+                              style="font-size:0.76rem;color:var(--color-danger);">{{ platformDetail.unavailable_reason }}</span>
+                        <span style="flex:1;"></span>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                            <button v-if="platformDetail.enabled && !platformDetail.available"
+                                    class="btn btn-sm" :disabled="platformDetail._restoring" @click="restorePlatform(platformDetail)"
+                                    style="background:rgba(239,68,68,0.12);color:var(--color-danger);border:1px solid rgba(239,68,68,0.3);">重试</button>
+                            <button v-else class="plat-toggle" :class="platformDetail.enabled ? 'on' : 'off'" @click="togglePlatform(platformDetail)">
+                                <span class="plat-toggle-dot"></span>
+                                {{ platformDetail.enabled ? '生效' : '禁用' }}
+                            </button>
+                            <button class="btn btn-secondary btn-sm" @click="fetchPlatformModels(platformDetail)" title="拉取该平台的上游模型列表并导入">发现模型</button>
+                            <button class="btn btn-primary btn-sm" @click="openPlatformModal(platformDetail)">修改</button>
+                        </div>
+                    </div>
+
+                    <div class="glass-card" style="padding:18px;margin-bottom:16px;">
+                        <div class="card-header-row" style="margin-bottom:12px;"><span class="card-title">基本信息</span></div>
+                        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px 28px;font-size:0.85rem;">
+                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">Base URL</div>
+                                <div style="font-family:var(--font-mono);color:var(--text-primary);word-break:break-all;">{{ platformDetail.base_url || '—' }}</div></div>
+                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">备注</div>
+                                <div style="color:var(--text-primary);">{{ platformDetail.notes || '—' }}</div></div>
+                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">支持协议</div>
+                                <div style="color:var(--text-primary);">{{ (platformDetail._platformFormats && platformDetail._platformFormats.length) ? platformDetail._platformFormats.join('、') : '—' }}</div></div>
+                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">账单地址</div>
+                                <a v-if="platformDetail.billing_address" :href="platformDetail.billing_address" target="_blank" rel="noopener noreferrer" style="color:var(--color-primary);text-decoration:none;">{{ platformDetail.billing_address }} ↗</a>
+                                <div v-else style="color:var(--text-muted);">—</div></div>
+                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">登录账号</div>
+                                <div style="color:var(--text-primary);">{{ platformDetail.login_account || '—' }}</div></div>
+                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">Token 最近获取</div>
+                                <div style="color:var(--text-primary);">{{ platformDetail.last_token_fetch && platformDetail.last_token_fetch !== '0001-01-01T00:00:00Z' ? formatTime(platformDetail.last_token_fetch) : '从未' }}</div></div>
+                        </div>
+                    </div>
+
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+                        <div class="glass-card" style="padding:18px;">
+                            <div class="card-header-row" style="margin-bottom:12px;">
+                                <span class="card-title">密钥（{{ (platformDetail._keys || []).length }}）</span>
+                                <button class="btn btn-secondary btn-sm" @click="openKeysTab(platformDetail)">全部管理 ›</button>
+                            </div>
+                            <div v-if="!(platformDetail._keys && platformDetail._keys.length)" style="color:var(--text-muted);font-size:0.84rem;">该平台暂无密钥</div>
+                            <div v-else style="display:flex;flex-direction:column;gap:6px;">
+                                <div v-for="k in platformDetail._keys" :key="'dk-'+k.id"
+                                     style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.84rem;padding:5px 8px;border-radius:6px;border:1px solid rgba(255,255,255,0.05);"
+                                     @click="openDetail('key', k.id)">
+                                    <span :style="keyBadgeStyle(k)">{{ keyHealthMeta[keyHealth(k)].icon }} {{ keyShortLabel(k) }}</span>
+                                    <span style="font-family:var(--font-mono);color:var(--text-muted);">#{{ k.key_index }}</span>
+                                    <span style="flex:1;"></span>
+                                    <span v-if="k.failure_reason" style="font-size:0.74rem;color:var(--text-muted);max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" :title="k.failure_reason">{{ k.failure_reason }}</span>
+                                    <span style="color:var(--text-muted);">›</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="glass-card" style="padding:18px;">
+                            <div class="card-header-row" style="margin-bottom:12px;">
+                                <span class="card-title">模型（{{ getPlatformRapiCount(platformDetail.id) }}）</span>
+                                <button class="btn btn-secondary btn-sm" @click="openPlatformModelsTab(platformDetail)">全部查看 ›</button>
+                            </div>
+                            <div v-if="rapis.filter(r => r.platform_id === platformDetail.id).length === 0" style="color:var(--text-muted);font-size:0.84rem;">该平台暂无模型，可点击上方"发现模型"导入</div>
+                            <div v-else style="display:flex;flex-direction:column;gap:6px;max-height:300px;overflow-y:auto;">
+                                <div v-for="r in rapis.filter(r => r.platform_id === platformDetail.id)" :key="'dr-'+r.id"
+                                     style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.84rem;padding:5px 8px;border-radius:6px;border:1px solid rgba(255,255,255,0.05);"
+                                     @click="openDetail('rapi', r.id)">
+                                    <span style="font-family:var(--font-mono);font-weight:600;color:var(--color-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ rapiDisplayName(r) }}</span>
+                                    <span v-if="!r.available" style="font-size:0.7rem;color:var(--color-danger);font-weight:600;">失效</span>
+                                    <span v-else-if="!r.enabled" style="font-size:0.7rem;color:var(--text-muted);">禁用</span>
+                                    <span style="flex:1;"></span>
+                                    <span style="color:var(--text-muted);">›</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </template>
+
+                <template v-else>
                 <div style="margin-bottom:20px;display:flex;justify-content:space-between;align-items:center;">
                     <div class="search-container">
                         <svg class="search-icon-svg" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
-                        <input type="text" class="form-control" placeholder="模糊过滤平台名称、地址或备注..." v-model="platformSearchQuery">
+                        <input type="text" class="form-control" placeholder="模糊过滤平台名称或地址..." v-model="platformSearchQuery">
                     </div>
                     <button class="btn btn-primary" @click="openPlatformModal(null)">+ 添加平台</button>
                 </div>
-                <div class="platforms-container" id="platforms-grid">
-                    <div v-for="plat in filteredPlatforms" :key="plat.id" :id="'el-p'+plat.id" class="glass-card platform-card card-drag-enabled"
-                         draggable="true"
-                         :title="(plat.notes ? plat.notes : '') + (plat.notes && plat.base_url ? ' | ' : '') + (plat.base_url ? plat.base_url : '')"
-                         @dragstart="onCardDragStart($event, 'platforms', plat.id)"
-                         @dragover.prevent="onCardDragOver($event)"
-                         @dragleave="onCardDragLeave($event)"
-                         @drop="onCardDrop($event, 'platforms', plat.id)"
-                         @dragend="onCardDragEnd($event)">
-
-                        <!-- 行1：名称（左）+ 协议徽章 / 删除图标（右上角） -->
-                        <div class="platform-header">
-                            <div class="platform-meta" style="min-width:0;flex:1;gap:6px;">
-                                <span class="platform-name">{{ plat.name }}</span>
-                            </div>
-                            <div class="platform-header-right">
-                                <!-- 平台级协议支持徽章（O=OpenAI / A=Anthropic / G=Gemini） -->
-                                <span v-if="plat._platformFormats && plat._platformFormats.length"
-                                      class="plat-fmt-icons"
-                                      :title="'平台支持的协议：' + plat._platformFormats.join('、')">
-                                    <span v-for="f in plat._platformFormats" :key="f"
-                                          class="plat-fmt-icon"
-                                          :class="'fmt-' + f"
-                                          :title="f">{{ f.charAt(0) }}</span>
-                                </span>
-                                <!-- 删除图标（仅禁用或失效时显示） -->
-                                <button v-if="!plat.enabled || !plat.available" class="btn btn-danger btn-sm btn-icon" @click="deletePlatform(plat)" title="删除">
-                                    <svg style="width:13px;height:13px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-                                </button>
-                            </div>
-                        </div>
-
-                        <!-- 行2：两个徽章 -->
-                        <div class="platform-badges">
-                            <!-- API令牌：密钥数 → 跳转独立的密钥管理页（按该平台过滤） -->
-                            <button class="plat-badge plat-badge-key"
-                                    @click="openKeysTab(plat)">
-                                <svg style="width:12px;height:12px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8" cy="15" r="4"/><path d="M12 15h8M16 11v8"/></svg>
-                                {{ (plat._keys && plat._keys.length) || 0 }} 个密钥
-                                <span v-if="platKeyAlerts(plat).perm > 0" style="color:var(--color-danger);font-size:0.68rem;font-weight:700;" title="该平台有永久失效 Key，需处理">🔴{{ platKeyAlerts(plat).perm }}</span>
-                                <span v-else-if="platKeyAlerts(plat).cool > 0" style="color:var(--color-warning);font-size:0.68rem;font-weight:700;" title="该平台有冷却中的 Key">🟡{{ platKeyAlerts(plat).cool }}</span>
-                            </button>
-                            <!-- 模型数 → 点击打开模型发现 -->
-                            <button class="plat-badge plat-badge-model"
-                                    @click="fetchPlatformModels(plat)">
-                                <svg style="width:12px;height:12px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
-                                {{ getPlatformRapiCount(plat.id) }} 个模型
-                            </button>
-                        </div>
-
-                        <!-- 行3：操作（两个按钮各占一半宽度） -->
-                        <div class="platform-actions">
-                            <button class="btn btn-secondary btn-sm" @click="openPlatformModal(plat)">修改配置</button>
-                            <!-- 失效时显示重试替代 toggle；正常/禁用状态显示 toggle -->
-                            <button v-if="plat.enabled && !plat.available"
-                                    class="btn btn-sm"
-                                    style="background:rgba(239,68,68,0.12);color:var(--color-danger);border:1px solid rgba(239,68,68,0.3);"
-                                    :disabled="plat._restoring" @click="restorePlatform(plat)">
-                                <svg v-if="!plat._restoring" style="width:12px;height:12px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
-                                <svg v-else style="width:12px;height:12px;animation:spin 1s linear infinite;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
-                                重试
-                            </button>
-                            <button v-else class="plat-toggle" :class="plat.enabled ? 'on' : 'off'" @click="togglePlatform(plat)">
-                                <span class="plat-toggle-dot"></span>
-                                {{ plat.enabled ? '生效' : '禁用' }}
-                            </button>
-                        </div>
-                    </div>
+                <div class="table-responsive">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>平台</th>
+                                <th title="平台级协议支持：O=OpenAI / A=Anthropic / G=Gemini">协议</th>
+                                <th title="该平台下的 API Key 数量及异常：🔴永久失效 🟡冷却中；点击查看密钥列表">密钥</th>
+                                <th title="从该平台发现并导入的上游模型数；点击查看模型列表">模型</th>
+                                <th>状态</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="plat in sortedPlatforms" :key="plat.id" :id="'el-p'+plat.id"
+                                style="cursor:pointer;"
+                                @click="openDetail('platform', plat.id)">
+                                <td style="max-width:300px;">
+                                    <span style="font-weight:600;color:var(--color-primary);">{{ plat.name }}</span>
+                                    <div v-if="plat.base_url"
+                                         style="font-size:0.74rem;color:var(--text-muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+                                         :title="plat.base_url">
+                                        {{ plat.base_url }}
+                                    </div>
+                                </td>
+                                <td>
+                                    <span v-if="plat._platformFormats && plat._platformFormats.length"
+                                          class="plat-fmt-icons"
+                                          :title="'平台支持的协议：' + plat._platformFormats.join('、')">
+                                        <span v-for="f in plat._platformFormats" :key="f"
+                                              class="plat-fmt-icon"
+                                              :class="'fmt-' + f"
+                                              :title="f">{{ f.charAt(0) }}</span>
+                                    </span>
+                                    <span v-else style="font-size:0.75rem;color:var(--text-muted);">—</span>
+                                </td>
+                                <td @click.stop>
+                                    <!-- 密钥数 → 跳转独立的密钥管理页（按该平台过滤） -->
+                                    <button class="plat-badge plat-badge-key"
+                                            @click="openKeysTab(plat)">
+                                        <svg style="width:12px;height:12px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8" cy="15" r="4"/><path d="M12 15h8M16 11v8"/></svg>
+                                        {{ (plat._keys && plat._keys.length) || 0 }}
+                                        <span v-if="platKeyAlerts(plat).perm > 0" style="color:var(--color-danger);font-size:0.68rem;font-weight:700;" title="该平台有永久失效 Key，需处理">🔴{{ platKeyAlerts(plat).perm }}</span>
+                                        <span v-else-if="platKeyAlerts(plat).cool > 0" style="color:var(--color-warning);font-size:0.68rem;font-weight:700;" title="该平台有冷却中的 Key">🟡{{ platKeyAlerts(plat).cool }}</span>
+                                    </button>
+                                </td>
+                                <td @click.stop>
+                                    <!-- 模型数 → 跳转模型管理页（按该平台过滤） -->
+                                    <button class="plat-badge plat-badge-model"
+                                            @click="openPlatformModelsTab(plat)">
+                                        <svg style="width:12px;height:12px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+                                        {{ getPlatformRapiCount(plat.id) }}
+                                    </button>
+                                </td>
+                                <td>
+                                    <span :class="['plat-toggle', plat.enabled ? (plat.available ? 'on' : 'invalid') : 'off']" style="pointer-events:none;">
+                                        <span class="plat-toggle-dot"></span>
+                                        {{ plat.enabled ? (plat.available ? '生效' : '失效') : '禁用' }}
+                                    </span>
+                                </td>
+                            </tr>
+                            <tr v-if="sortedPlatforms.length === 0">
+                                <td colspan="5" style="text-align:center;color:var(--text-muted);padding:32px;">暂无平台</td>
+                            </tr>
+                        </tbody>
+                    </table>
                 </div>
+                </template>
             </div>
 
-            <!-- 2b. KEYS tab — independent key management (migrated from the platform keysModal) -->
+            <!-- 2b. KEYS tab — independent key management (table layout, consistent with rapis/lapis) -->
             <div v-if="activeTab === 'keys'" class="tab-pane">
+                <!-- 密钥详情页 -->
+                <template v-if="detail.type === 'key' && keyDetail">
+                    <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;flex-wrap:wrap;">
+                        <button class="btn btn-secondary btn-sm" @click="closeDetail">← 返回列表</button>
+                        <span style="font-size:1.1rem;font-weight:700;color:var(--color-primary);">{{ keyDetail.label || ('Key #' + keyDetail.key_index) }}</span>
+                        <span class="platform-type type-static" style="cursor:pointer;" @click="openDetail('platform', keyDetail.platform_id)" title="查看平台详情">{{ keyDetail.platform_name || ('平台-'+keyDetail.platform_id) }} ›</span>
+                        <span :style="keyBadgeStyle(keyDetail)">{{ keyHealthLabel(keyDetail) }}</span>
+                        <span style="flex:1;"></span>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                            <button class="plat-toggle" :class="keyDetail.enabled ? 'on' : 'off'" @click="toggleKeyFlat(keyDetail)">
+                                <span class="plat-toggle-dot"></span>
+                                {{ keyDetail.enabled ? '生效' : '禁用' }}
+                            </button>
+                            <button v-if="keyDetail.failure_type === 2" class="btn btn-secondary btn-sm" @click="probeKeyFlat(keyDetail)" title="重置失败状态（会发探测请求验证 key 是否恢复）">重置状态</button>
+                            <button class="btn btn-secondary btn-sm" @click="discoverKeyModels(keyDetail)" title="为该 Key 所属平台发现并导入上游模型">发现模型</button>
+                            <button class="btn btn-secondary btn-sm btn-icon" @click="copyToken(keyDetail.token)" title="复制密钥">
+                                <svg style="width:13px;height:13px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                            </button>
+                            <button class="btn btn-primary btn-sm" @click="openKeyModal(keyDetail)">修改</button>
+                        </div>
+                    </div>
+
+                    <div class="glass-card" style="padding:18px;margin-bottom:16px;">
+                        <div class="card-header-row" style="margin-bottom:12px;"><span class="card-title">基本信息</span></div>
+                        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px 28px;font-size:0.85rem;">
+                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">备注标签</div>
+                                <div style="color:var(--text-primary);">{{ keyDetail.label || '—' }}</div></div>
+                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">Token</div>
+                                <div class="key-token-display" style="display:inline-block;" :title="keyDetail.token">{{ maskToken(keyDetail.token) }}</div></div>
+                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">平台内轮换顺序</div>
+                                <div style="font-family:var(--font-mono);color:var(--text-primary);">#{{ keyDetail.key_index }}</div></div>
+                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">资费</div>
+                                <div style="color:var(--text-primary);">{{ keyDetail.is_free ? '免费' : '付费' }}</div></div>
+                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">有效期</div>
+                                <div style="color:var(--text-primary);">
+                                    <span v-if="keyDetail.expires_at">{{ formatKeyExpiry(keyDetail.expires_at) }}{{ isKeyExpired(keyDetail) ? '（已过期）' : '' }}</span>
+                                    <span v-else>永久</span>
+                                </div></div>
+                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">失败原因</div>
+                                <div style="color:keyDetail.failure_reason ? 'var(--color-danger)' : 'var(--text-muted)';">{{ keyDetail.failure_reason || '—' }}</div></div>
+                        </div>
+                    </div>
+
+                    <div class="glass-card" style="padding:18px;">
+                        <div class="card-header-row" style="margin-bottom:12px;">
+                            <span class="card-title">服务模型（{{ (keyDetail.models || []).length }}）</span>
+                            <span style="font-size:0.76rem;color:var(--text-muted);">🔒 = 该 Key 被限制服务此模型，点击模型查看详情</span>
+                        </div>
+                        <div v-if="!(keyDetail.models && keyDetail.models.length)" style="color:var(--text-muted);font-size:0.84rem;">该 Key 暂无可服务模型（可尝试"发现模型"）</div>
+                        <div v-else style="display:flex;flex-wrap:wrap;gap:6px;">
+                            <span v-for="m in keyDetail.models" :key="'dkm-'+m.id" :title="m.blocked ? ('已被限制服务该模型：' + (m.reason || '')) : ('可服务模型 ' + m.model)"
+                                  :style="{ display:'inline-flex', alignItems:'center', fontSize:'0.78rem', padding:'3px 10px', borderRadius:'6px', cursor:'pointer',
+                                      background: m.blocked ? 'rgba(239,68,68,0.1)' : 'rgba(56,189,248,0.08)',
+                                      color: m.blocked ? 'var(--color-danger)' : 'var(--color-primary)',
+                                      border:'1px solid ' + (m.blocked ? 'rgba(239,68,68,0.25)' : 'rgba(56,189,248,0.2)') }"
+                                  @click="openDetail('rapi', m.id)">
+                                <span v-if="m.blocked" style="margin-right:3px;">🔒</span>{{ m.alias || ('模型-'+m.id) }} ›
+                            </span>
+                        </div>
+                    </div>
+                </template>
+
+                <template v-else>
                 <div style="margin-bottom:20px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
                     <div class="search-container" style="flex:1;min-width:240px;">
                         <svg class="search-icon-svg" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
@@ -2280,219 +2324,214 @@
                         <option value="">全部平台</option>
                         <option v-for="p in platforms" :key="'kf-'+p.id" :value="String(p.id)">{{ p.name }}</option>
                     </select>
+                    <button class="btn btn-primary" @click="openKeyModal(null)">+ 添加密钥</button>
                 </div>
-
-                <p style="font-size:0.82rem;color:var(--text-secondary);margin-bottom:14px;line-height:1.6;">
-                    在同一平台下配置多个 API Key，网关按顺序（#0 → #1 → …）轮试。单 Key 遭遇
-                    <span style="color:var(--color-warning);font-weight:600;">429 / 503</span> 时自动切换到下一个可用 Key，
-                    所有 Key 冷却则整体模型降级 failover。选择规则：同一平台优先尝试<b style="color:var(--color-primary,#a855f7);">免费</b> Key，同资费组中优先尝试<b>先到期</b>的 Key（用完额度再轮换）。到期后 Key 自动禁用。
+                <p style="font-size:0.78rem;color:var(--text-muted);margin:-6px 0 14px;">
+                    同一平台下多个 Key 按序（#0 → #1 → …）轮换，429 / 503 自动切换；免费 Key 优先、同资费组先到期先用，到期自动禁用。点击行查看详情。
                 </p>
 
-                <div v-if="keysByPlatform.length === 0" class="glass-card" style="padding:32px;text-align:center;color:var(--text-muted);">
-                    <svg style="width:30px;height:30px;opacity:0.25;display:block;margin:0 auto 8px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7.5" cy="15.5" r="5.5"/><path d="M21 2l-9.6 9.6"/></svg>
-                    {{ keysList.length === 0 ? '尚未配置任何密钥，请在下方对应平台中添加。' : '没有匹配的密钥。' }}
+                <div class="table-responsive">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th style="width:44px;" title="平台内轮换顺序（#0 → #1 → …）">#</th>
+                                <th>平台</th>
+                                <th>密钥</th>
+                                <th>资费</th>
+                                <th>有效期</th>
+                                <th>状态</th>
+                                <th title="该 Key 可服务的模型：普通 = 平台全量或白名单；🔒 = 被限制服务该模型">服务模型</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="k in sortedKeys" :key="k.id" :id="'el-k'+k.id"
+                                style="cursor:pointer;"
+                                @click="openDetail('key', k.id)">
+                                <td style="text-align:center;font-family:var(--font-mono);font-weight:700;color:var(--color-secondary);">{{ k.key_index }}</td>
+                                <td style="white-space:nowrap;" @click.stop>
+                                    <span class="platform-type type-static" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;display:inline-block;vertical-align:middle;cursor:pointer;"
+                                          @click="openDetail('platform', k.platform_id)" title="查看平台详情">{{ k.platform_name || ('平台-'+k.platform_id) }}</span>
+                                </td>
+                                <td style="max-width:230px;">
+                                    <div class="key-token-display" :title="k.token">{{ maskToken(k.token) }}</div>
+                                </td>
+                                    <td>
+                                        <span v-if="k.is_free"
+                                              style="display:inline-flex;align-items:center;font-size:0.7rem;padding:1px 8px;border-radius:12px;font-weight:600;background:rgba(168,85,247,0.1);color:var(--color-primary,#a855f7);border:1px solid rgba(168,85,247,0.3);">
+                                            免费
+                                        </span>
+                                        <span v-else
+                                              style="display:inline-flex;align-items:center;font-size:0.7rem;padding:1px 8px;border-radius:12px;font-weight:600;background:rgba(100,116,139,0.1);color:var(--text-secondary);border:1px solid rgba(100,116,139,0.25);">
+                                            付费
+                                        </span>
+                                    </td>
+                                    <td style="white-space:nowrap;">
+                                        <span v-if="k.expires_at && isKeyExpired(k)"
+                                              :title="'已于 ' + formatKeyExpiry(k.expires_at) + ' 过期'"
+                                              style="display:inline-flex;align-items:center;font-size:0.7rem;padding:1px 8px;border-radius:12px;font-weight:600;background:rgba(239,68,68,0.12);color:var(--color-danger);border:1px solid rgba(239,68,68,0.35);">
+                                            ⌛ {{ formatKeyExpiry(k.expires_at) }}
+                                        </span>
+                                        <span v-else-if="k.expires_at"
+                                              :title="'到期 ' + formatKeyExpiry(k.expires_at)"
+                                              style="display:inline-flex;align-items:center;font-size:0.7rem;padding:1px 8px;border-radius:12px;font-weight:600;background:rgba(59,130,246,0.1);color:#3b82f6;border:1px solid rgba(59,130,246,0.3);">
+                                            ⏱ {{ formatKeyExpiry(k.expires_at) }}
+                                        </span>
+                                        <span v-else
+                                              style="display:inline-flex;align-items:center;font-size:0.7rem;padding:1px 8px;border-radius:12px;font-weight:600;background:rgba(100,116,139,0.08);color:var(--text-muted);border:1px solid rgba(100,116,139,0.2);">
+                                            ♾ 永久
+                                        </span>
+                                    </td>
+                                    <td style="white-space:nowrap;">
+                                        <span :style="keyBadgeStyle(k)" style="font-size:0.74rem;">{{ keyHealthLabel(k) }}</span>
+                                    </td>
+                                    <td style="max-width:220px;" @click.stop>
+                                        <div v-if="k.models && k.models.length" style="display:flex;flex-wrap:wrap;gap:4px;">
+                                            <span v-for="m in k.models.slice(0,4)" :key="'km-'+k.id+'-'+m.id"
+                                                  :title="m.blocked ? ('已被限制服务该模型：' + (m.reason || '')) : ('可服务模型 ' + m.model)"
+                                                  :style="{ display:'inline-flex', alignItems:'center', fontSize:'0.7rem', padding:'1px 7px', borderRadius:'4px', cursor:'pointer',
+                                                      background: m.blocked ? 'rgba(239,68,68,0.1)' : 'rgba(56,189,248,0.08)',
+                                                      color: m.blocked ? 'var(--color-danger)' : 'var(--color-primary)',
+                                                      border:'1px solid ' + (m.blocked ? 'rgba(239,68,68,0.25)' : 'rgba(56,189,248,0.2)') }"
+                                                  @click="openDetail('rapi', m.id)">
+                                                <span v-if="m.blocked" style="margin-right:3px;">🔒</span>{{ m.alias || ('模型-'+m.id) }}
+                                            </span>
+                                            <span v-if="k.models.length > 4" style="font-size:0.7rem;color:var(--text-muted);align-self:center;" :title="k.models.slice(4).map(m => m.alias).join('、')">+{{ k.models.length - 4 }}</span>
+                                        </div>
+                                        <span v-else style="font-size:0.75rem;color:var(--text-muted);">—</span>
+                                    </td>
+                            </tr>
+                            <tr v-if="sortedKeys.length === 0">
+                                <td colspan="7" style="text-align:center;color:var(--text-muted);padding:32px;">暂无密钥</td>
+                            </tr>
+                        </tbody>
+                    </table>
                 </div>
-
-                <div v-for="grp in keysByPlatform" :key="'kg-'+grp.platform_id" class="glass-card" style="padding:14px 16px;margin-bottom:16px;">
-                    <!-- 平台分组头 -->
-                    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
-                        <svg style="width:14px;height:14px;flex-shrink:0;color:var(--color-secondary);" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
-                        <span style="font-weight:700;font-size:0.92rem;">{{ grp.platform_name || ('平台-'+grp.platform_id) }}</span>
-                        <span style="font-size:0.72rem;padding:1px 7px;border-radius:4px;background:rgba(168,85,247,0.12);color:var(--color-secondary);">密钥 ×{{ grp.keys.length }}</span>
-                        <span v-if="grp.permCount > 0" style="color:var(--color-danger);font-size:0.72rem;font-weight:700;" title="该平台有永久失效 Key，需处理">🔴{{ grp.permCount }}</span>
-                        <span v-else-if="grp.coolCount > 0" style="color:var(--color-warning);font-size:0.72rem;font-weight:700;" title="该平台有冷却中的 Key">🟡{{ grp.coolCount }}</span>
-                        <span style="flex:1;"></span>
-                        <a v-if="grp.billing_address" :href="grp.billing_address" target="_blank" rel="noopener noreferrer" @click.stop title="打开账单地址"
-                           style="font-size:0.76rem;color:var(--color-primary);text-decoration:none;border:1px solid rgba(56,189,248,0.25);padding:1px 7px;border-radius:4px;">账单 ↗</a>
-                        <button class="btn btn-secondary btn-sm" @click="openPlatformModal(platforms.find(p => String(p.id) === String(grp.platform_id)))" title="编辑该平台配置">管理平台</button>
-                    </div>
-
-                    <!-- 空状态 -->
-                    <div v-if="grp.keys.length === 0" style="text-align:center;color:var(--text-muted);padding:20px 0;font-size:0.88rem;">
-                        暂无密钥记录，请在下方添加第一个 Key。
-                    </div>
-
-                    <!-- 密钥行 -->
-                    <div v-for="k in grp.keys" :key="k.id" :id="'el-k'+k.id" class="key-row" :class="{ disabled: !k.enabled }">
-                        <div class="key-index-dot">{{ k.key_index }}</div>
-                        <div style="min-width:0;flex:1;">
-                            <!-- 编辑态 -->
-                            <div v-if="keysEditId === k.id" style="margin-top:2px;">
-                                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-                                    <input type="text" class="form-control" v-model="keysEditForm.label" placeholder="备注标签" style="max-width:150px;font-size:0.8rem;" maxlength="100">
-                                    <label class="checkbox-container" style="margin:0;gap:6px;font-size:0.8rem;">
-                                        <input type="checkbox" v-model="keysEditForm.is_free">
-                                        <span :style="{ color: keysEditForm.is_free ? 'var(--color-primary,#a855f7)' : 'var(--text-muted)' }">{{ keysEditForm.is_free ? '免费' : '付费' }}</span>
-                                    </label>
-                                    <input type="date" class="form-control" v-model="keysEditForm.expires_at" style="max-width:150px;font-size:0.8rem;" title="留空=永久">
-                                    <input type="text" class="form-control" v-model="keysEditForm.token" placeholder="新 Token（留空=不变）" style="max-width:220px;font-family:var(--font-mono);font-size:0.8rem;" autocomplete="off" spellcheck="false">
-                                    <button class="btn btn-primary btn-sm" @click="saveKeyEditFlat(k)">保存</button>
-                                    <button class="btn btn-secondary btn-sm" @click="keysEditId = null">取消</button>
-                                </div>
-                            </div>
-                            <!-- 展示态 -->
-                            <div v-else style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                                <div class="key-token-display" :title="k.token">{{ maskToken(k.token) }}</div>
-                                <div class="key-label-tag">{{ k.label || '未命名' }}</div>
-                                <!-- 免费 / 付费徽标 -->
-                                <span v-if="k.is_free"
-                                      style="display:inline-flex;align-items:center;gap:3px;font-size:0.7rem;padding:1px 8px;border-radius:12px;font-weight:600;background:rgba(168,85,247,0.1);color:var(--color-primary,#a855f7);border:1px solid rgba(168,85,247,0.3);">
-                                    免费
-                                </span>
-                                <span v-else
-                                      style="display:inline-flex;align-items:center;gap:3px;font-size:0.7rem;padding:1px 8px;border-radius:12px;font-weight:600;background:rgba(100,116,139,0.1);color:var(--text-secondary);border:1px solid rgba(100,116,139,0.25);">
-                                    付费
-                                </span>
-                                <!-- 有效期徽标 -->
-                                <span v-if="k.expires_at && isKeyExpired(k)"
-                                      :title="'已于 ' + formatKeyExpiry(k.expires_at) + ' 过期'"
-                                      style="display:inline-flex;align-items:center;gap:3px;font-size:0.7rem;padding:1px 8px;border-radius:12px;font-weight:600;background:rgba(239,68,68,0.12);color:var(--color-danger);border:1px solid rgba(239,68,68,0.35);">
-                                    ⌛ 已过期 {{ formatKeyExpiry(k.expires_at) }}
-                                </span>
-                                <span v-else-if="k.expires_at"
-                                      :title="'到期 ' + formatKeyExpiry(k.expires_at)"
-                                      style="display:inline-flex;align-items:center;gap:3px;font-size:0.7rem;padding:1px 8px;border-radius:12px;font-weight:600;background:rgba(59,130,246,0.1);color:#3b82f6;border:1px solid rgba(59,130,246,0.3);">
-                                    ⏱ 到期 {{ formatKeyExpiry(k.expires_at) }}
-                                </span>
-                                <span v-else
-                                      style="display:inline-flex;align-items:center;gap:3px;font-size:0.7rem;padding:1px 8px;border-radius:12px;font-weight:600;background:rgba(100,116,139,0.08);color:var(--text-muted);border:1px solid rgba(100,116,139,0.2);">
-                                    ♾ 永久
-                                </span>
-                                <!-- 失败状态徽标 -->
-                                <span v-if="k.failure_type === 2"
-                                      :title="k.failure_reason"
-                                      style="display:inline-flex;align-items:center;gap:3px;font-size:0.7rem;padding:1px 8px;border-radius:12px;font-weight:600;background:rgba(239,68,68,0.1);color:var(--color-danger);border:1px solid rgba(239,68,68,0.3);">
-                                    🔴 永久失效·需处理
-                                </span>
-                                <span v-else-if="k.failure_type === 1"
-                                      :title="k.failure_reason"
-                                      style="display:inline-flex;align-items:center;gap:3px;font-size:0.7rem;padding:1px 8px;border-radius:12px;font-weight:600;background:rgba(245,158,11,0.1);color:var(--color-warning);border:1px solid rgba(245,158,11,0.3);">
-                                    🟡 临时冷却
-                                </span>
-                                <span v-else-if="!k.enabled"
-                                      style="display:inline-flex;align-items:center;gap:3px;font-size:0.7rem;padding:1px 8px;border-radius:12px;font-weight:600;background:rgba(100,116,139,0.1);color:var(--text-muted);border:1px solid rgba(100,116,139,0.25);">
-                                    ⚫ 已禁用
-                                </span>
-                                <span v-else
-                                      style="display:inline-flex;align-items:center;gap:3px;font-size:0.7rem;padding:1px 8px;border-radius:12px;font-weight:600;background:rgba(34,197,94,0.1);color:var(--color-success);border:1px solid rgba(34,197,94,0.3);">
-                                    🟢 正常
-                                </span>
-                            </div>
-                            <div v-if="k.failure_reason" style="font-size:0.72rem;color:var(--text-muted);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
-                                {{ k.failure_reason }}
-                            </div>
-                            <!-- 关联模型：白名单引用或平台下可用模型 -->
-                            <div v-if="k.models && k.models.length" style="margin-top:5px;display:flex;flex-wrap:wrap;gap:4px;">
-                                <span v-for="m in k.models" :key="'km-'+k.id+'-'+m.id"
-                                      :title="m.blocked ? ('已被限制服务该模型：' + (m.reason || '')) : ('可服务模型 ' + m.model)"
-                                      :style="{ display:'inline-flex', alignItems:'center', fontSize:'0.7rem', padding:'1px 7px', borderRadius:'4px',
-                                          background: m.blocked ? 'rgba(239,68,68,0.1)' : 'rgba(56,189,248,0.08)',
-                                          color: m.blocked ? 'var(--color-danger)' : 'var(--color-primary)',
-                                          border:'1px solid ' + (m.blocked ? 'rgba(239,68,68,0.25)' : 'rgba(56,189,248,0.2)') }">
-                                    <span v-if="m.blocked" style="margin-right:3px;">🔒</span>{{ m.alias || ('模型-'+m.id) }}
-                                </span>
-                            </div>
-                        </div>
-                        <div class="key-actions">
-                            <label class="checkbox-container" style="margin:0;gap:6px;font-size:0.8rem;" :title="k.enabled ? '点击禁用' : '点击启用'">
-                                <input type="checkbox" :checked="k.enabled" @change="toggleKeyFlat(k)">
-                                <span :style="{ color: k.enabled ? 'var(--color-success)' : 'var(--text-muted)' }">
-                                    {{ k.enabled ? '启用' : '禁用' }}
-                                </span>
-                            </label>
-                        </div>
-                        <div class="key-actions">
-                            <button class="btn btn-secondary btn-sm" @click="openKeyEditFlat(k)" title="修改标签/免费属性/有效期/Token">编辑</button>
-                            <button v-if="k.failure_type === 2"
-                                    class="btn btn-secondary btn-sm"
-                                    @click="probeKeyFlat(k)"
-                                    title="重置失败状态（会发探测请求验证 key 是否恢复）"
-                                    style="white-space:nowrap;">
-                                重置状态
-                            </button>
-                            <button class="btn btn-secondary btn-sm btn-icon" @click="copyToken(k.token)" title="复制密钥">
-                                <svg style="width:13px;height:13px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                            </button>
-                            <button class="btn btn-danger btn-sm btn-icon" @click="deleteKeyFlat(k)" title="删除此 Key">
-                                <svg style="width:13px;height:13px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-                            </button>
-                        </div>
-                    </div>
-
-                    <!-- 添加新 Key（本平台） -->
-                    <div class="add-key-row" style="grid-template-columns: 2fr 1.5fr 1fr 1fr auto;">
-                        <div>
-                            <label style="font-size:0.78rem;color:var(--text-secondary);display:block;margin-bottom:5px;">API Key / Token</label>
-                            <input type="text" class="form-control" placeholder="sk-..." v-model="keysAdd[grp.platform_id].token" style="font-family:var(--font-mono);font-size:0.85rem;">
-                        </div>
-                        <div>
-                            <label style="font-size:0.78rem;color:var(--text-secondary);display:block;margin-bottom:5px;">备注标签 (可选)</label>
-                            <input type="text" class="form-control" placeholder="例如: 账号A、主Key" v-model="keysAdd[grp.platform_id].label">
-                        </div>
-                        <div>
-                            <label style="font-size:0.78rem;color:var(--text-secondary);display:block;margin-bottom:5px;">是否免费 Key</label>
-                            <label class="checkbox-container" style="margin:0;gap:6px;font-size:0.85rem;">
-                                <input type="checkbox" v-model="keysAdd[grp.platform_id].is_free">
-                                <span :style="{ color: keysAdd[grp.platform_id].is_free ? 'var(--color-primary,#a855f7)' : 'var(--text-muted)' }">
-                                    {{ keysAdd[grp.platform_id].is_free ? '免费' : '付费' }}
-                                </span>
-                            </label>
-                        </div>
-                        <div>
-                            <label style="font-size:0.78rem;color:var(--text-secondary);display:block;margin-bottom:5px;">有效期 (可选, 留空=永久)</label>
-                            <input type="date" class="form-control" v-model="keysAdd[grp.platform_id].expires_at" style="font-size:0.85rem;">
-                        </div>
-                        <div style="display:flex;align-items:flex-end;">
-                            <button class="btn btn-primary" :disabled="!keysAdd[grp.platform_id].token.trim()" @click="addKeyFlat(grp.platform_id)" style="white-space:nowrap;">+ 添加</button>
-                        </div>
-                    </div>
-                </div>
+                </template>
             </div>
 
             <!-- 3. RAPI tab -->
             <div v-if="activeTab === 'rapis'" class="tab-pane">
-                <div style="margin-bottom:20px;display:flex;justify-content:space-between;align-items:center;">
-                    <div class="search-container">
-                        <svg class="search-icon-svg" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
-                        <input type="text" class="form-control" placeholder="模糊过滤模型名称、别名或所属平台..." v-model="rapiSearchQuery">
+                <!-- 模型详情页 -->
+                <template v-if="detail.type === 'rapi' && rapiDetail">
+                    <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;flex-wrap:wrap;">
+                        <button class="btn btn-secondary btn-sm" @click="closeDetail">← 返回列表</button>
+                        <span style="font-size:1.05rem;font-weight:700;color:var(--color-primary);font-family:var(--font-mono);">{{ rapiDisplayName(rapiDetail) }}</span>
+                        <span class="platform-type type-static" style="cursor:pointer;" @click="openDetail('platform', rapiDetail.platform_id)" title="查看平台详情">{{ getPlatformName(rapiDetail.platform_id) }} ›</span>
+                        <span :class="['plat-toggle', rapiDetail.enabled ? (rapiDetail.available ? 'on' : 'invalid') : 'off']" style="pointer-events:none;">
+                            <span class="plat-toggle-dot"></span>
+                            {{ rapiDetail.enabled ? (rapiDetail.available ? '生效' : '失效') : '禁用' }}
+                        </span>
+                        <span style="flex:1;"></span>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                            <button v-if="rapiDetail.enabled && !rapiDetail.available" class="btn btn-sm" style="background:rgba(239,68,68,0.12);color:var(--color-danger);border:1px solid rgba(239,68,68,0.3);" @click="restoreRapi(rapiDetail)" title="重试连接，成功则恢复生效状态">重试</button>
+                            <button v-else class="plat-toggle" :class="rapiDetail.enabled ? 'on' : 'off'" @click="toggleRapi(rapiDetail)">
+                                <span class="plat-toggle-dot"></span>
+                                {{ rapiDetail.enabled ? '生效' : '禁用' }}
+                            </button>
+                            <button class="btn btn-secondary btn-sm" @click="openRapiTestModal(rapiDetail)" title="选一个有效 Key 直接向该模型的上游端点发测试请求">测试</button>
+                            <button class="btn btn-secondary btn-sm" @click="openAddToLapiModal(rapiDetail)" title="将此模型加入某个已有接口的路由链末尾">添加到接口</button>
+                            <button class="btn btn-secondary btn-sm" @click="openLapiFromRapi(rapiDetail)" title="新建接口，接口名默认为该模型名">新建接口</button>
+                            <button class="btn btn-primary btn-sm" @click="openRapiModal(rapiDetail)">修改</button>
+                        </div>
                     </div>
-                    <span style="font-size:0.78rem;color:var(--text-muted);">模型统一从所属平台"模型发现"导入（平台卡片 → 模型数徽章）</span>
+
+                    <div class="glass-card" style="padding:18px;margin-bottom:16px;">
+                        <div class="card-header-row" style="margin-bottom:12px;"><span class="card-title">基本信息</span></div>
+                        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px 28px;font-size:0.85rem;">
+                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">模型名称（自动生成）</div>
+                                <div style="font-family:var(--font-mono);font-weight:600;color:var(--color-primary);">{{ rapiDisplayName(rapiDetail) }}</div></div>
+                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">模型备注</div>
+                                <div style="color:var(--text-primary);">{{ rapiDetail.notes || '—' }}</div></div>
+                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">上游原始模型名</div>
+                                <div style="font-family:var(--font-mono);color:var(--text-secondary);font-style:italic;">{{ rapiDetail.model || '—' }}</div></div>
+                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">厂商 / 系列 / 版本 / 后缀</div>
+                                <div style="color:var(--text-primary);font-family:var(--font-mono);">{{ [rapiDetail.vendor, rapiDetail.series, rapiDetail.version, rapiDetail.suffix].filter(x => x).join(' · ') || '—' }}</div></div>
+                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">来源</div>
+                                <div style="color:var(--text-primary);">{{ rapiDetail.source === 'auto_discover' ? '自动发现' : '手动添加' }}</div></div>
+                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">失败原因</div>
+                                <div v-if="!rapiDetail.available" style="color:var(--color-danger);">{{ rapiDetail.unavailable_reason || '平台级失效（如 403/402），需手动恢复' }}</div>
+                                <div v-else style="color:var(--text-muted);">—</div></div>
+                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">自定义 Headers</div>
+                                <div style="color:var(--text-primary);">{{ (rapiDetail.custom_headers && rapiDetail.custom_headers !== '[]') ? rapiDetail.custom_headers : '—' }}</div></div>
+                        </div>
+                    </div>
+
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+                        <div class="glass-card" style="padding:18px;">
+                            <div class="card-header-row" style="margin-bottom:12px;">
+                                <span class="card-title">Key 池（{{ keyPoolForRapi(rapiDetail).keys.length }}{{ keyPoolForRapi(rapiDetail).restricted ? ' · 🔒 白名单受限' : '' }}）</span>
+                            </div>
+                            <div v-if="keyPoolForRapi(rapiDetail).all.length === 0" style="color:var(--text-muted);font-size:0.84rem;">所属平台暂无 Key</div>
+                            <div v-else style="display:flex;flex-direction:column;gap:6px;">
+                                <div v-for="k in keyPoolForRapi(rapiDetail).keys" :key="'rdk-'+k.id"
+                                     style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.84rem;padding:5px 8px;border-radius:6px;border:1px solid rgba(255,255,255,0.05);"
+                                     @click="openDetail('key', k.id)">
+                                    <span :style="keyBadgeStyle(k)">{{ keyHealthMeta[keyHealth(k)].icon }} {{ keyShortLabel(k) }}</span>
+                                    <span style="font-family:var(--font-mono);color:var(--text-muted);">#{{ k.key_index }}</span>
+                                    <span style="flex:1;"></span>
+                                    <span style="color:var(--text-muted);">›</span>
+                                </div>
+                                <template v-for="k in blockedKeysForRapi(rapiDetail)" :key="'rdblk-'+k.id">
+                                    <div v-if="!keyPoolForRapi(rapiDetail).keys.some(x => x.id === k.id)"
+                                         style="display:flex;align-items:center;gap:8px;font-size:0.84rem;padding:5px 8px;border-radius:6px;border:1px dashed rgba(148,163,184,0.3);">
+                                        <span :style="keyBadgeStyleFor(k, rapiDetail)" style="cursor:pointer;" @click="openDetail('key', k.id)">🔒 {{ keyShortLabel(k) }}</span>
+                                        <span style="flex:1;font-size:0.74rem;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" :title="keyBadgeTitleFor(k, rapiDetail)">{{ (keyModelBlock(k, rapiDetail) || {}).reason || '无权访问此模型' }}</span>
+                                        <button class="btn btn-secondary btn-sm" @click="unblockKeyModel(k, rapiDetail)">解除限制</button>
+                                    </div>
+                                </template>
+                                <div v-if="poolWarning(rapiDetail)" style="font-size:0.76rem;color:var(--color-danger);">{{ poolWarning(rapiDetail) }}</div>
+                            </div>
+                        </div>
+                        <div class="glass-card" style="padding:18px;">
+                            <div class="card-header-row" style="margin-bottom:12px;">
+                                <span class="card-title">所属接口（{{ lapisForRapi(rapiDetail).length }}）</span>
+                                <span style="font-size:0.76rem;color:var(--text-muted);">使用该模型的路由链</span>
+                            </div>
+                            <div v-if="lapisForRapi(rapiDetail).length === 0" style="color:var(--text-muted);font-size:0.84rem;">暂无接口使用该模型，可点击上方"添加到接口"或"新建接口"</div>
+                            <div v-else style="display:flex;flex-direction:column;gap:6px;">
+                                <div v-for="l in lapisForRapi(rapiDetail)" :key="'rdl-'+l.id"
+                                     style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.84rem;padding:5px 8px;border-radius:6px;border:1px solid rgba(255,255,255,0.05);"
+                                     @click="openDetail('lapi', l.id)">
+                                    <span style="font-family:var(--font-mono);font-weight:600;color:var(--color-primary);">{{ l.alias }}</span>
+                                    <span v-if="!l.enabled" style="font-size:0.7rem;color:var(--text-muted);">禁用</span>
+                                    <span style="flex:1;"></span>
+                                    <span style="color:var(--text-muted);">›</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </template>
+
+                <template v-else>
+                <div style="margin-bottom:20px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+                    <div class="search-container" style="flex:1;min-width:220px;">
+                        <svg class="search-icon-svg" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+                        <input type="text" class="form-control" placeholder="模糊过滤模型名称、上游模型或所属平台..." v-model="rapiSearchQuery">
+                    </div>
+                    <select class="form-control" v-model="rapiPlatformFilter" style="max-width:200px;">
+                        <option value="">全部平台</option>
+                        <option v-for="p in platforms" :key="'rf-'+p.id" :value="String(p.id)">{{ p.name }}</option>
+                    </select>
+                    <span style="font-size:0.78rem;color:var(--text-muted);">模型可从平台详情页"发现模型"导入，或经顶栏"新增"向导添加</span>
                 </div>
 
                 <div class="table-responsive">
                     <table>
                         <thead>
                             <tr>
-                                <th style="width:30px;"></th>
-                                <th>别名</th>
+                                <th>模型</th>
                                 <th>平台</th>
-                                <th>上游模型</th>
+                                <th title="使用该模型的本地接口（点击跳转）">接口</th>
                                 <th>状态</th>
-                                <th title="该模型可使用的平台 Key 及其实时状态：🟢正常 🟡冷却 🔴永久失效 ⚫禁用 ⌛过期；🔒受限 = 仅使用白名单 Key，平台其他 Key 不参与轮换">Key 池</th>
-                                <th style="text-align:right;">操作</th>
+                                <th title="该模型可使用的平台 Key 及其实时状态：🟢正常 🟡冷却 🔴永久失效 ⚫禁用 ⌛过期；🔒受限 = 仅使用白名单 Key">Key 池</th>
                             </tr>
                         </thead>
                         <tbody>
-                            <tr v-for="rapi in filteredRapis" :key="rapi.id" :id="'el-r'+rapi.id"
-                                draggable="true"
-                                @dragstart="onCardDragStart($event, 'rapis', rapi.id)"
-                                @dragover.prevent="onCardDragOver($event)"
-                                @dragleave="onCardDragLeave($event)"
-                                @drop="onCardDrop($event, 'rapis', rapi.id)"
-                                @dragend="onCardDragEnd($event)">
-                                <td style="cursor:grab;color:var(--text-muted);text-align:center;" title="拖拽排序">⠿</td>
-                                <td>
-                                    <span style="font-weight:600;color:var(--color-primary);">{{ rapi.alias }}</span>
-                                </td>
-                                <td>
-                                    <span class="platform-type type-static" style="max-width:110px;overflow:hidden;text-overflow:ellipsis;display:inline-block;vertical-align:middle;">
-                                        {{ getPlatformName(rapi.platform_id) }}
-                                    </span>
-                                </td>
-                                <td style="max-width:220px;">
-                                    <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-muted);font-style:italic;" :title="rapi.model">
-                                        {{ rapi.model }}
-                                    </div>
+                            <tr v-for="rapi in sortedRapis" :key="rapi.id" :id="'el-r'+rapi.id"
+                                style="cursor:pointer;"
+                                @click="openDetail('rapi', rapi.id)">
+                                <td style="max-width:260px;">
+                                    <span style="font-weight:600;color:var(--color-primary);font-family:var(--font-mono);">{{ rapiDisplayName(rapi) }}</span>
                                     <div v-if="!rapi.available"
                                          style="display:flex;align-items:center;gap:4px;font-size:0.72rem;color:var(--color-danger);margin-top:3px;"
                                          :title="rapi.unavailable_reason || '平台级失效（如 403/402），需手动恢复'">
@@ -2500,15 +2539,29 @@
                                         <span style="font-weight:600;">失效</span>
                                     </div>
                                 </td>
-                                <td>
-                                    <div style="display:flex;flex-direction:column;gap:5px;align-items:flex-start;">
-                                        <button class="plat-toggle" :class="rapi.enabled ? (rapi.available ? 'on' : 'invalid') : 'off'" @click="rapi.enabled && !rapi.available ? null : toggleRapi(rapi)">
-                                            <span class="plat-toggle-dot"></span>
-                                            {{ rapi.enabled ? (rapi.available ? '生效' : '失效') : '禁用' }}
-                                        </button>
-                                    </div>
+                                <td style="white-space:nowrap;" @click.stop>
+                                    <span class="platform-type type-static" style="max-width:110px;overflow:hidden;text-overflow:ellipsis;display:inline-block;vertical-align:middle;cursor:pointer;"
+                                          @click="openDetail('platform', rapi.platform_id)" title="查看平台详情">
+                                        {{ getPlatformName(rapi.platform_id) }}
+                                    </span>
                                 </td>
-                                <td style="max-width:240px;">
+                                <td style="max-width:170px;" @click.stop>
+                                    <div v-if="lapisForRapi(rapi).length" style="display:flex;flex-wrap:wrap;gap:4px;">
+                                        <span v-for="l in lapisForRapi(rapi).slice(0,3)" :key="'rl-'+rapi.id+'-'+l.id"
+                                              style="font-size:0.7rem;padding:1px 7px;border-radius:4px;background:rgba(245,158,11,0.08);color:var(--color-warning);border:1px solid rgba(245,158,11,0.25);cursor:pointer;"
+                                              :title="'接口 ' + l.alias"
+                                              @click="openDetail('lapi', l.id)">{{ l.alias }}</span>
+                                        <span v-if="lapisForRapi(rapi).length > 3" style="font-size:0.7rem;color:var(--text-muted);align-self:center;">+{{ lapisForRapi(rapi).length - 3 }}</span>
+                                    </div>
+                                    <span v-else style="font-size:0.75rem;color:var(--text-muted);">—</span>
+                                </td>
+                                <td>
+                                    <span :class="['plat-toggle', rapi.enabled ? (rapi.available ? 'on' : 'invalid') : 'off']" style="pointer-events:none;">
+                                        <span class="plat-toggle-dot"></span>
+                                        {{ rapi.enabled ? (rapi.available ? '生效' : '失效') : '禁用' }}
+                                    </span>
+                                </td>
+                                <td style="max-width:240px;" @click.stop>
                                     <template v-if="keyPoolForRapi(rapi).all.length === 0">
                                         <span style="font-size:0.75rem;color:var(--text-muted);">— 平台无 Key</span>
                                     </template>
@@ -2518,12 +2571,13 @@
                                                   title="该模型只使用白名单内的 Key，平台其他 Key 不参与轮换"
                                                   style="font-size:0.66rem;font-weight:600;color:var(--color-secondary,#38bdf8);background:rgba(56,189,248,0.08);border:1px solid rgba(56,189,248,0.22);border-radius:3px;padding:0 5px;white-space:nowrap;">🔒 受限</span>
                                             <span v-for="k in keyPoolForRapi(rapi).keys.filter(kk => !keyModelBlock(kk, rapi)).slice(0,4)" :key="k.id"
-                                                  :style="keyBadgeStyle(k)" :title="keyBadgeTitle(k, rapi)">
+                                                  :style="keyBadgeStyle(k)" :title="keyBadgeTitle(k, rapi)"
+                                                  style="cursor:pointer;" @click="openDetail('key', k.id)">
                                                 {{ keyHealthMeta[keyHealth(k)].icon }} {{ keyShortLabel(k) }}
                                             </span>
                                             <span v-for="k in blockedKeysForRapi(rapi).slice(0,2)" :key="'blk'+k.id"
                                                   :style="keyBadgeStyleFor(k, rapi)" :title="keyBadgeTitleFor(k, rapi)"
-                                                  @click="unblockKeyModel(k, rapi)">
+                                                  style="cursor:pointer;" @click="openDetail('key', k.id)">
                                                 🔒 {{ keyShortLabel(k) }}
                                             </span>
                                             <span v-if="poolOverflow(rapi) > 0"
@@ -2539,28 +2593,88 @@
                                         </div>
                                     </template>
                                 </td>
-                                <td>
-                                    <div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;">
-                                        <button v-if="!rapi.enabled || !rapi.available" class="btn btn-danger btn-sm btn-icon" @click="deleteRapi(rapi)" title="删除">
-                                            <svg style="width:13px;height:13px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-                                        </button>
-                                        <button v-if="rapi.enabled && !rapi.available" class="btn btn-sm" style="background:rgba(239,68,68,0.12);color:var(--color-danger);border:1px solid rgba(239,68,68,0.3);" @click="restoreRapi(rapi)" title="重试连接，成功则恢复生效状态">重试</button>
-                                        <button class="btn btn-secondary btn-sm" @click="openRapiTestModal(rapi)" title="选一个有效 Key 直接向该模型的上游端点发测试请求">测试</button>
-                                        <button class="btn btn-secondary btn-sm" @click="openRapiModal(rapi)">修改</button>
-                                        <button class="btn btn-secondary btn-sm" @click="openAddToLapiModal(rapi)" title="将此模型加入某个 LAPI 的路由链末尾">添加到</button>
-                                    </div>
-                                </td>
                             </tr>
-                            <tr v-if="filteredRapis.length === 0">
-                                <td colspan="7" style="text-align:center;color:var(--text-muted);padding:32px;">暂无模型</td>
+                            <tr v-if="sortedRapis.length === 0">
+                                <td colspan="5" style="text-align:center;color:var(--text-muted);padding:32px;">暂无模型</td>
                             </tr>
                         </tbody>
                     </table>
                 </div>
+                </template>
             </div>
 
             <!-- 4. LAPI tab -->
             <div v-if="activeTab === 'lapis'" class="tab-pane">
+                <!-- 接口详情页 -->
+                <template v-if="detail.type === 'lapi' && lapiDetail">
+                    <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;flex-wrap:wrap;">
+                        <button class="btn btn-secondary btn-sm" @click="closeDetail">← 返回列表</button>
+                        <span style="font-size:1.05rem;font-weight:700;color:var(--color-primary);font-family:var(--font-mono);">{{ lapiDetail.alias }}</span>
+                        <span :class="['plat-toggle', lapiDetail.enabled ? 'on' : 'off']" style="pointer-events:none;">
+                            <span class="plat-toggle-dot"></span>
+                            {{ lapiDetail.enabled ? '生效' : '禁用' }}
+                        </span>
+                        <span style="flex:1;"></span>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                            <button class="plat-toggle" :class="lapiDetail.enabled ? 'on' : 'off'" @click="toggleLapi(lapiDetail)">
+                                <span class="plat-toggle-dot"></span>
+                                {{ lapiDetail.enabled ? '生效' : '禁用' }}
+                            </button>
+                            <button class="btn btn-secondary btn-sm" @click="editLapiRoutes(lapiDetail)">编排路由链</button>
+                            <button class="btn btn-primary btn-sm" @click="openLapiModal(lapiDetail)">修改</button>
+                        </div>
+                    </div>
+
+                    <div class="glass-card" style="padding:18px;margin-bottom:16px;">
+                        <div class="card-header-row" style="margin-bottom:12px;"><span class="card-title">基本信息</span></div>
+                        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px 28px;font-size:0.85rem;">
+                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">接口名（客户端请求的 model 字段）</div>
+                                <div style="font-family:var(--font-mono);color:var(--text-primary);">{{ lapiDetail.alias }}</div></div>
+                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">备注</div>
+                                <div style="color:var(--text-primary);">{{ lapiDetail.notes || '—' }}</div></div>
+                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">厂商 / 系列 / 版本 / 后缀</div>
+                                <div style="color:var(--text-primary);font-family:var(--font-mono);">{{ [lapiDetail.vendor, lapiDetail.series, lapiDetail.version, lapiDetail.suffix].filter(x => x).join(' · ') || '—' }}</div></div>
+                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">节点状态</div>
+                                <div style="font-family:var(--font-mono);font-size:0.8rem;">
+                                    <span :style="{ color: (lapiDetail._rapis || []).filter(r => r.enabled && r.available).length > 0 ? 'var(--color-success)' : 'var(--text-muted)', fontWeight:600 }">● 有效 {{ (lapiDetail._rapis || []).filter(r => r.enabled && r.available).length }}</span>
+                                    <span v-if="(lapiDetail._rapis || []).filter(r => !r.enabled || !r.available).length > 0" style="color:var(--color-danger);font-weight:600;margin-left:8px;">● 失效 {{ (lapiDetail._rapis || []).filter(r => !r.enabled || !r.available).length }}</span>
+                                    <span v-if="!(lapiDetail._rapis && lapiDetail._rapis.length)" style="color:var(--text-muted);">暂无节点</span>
+                                </div></div>
+                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">创建时间</div>
+                                <div style="color:var(--text-primary);">{{ formatTime(lapiDetail.created_at) }}</div></div>
+                        </div>
+                    </div>
+
+                    <div class="glass-card" style="padding:18px;">
+                        <div class="card-header-row" style="margin-bottom:12px;">
+                            <span class="card-title">路由链（{{ (lapiDetail._rapis || []).length }} 个节点，按序容灾）</span>
+                            <button class="btn btn-secondary btn-sm" @click="editLapiRoutes(lapiDetail)">编排 ›</button>
+                        </div>
+                        <div v-if="!(lapiDetail._rapis && lapiDetail._rapis.length)" style="color:var(--text-muted);font-size:0.84rem;">暂无编排模型，点击"编排"添加</div>
+                        <div v-else style="display:flex;flex-direction:column;gap:6px;">
+                            <div v-for="(r, idx) in lapiDetail._rapis" :key="'ldr-'+r.id"
+                                 style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:0.84rem;padding:6px 10px;border-radius:6px;border:1px solid rgba(255,255,255,0.05);"
+                                 @click="openDetail('rapi', r.id)">
+                                <span style="font-family:var(--font-mono);color:var(--text-muted);">{{ idx + 1 }}.</span>
+                                <span class="platform-type type-static">{{ getPlatformName(r.platform_id) }}</span>
+                                <span style="font-family:var(--font-mono);font-weight:600;color:var(--color-primary);">{{ rapiDisplayName(r) }}</span>
+                                <span v-if="r.enabled && r.available" style="font-size:0.7rem;color:var(--color-success);">有效</span>
+                                <span v-else style="font-size:0.7rem;color:var(--color-danger);">失效</span>
+                                <span style="flex:1;"></span>
+                                <template v-if="chainIssues(r).length > 0">
+                                    <span v-for="k in chainIssues(r)" :key="'ldc-'+r.id+'-'+k.id" :style="keyBadgeStyleFor(k, r)" :title="keyBadgeTitleFor(k, r)"
+                                          style="cursor:pointer;" @click.stop="openDetail('key', k.id)">
+                                        <template v-if="keyModelBlock(k, r)">🔒 {{ keyShortLabel(k) }}</template>
+                                        <template v-else>{{ keyHealthMeta[keyHealth(k)].icon }} {{ keyShortLabel(k) }}</template>
+                                    </span>
+                                </template>
+                                <span style="color:var(--text-muted);">›</span>
+                            </div>
+                        </div>
+                    </div>
+                </template>
+
+                <template v-else>
                 <div style="margin-bottom:20px;display:flex;justify-content:space-between;align-items:center;">
                     <div class="search-container">
                         <svg class="search-icon-svg" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
@@ -2572,27 +2686,19 @@
                     <table>
                         <thead>
                             <tr>
-                                <th style="width:30px;"></th>
-                                <th>接口别名</th>
+                                <th>接口</th>
                                 <th>节点状态</th>
                                 <th>当前路由模型</th>
-                                <th title="调用链上每个模型当前使用的 Key 池——只列出有问题的 Key（🔴永久失效 / 🟡冷却），健康 Key 不显示。悬停 Key 徽章看详情">Key 链路</th>
+                                <th title="调用链上每个模型当前使用的 Key 池——只列出有问题的 Key（🔴永久失效 / 🟡冷却），健康 Key 不显示">Key 链路</th>
                                 <th>状态</th>
-                                <th style="text-align:right;">操作</th>
                             </tr>
                         </thead>
                         <tbody>
-                            <tr v-for="lapi in filteredLapis" :key="lapi.id" :id="'el-l'+lapi.id"
-                                draggable="true"
-                                @dragstart="onCardDragStart($event, 'lapis', lapi.id)"
-                                @dragover.prevent="onCardDragOver($event)"
-                                @dragleave="onCardDragLeave($event)"
-                                @drop="onCardDrop($event, 'lapis', lapi.id)"
-                                @dragend="onCardDragEnd($event)">
-                                <td style="cursor:grab;color:var(--text-muted);text-align:center;" title="拖拽排序">⠿</td>
+                            <tr v-for="lapi in sortedLapis" :key="lapi.id" :id="'el-l'+lapi.id"
+                                style="cursor:pointer;"
+                                @click="openDetail('lapi', lapi.id)">
                                 <td>
                                     <div style="font-weight:600;color:var(--color-primary);">{{ lapi.alias }}</div>
-                                    <div v-if="lapi.notes" style="font-size:0.76rem;color:var(--text-muted);font-style:italic;margin-top:2px;">{{ lapi.notes }}</div>
                                 </td>
                                 <td style="white-space:nowrap;font-size:0.82rem;font-family:var(--font-mono);">
                                     <span :style="{ color: lapi._rapis && lapi._rapis.filter(r => r.enabled && r.available).length > 0 ? 'var(--color-success)' : 'var(--text-muted)', fontWeight: 600 }">
@@ -2604,31 +2710,31 @@
                                     </span>
                                     <span v-if="!lapi._rapis || lapi._rapis.length === 0" style="color:var(--text-muted);">暂无节点</span>
                                 </td>
-                                <td style="max-width:240px;">
-                                    <div style="cursor:pointer;" @click="editLapiRoutes(lapi)" title="点击编排路由链">
-                                        <template v-if="lapi._rapis && lapi._rapis.find(r => r.enabled && r.available)">
-                                            <div style="display:flex;align-items:center;gap:6px;padding:3px 8px;border-radius:5px;background:rgba(16,185,129,0.05);border:1px solid rgba(16,185,129,0.15);">
-                                                <svg style="width:10px;height:10px;flex-shrink:0;color:var(--color-success);" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
-                                                <span style="font-family:var(--font-mono);font-size:0.8rem;font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-primary);">{{ lapi._rapis.find(r => r.enabled && r.available).alias }}</span>
-                                                <span style="font-size:0.68rem;color:var(--color-primary);background:rgba(56,189,248,0.08);border:1px solid rgba(56,189,248,0.15);border-radius:3px;padding:0 5px;font-family:var(--font-mono);flex-shrink:0;max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ getPlatformName(lapi._rapis.find(r => r.enabled && r.available).platform_id) }}</span>
-                                            </div>
-                                        </template>
-                                        <div v-else-if="lapi._rapis && lapi._rapis.length > 0" style="font-size:0.8rem;color:var(--color-danger);">
-                                            全部节点失效，链路不可用
+                                <td style="max-width:260px;" @click.stop>
+                                    <template v-if="lapi._rapis && lapi._rapis.find(r => r.enabled && r.available)">
+                                        <div style="display:flex;align-items:center;gap:6px;padding:3px 8px;border-radius:5px;background:rgba(16,185,129,0.05);border:1px solid rgba(16,185,129,0.15);cursor:pointer;"
+                                             @click="openDetail('rapi', lapi._rapis.find(r => r.enabled && r.available).id)" title="查看模型详情">
+                                            <svg style="width:10px;height:10px;flex-shrink:0;color:var(--color-success);" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
+                                            <span style="font-family:var(--font-mono);font-size:0.8rem;font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-primary);">{{ rapiDisplayName(lapi._rapis.find(r => r.enabled && r.available)) }}</span>
+                                            <span style="font-size:0.68rem;color:var(--color-primary);background:rgba(56,189,248,0.08);border:1px solid rgba(56,189,248,0.15);border-radius:3px;padding:0 5px;font-family:var(--font-mono);flex-shrink:0;max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ getPlatformName(lapi._rapis.find(r => r.enabled && r.available).platform_id) }}</span>
                                         </div>
-                                        <div v-else style="font-size:0.8rem;color:var(--text-muted);">
-                                            暂无编排模型，点击添加 →
-                                        </div>
+                                    </template>
+                                    <div v-else-if="lapi._rapis && lapi._rapis.length > 0" style="font-size:0.8rem;color:var(--color-danger);">
+                                        全部节点失效，链路不可用
+                                    </div>
+                                    <div v-else style="font-size:0.8rem;color:var(--text-muted);">
+                                        暂无编排模型，进入详情添加 →
                                     </div>
                                 </td>
-                                <td style="max-width:320px;">
+                                <td style="max-width:320px;" @click.stop>
                                     <template v-if="lapi._rapis && lapi._rapis.length > 0">
                                         <div v-for="r in lapi._rapis" :key="r.id"
                                              style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin:1px 0;line-height:1.7;">
-                                            <span style="font-family:var(--font-mono);font-size:0.74rem;font-weight:600;white-space:nowrap;"
-                                                  :style="{ color: r.enabled && r.available ? 'var(--text-primary)' : 'var(--color-danger)' }">{{ r.alias }}</span>
+                                            <span style="font-family:var(--font-mono);font-size:0.74rem;font-weight:600;white-space:nowrap;cursor:pointer;"
+                                                  :style="{ color: r.enabled && r.available ? 'var(--text-primary)' : 'var(--color-danger)' }"
+                                                  @click="openDetail('rapi', r.id)">{{ rapiDisplayName(r) }}</span>
                                             <span v-for="k in chainIssues(r)" :key="k.id" :style="keyBadgeStyleFor(k, r)" :title="keyBadgeTitleFor(k, r)"
-                                                  @click="keyModelBlock(k, r) && unblockKeyModel(k, r)">
+                                                  style="cursor:pointer;" @click="openDetail('key', k.id)">
                                                 <template v-if="keyModelBlock(k, r)">🔒 {{ keyShortLabel(k) }}</template>
                                                 <template v-else>{{ keyHealthMeta[keyHealth(k)].icon }} {{ keyShortLabel(k) }}</template>
                                             </span>
@@ -2639,27 +2745,19 @@
                                     <span v-else style="font-size:0.75rem;color:var(--text-muted);">—</span>
                                 </td>
                                 <td>
-                                    <button class="plat-toggle" :class="lapi.enabled ? 'on' : 'off'" @click="toggleLapi(lapi)">
+                                    <span :class="['plat-toggle', lapi.enabled ? 'on' : 'off']" style="pointer-events:none;">
                                         <span class="plat-toggle-dot"></span>
                                         {{ lapi.enabled ? '生效' : '禁用' }}
-                                    </button>
-                                </td>
-                                <td>
-                                    <div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;">
-                                        <button v-if="!lapi.enabled" class="btn btn-danger btn-sm btn-icon" @click="deleteLapi(lapi)" title="删除">
-                                            <svg style="width:13px;height:13px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-                                        </button>
-                                        <button class="btn btn-secondary btn-sm" @click="editLapiRoutes(lapi)">编排路由链</button>
-                                        <button class="btn btn-secondary btn-sm" @click="openLapiModal(lapi)">修改别名</button>
-                                    </div>
+                                    </span>
                                 </td>
                             </tr>
-                            <tr v-if="filteredLapis.length === 0">
-                                <td colspan="7" style="text-align:center;color:var(--text-muted);padding:32px;">暂无接口</td>
+                            <tr v-if="sortedLapis.length === 0">
+                                <td colspan="5" style="text-align:center;color:var(--text-muted);padding:32px;">暂无接口</td>
                             </tr>
                         </tbody>
                     </table>
                 </div>
+                </template>
             </div>
 
             <!-- 5. OBSERVABILITY HUB tab -->
@@ -2886,6 +2984,8 @@
                     </div>
                     <div class="modal-footer">
                         <button class="btn btn-secondary" @click="closePlatformModal">取消</button>
+                        <button v-if="platformModal.item && (!platformModal.item.enabled || !platformModal.item.available)"
+                                class="btn btn-danger" @click="deletePlatform(platformModal.item)">删除</button>
                         <button class="btn btn-primary" @click="savePlatform">保存配置</button>
                     </div>
                 </div>
@@ -2893,6 +2993,61 @@
 
             <!-- 1b. (removed) platform keys CRUD moved to the dedicated "密钥管理" tab;
                  the platform edit modal's "管理密钥" button now jumps there. -->
+
+            <!-- 1c. KEY ADD/EDIT MODAL (密钥管理 tab) -->
+            <div v-if="keyModal.show" class="modal-overlay" @click.self="closeKeyModal">
+                <div class="modal-container">
+                    <div class="modal-header">
+                        <h3>{{ keyModal.item ? '修改密钥属性' : '添加密钥' }}</h3>
+                        <button class="btn btn-secondary btn-sm" @click="closeKeyModal">✕</button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="form-group">
+                            <label>所属平台</label>
+                            <select v-if="!keyModal.item" class="form-control" v-model="keyModal.form.platform_id">
+                                <option value="" disabled>选择平台…</option>
+                                <option v-for="p in platforms" :key="'kmp-'+p.id" :value="String(p.id)">{{ p.name }}</option>
+                            </select>
+                            <input v-else type="text" class="form-control" :value="keyModal.platformName" disabled>
+                            <small style="color:var(--text-muted);font-size:0.77rem;margin-top:3px;display:block;">
+                                同一平台下多个 Key 按顺序（#0 → #1 → …）轮换，429/503 自动切换；免费 Key 优先、同资费组先到期先用
+                            </small>
+                        </div>
+                        <div class="form-group">
+                            <label>Token (API Key)</label>
+                            <input type="text" class="form-control"
+                                   :placeholder="keyModal.item ? '留空 = 不修改 Token' : 'sk-...'"
+                                   v-model="keyModal.form.token"
+                                   maxlength="512" autocomplete="off" spellcheck="false"
+                                   style="font-family:var(--font-mono);">
+                        </div>
+                        <div class="form-group">
+                            <label>备注标签</label>
+                            <input type="text" class="form-control" placeholder="例如: 账号A、主Key（可选）" v-model="keyModal.form.label" maxlength="100" autocomplete="off">
+                        </div>
+                        <div class="form-control-row">
+                            <div class="form-group">
+                                <label>资费类型</label>
+                                <button type="button" class="plat-toggle" :class="keyModal.form.is_free ? 'on' : 'off'"
+                                        @click="keyModal.form.is_free = !keyModal.form.is_free">
+                                    <span class="plat-toggle-dot"></span>
+                                    {{ keyModal.form.is_free ? '免费' : '付费' }}
+                                </button>
+                            </div>
+                            <div class="form-group">
+                                <label>有效期</label>
+                                <input type="date" class="form-control" v-model="keyModal.form.expires_at" title="留空=永久">
+                                <small style="color:var(--text-muted);font-size:0.77rem;margin-top:3px;display:block;">留空 = 永久；到期后 Key 自动禁用</small>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-secondary" @click="closeKeyModal">取消</button>
+                        <button v-if="keyModal.item" class="btn btn-danger" @click="deleteKeyFlat(keyModal.item)">删除</button>
+                        <button class="btn btn-primary" @click="saveKeyModal">保存配置</button>
+                    </div>
+                </div>
+            </div>
 
             <!-- 2. RAPI EDIT MODAL -->
             <div v-if="rapiModal.show" class="modal-overlay" @click.self="closeRapiModal">
@@ -2928,25 +3083,35 @@
                             </div>
                         </div>
                         <div class="form-group">
-                            <label>模型别名 (在网关路由链中的代号)</label>
-                            <input type="text" class="form-control" placeholder="例如 gpt-4o-primary" v-model="rapiModal.form.alias">
-                        </div>
-                        <div class="form-group">
                             <label>上游原始模型名 (平台真实调用的 model 字符串)</label>
                             <input type="text" class="form-control" placeholder="例如 gpt-4o" v-model="rapiModal.form.model">
                         </div>
-                        <div class="form-control-row" style="grid-template-columns:1fr 1fr 1fr;">
+                        <div class="form-group">
+                            <label>模型备注 (统一命名的 4 项全空时，备注将作为模型名称)</label>
+                            <input type="text" class="form-control" placeholder="自动发现的模型默认为其原始名称" v-model="rapiModal.form.notes" maxlength="500" autocomplete="off">
+                        </div>
+                        <div class="form-control-row" style="grid-template-columns:1fr 1fr 1fr 1fr;">
+                            <div class="form-group">
+                                <label>厂商 (Vendor)</label>
+                                <input type="text" class="form-control" placeholder="例如 openai / z.ai" v-model="rapiModal.form.vendor" autocomplete="off">
+                            </div>
                             <div class="form-group">
                                 <label>系列 (Series)</label>
                                 <input type="text" class="form-control" placeholder="例如 glm / claude" v-model="rapiModal.form.series" autocomplete="off">
                             </div>
                             <div class="form-group">
-                                <label>名 (Name)</label>
-                                <input type="text" class="form-control" placeholder="例如 sonnet（可空）" v-model="rapiModal.form.model_name" autocomplete="off">
-                            </div>
-                            <div class="form-group">
                                 <label>版本 (Version)</label>
                                 <input type="text" class="form-control" placeholder="例如 5.2 / 4.7" v-model="rapiModal.form.version" autocomplete="off">
+                            </div>
+                            <div class="form-group">
+                                <label>后缀 (Suffix)</label>
+                                <input type="text" class="form-control" placeholder="例如 luna xhigh / sonnet" v-model="rapiModal.form.suffix" autocomplete="off">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <div style="padding:8px 12px;border-radius:8px;background:rgba(56,189,248,0.06);border:1px dashed rgba(56,189,248,0.25);font-size:0.84rem;">
+                                模型名称（按 厂商/系列-版本-后缀 自动生成）：
+                                <span style="font-family:var(--font-mono);font-weight:700;color:var(--color-primary);">{{ computeModelName(rapiModal.form.vendor, rapiModal.form.series, rapiModal.form.version, rapiModal.form.suffix, rapiModal.form.notes, rapiModal.form.model) || '（待填写）' }}</span>
                             </div>
                         </div>
                         <!-- 模型级自定义 Headers -->
@@ -2972,6 +3137,8 @@
                     </div>
                     <div class="modal-footer">
                         <button class="btn btn-secondary" @click="closeRapiModal">取消</button>
+                        <button v-if="rapiModal.item && (!rapiModal.item.enabled || !rapiModal.item.available)"
+                                class="btn btn-danger" @click="deleteRapi(rapiModal.item)">删除</button>
                         <button class="btn btn-primary" @click="saveRapi">保存配置</button>
                     </div>
                 </div>
@@ -2981,7 +3148,7 @@
             <div v-if="rapiTestModal.show" class="modal-overlay" @click.self="closeRapiTestModal">
                 <div class="modal-container" style="max-width:760px;">
                     <div class="modal-header">
-                        <h3>🧪 直测 key-model — {{ rapiTestModal.rapi?.alias }}</h3>
+                        <h3>🧪 直测 key-model — {{ rapiTestModal.rapi ? rapiDisplayName(rapiTestModal.rapi) : '' }}</h3>
                         <button class="btn btn-secondary btn-sm" @click="closeRapiTestModal">✕</button>
                     </div>
                     <div class="modal-body">
@@ -3033,7 +3200,7 @@
             <div v-if="headersModal.show" class="modal-overlay" @click.self="closeHeadersModal">
                 <div class="modal-container" style="max-width:680px;">
                     <div class="modal-header">
-                        <h3>自定义 HTTP Headers — {{ headersModal.rapi?.alias }}</h3>
+                        <h3>自定义 HTTP Headers — {{ headersModal.rapi ? rapiDisplayName(headersModal.rapi) : '' }}</h3>
                         <button class="btn btn-secondary btn-sm" @click="closeHeadersModal">✕</button>
                     </div>
                     <div class="modal-body">
@@ -3239,7 +3406,7 @@
                                 <div class="chain-node-info">
                                     <div class="chain-index">{{ idx + 1 }}</div>
                                     <div class="chain-node-text">
-                                        <span class="chain-node-name">{{ item.alias }}</span>
+                                        <span class="chain-node-name">{{ rapiDisplayName(item) }}</span>
                                         <span class="chain-node-platform">{{ getPlatformName(item.platform_id) }}</span>
                                     </div>
                                 </div>
@@ -3266,7 +3433,7 @@
                                     :class="{ 'rapi-quick-btn-match': r._score > 0 }"
                                     :title="`${r.model}`">
                                     <span style="display:flex;flex-direction:column;align-items:flex-start;gap:1px;">
-                                        <span style="font-family:var(--font-mono);font-size:0.8rem;line-height:1.2;">{{ r.alias }}</span>
+                                        <span style="font-family:var(--font-mono);font-size:0.8rem;line-height:1.2;">{{ rapiDisplayName(r) }}</span>
                                         <span style="font-size:0.69rem;color:var(--color-primary);opacity:0.85;line-height:1.2;font-family:var(--font-mono);">{{ getPlatformName(r.platform_id) }}</span>
                                     </span>
                                     <span v-if="r._score > 0" style="font-size:0.7rem;opacity:0.65;margin-left:4px;align-self:center;">●</span>
@@ -3293,7 +3460,7 @@
                     </div>
                     <div class="modal-body">
                         <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:14px;">
-                            将模型 <code style="color:var(--color-primary);">{{ addToLapiModal.rapi?.alias }}</code> 追加到所选 LAPI 路由链的末尾。
+                            将模型 <code style="color:var(--color-primary);">{{ addToLapiModal.rapi ? rapiDisplayName(addToLapiModal.rapi) : '' }}</code> 追加到所选 LAPI 路由链的末尾。
                         </p>
                         <div class="form-group">
                             <label>选择目标 LAPI 接口</label>
@@ -3320,35 +3487,43 @@
             <div v-if="lapiModal.show" class="modal-overlay" @click.self="closeLapiModal">
                 <div class="modal-container">
                     <div class="modal-header">
-                        <h3>{{ lapiModal.item ? '修改本地接口名称' : '新建本地接口 (LAPI)' }}</h3>
+                        <h3>{{ lapiModal.item ? '修改本地接口' : (lapiModal.fromRapiId ? '从模型新建本地接口 (LAPI)' : '新建本地接口 (LAPI)') }}</h3>
                         <button class="btn btn-secondary btn-sm" @click="closeLapiModal">✕</button>
                     </div>
                     <div class="modal-body">
                         <div class="form-group">
-                            <label>接口别名 (客户端发送请求时对应的 model 字段名，不含 /v1 前缀)</label>
+                            <label>接口名 (客户端发送请求时对应的 model 字段名，不含 /v1 前缀)</label>
                             <input type="text" class="form-control" placeholder="例如 gpt-4o-shared" v-model="lapiModal.form.alias">
                         </div>
                         <div class="form-group">
                             <label>备注 (Notes)</label>
                             <input type="text" class="form-control" placeholder="例如：对外共享接口 / 内部测试专用" v-model="lapiModal.form.notes" maxlength="500" autocomplete="off">
                         </div>
-                        <div class="form-control-row" style="grid-template-columns:1fr 1fr 1fr;">
+                        <div class="form-control-row" style="grid-template-columns:1fr 1fr 1fr 1fr;">
+                            <div class="form-group">
+                                <label>厂商 (Vendor)</label>
+                                <input type="text" class="form-control" placeholder="例如 openai / z.ai" v-model="lapiModal.form.vendor" autocomplete="off">
+                            </div>
                             <div class="form-group">
                                 <label>系列 (Series)</label>
                                 <input type="text" class="form-control" placeholder="例如 glm / claude" v-model="lapiModal.form.series" autocomplete="off">
                             </div>
                             <div class="form-group">
-                                <label>名 (Name)</label>
-                                <input type="text" class="form-control" placeholder="例如 sonnet（可空）" v-model="lapiModal.form.model_name" autocomplete="off">
-                            </div>
-                            <div class="form-group">
                                 <label>版本 (Version)</label>
                                 <input type="text" class="form-control" placeholder="例如 5.2 / 4.7" v-model="lapiModal.form.version" autocomplete="off">
                             </div>
+                            <div class="form-group">
+                                <label>后缀 (Suffix)</label>
+                                <input type="text" class="form-control" placeholder="例如 luna xhigh / sonnet" v-model="lapiModal.form.suffix" autocomplete="off">
+                            </div>
                         </div>
+                        <p v-if="lapiModal.fromRapiId" style="font-size:0.78rem;color:var(--text-muted);margin:4px 0 0;">
+                            接口名已默认为模型名称；保存后该模型将自动加入此接口的路由链。
+                        </p>
                     </div>
                     <div class="modal-footer">
                         <button class="btn btn-secondary" @click="closeLapiModal">取消</button>
+                        <button v-if="lapiModal.item && !lapiModal.item.enabled" class="btn btn-danger" @click="deleteLapi(lapiModal.item)">删除</button>
                         <button class="btn btn-primary" @click="saveLapi">确认</button>
                     </div>
                 </div>
@@ -3395,6 +3570,179 @@
                             </div>
                             <pre class="playground-response-pre">{{ playgroundModal.response || '配置参数并点击发送按钮以查看网关转换和返回数据...' }}</pre>
                         </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 7. ADD WIZARD MODAL (顶栏 ＋新增：平台 → 密钥 → 模型 → 测试 → 保存) -->
+            <div v-if="addWizard.show" class="modal-overlay" @click.self="closeAddWizard">
+                <div class="modal-container" style="max-width:680px;">
+                    <div class="modal-header">
+                        <h3>＋ 新增资源向导</h3>
+                        <button class="btn btn-secondary btn-sm" @click="closeAddWizard">✕</button>
+                    </div>
+                    <div class="modal-body">
+                        <!-- 第 1 步：平台 -->
+                        <div style="font-weight:700;font-size:0.9rem;margin-bottom:10px;color:var(--color-primary);">① 选择平台</div>
+                        <div style="display:flex;gap:14px;margin-bottom:10px;">
+                            <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:0.85rem;">
+                                <input type="radio" value="existing" v-model="addWizard.platMode"> 已有平台
+                            </label>
+                            <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:0.85rem;">
+                                <input type="radio" value="new" v-model="addWizard.platMode" @change="checkPlatDomain"> 新建平台
+                            </label>
+                        </div>
+                        <template v-if="addWizard.platMode === 'existing'">
+                            <div class="form-group">
+                                <select class="form-control" v-model="addWizard.platId">
+                                    <option v-if="platforms.length === 0" value="">（暂无平台，请选择"新建平台"）</option>
+                                    <option v-for="p in platforms" :key="'wz-p-'+p.id" :value="String(p.id)">{{ p.name }}</option>
+                                </select>
+                            </div>
+                        </template>
+                        <template v-else>
+                            <div class="form-control-row" style="grid-template-columns:1fr 1fr;">
+                                <div class="form-group">
+                                    <label>平台名称</label>
+                                    <input type="text" class="form-control" placeholder="例如 OpenAI / 智谱" v-model="addWizard.platForm.name">
+                                </div>
+                                <div class="form-group">
+                                    <label>Base URL</label>
+                                    <input type="text" class="form-control" placeholder="https://api.example.com" v-model="addWizard.platForm.base_url" @blur="checkPlatDomain">
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label>平台 Token（可空，建议在密钥管理中添加 Key）</label>
+                                <input type="text" class="form-control" placeholder="sk-..." v-model="addWizard.platForm.token" style="font-family:var(--font-mono);">
+                            </div>
+                            <div class="form-group">
+                                <label>备注</label>
+                                <input type="text" class="form-control" placeholder="可选" v-model="addWizard.platForm.notes" maxlength="500">
+                            </div>
+                            <div v-if="addWizard.platDomainWarn"
+                                 style="font-size:0.78rem;color:var(--color-warning);padding:6px 10px;border-radius:6px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.25);margin-bottom:10px;">
+                                ⚠ {{ addWizard.platDomainWarn }}
+                            </div>
+                        </template>
+                        <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
+                            <button class="btn btn-secondary btn-sm" :disabled="addWizard.platTest.running" @click="testWizardPlatform">测试平台连通</button>
+                            <span v-if="addWizard.platTest.status" :style="{ fontSize:'0.76rem', color: addWizard.platTest.ok ? 'var(--color-success)' : 'var(--color-danger)' }">{{ addWizard.platTest.msg }}</span>
+                        </div>
+
+                        <!-- 第 2 步：密钥 -->
+                        <div style="font-weight:700;font-size:0.9rem;margin:18px 0 10px;color:var(--color-primary);">② 选择密钥</div>
+                        <div style="display:flex;gap:14px;margin-bottom:10px;">
+                            <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:0.85rem;">
+                                <input type="radio" value="existing" v-model="addWizard.keyMode"> 已有密钥
+                            </label>
+                            <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:0.85rem;">
+                                <input type="radio" value="new" v-model="addWizard.keyMode"> 新建密钥
+                            </label>
+                        </div>
+                        <template v-if="addWizard.keyMode === 'existing'">
+                            <div class="form-group">
+                                <select class="form-control" v-model="addWizard.keyId">
+                                    <option v-if="wizardKeyOptions.length > 0 || addWizard.platMode !== 'existing'" value="">（不使用密钥）</option>
+                                    <option v-if="addWizard.platMode === 'existing' && wizardKeyOptions.length === 0" value="">（该平台暂无密钥，请选择"新建密钥"）</option>
+                                    <option v-for="k in wizardKeyOptions" :key="'wz-k-'+k.id" :value="String(k.id)">#{{ k.key_index }} {{ k.label || maskToken(k.token) }}</option>
+                                </select>
+                            </div>
+                        </template>
+                        <template v-else>
+                            <div class="form-group">
+                                <label>密钥 Token</label>
+                                <input type="text" class="form-control" placeholder="sk-..." v-model="addWizard.keyForm.token" style="font-family:var(--font-mono);">
+                            </div>
+                            <div class="form-control-row" style="grid-template-columns:1fr 1fr;">
+                                <div class="form-group">
+                                    <label>备注标签</label>
+                                    <input type="text" class="form-control" placeholder="例如 主力号" v-model="addWizard.keyForm.label">
+                                </div>
+                                <div class="form-group">
+                                    <label class="checkbox-container" style="margin-top:26px;">
+                                        <input type="checkbox" v-model="addWizard.keyForm.is_free"> 免费 Key
+                                    </label>
+                                </div>
+                            </div>
+                        </template>
+                        <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
+                            <button class="btn btn-secondary btn-sm" :disabled="addWizard.keyTest.running" @click="testWizardKey">测试密钥可用</button>
+                            <span v-if="addWizard.keyTest.status" :style="{ fontSize:'0.76rem', color: addWizard.keyTest.ok ? 'var(--color-success)' : 'var(--color-danger)' }">{{ addWizard.keyTest.msg }}</span>
+                        </div>
+
+                        <!-- 第 3 步：模型 -->
+                        <div style="font-weight:700;font-size:0.9rem;margin:18px 0 10px;color:var(--color-primary);">③ 选择模型</div>
+                        <div style="display:flex;gap:14px;margin-bottom:10px;">
+                            <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:0.85rem;">
+                                <input type="radio" value="existing" v-model="addWizard.modelMode"> 已有模型
+                            </label>
+                            <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:0.85rem;">
+                                <input type="radio" value="new" v-model="addWizard.modelMode"> 新建模型
+                            </label>
+                        </div>
+                        <template v-if="addWizard.modelMode === 'existing'">
+                            <div class="form-group">
+                                <select class="form-control" v-model="addWizard.modelId">
+                                    <option v-if="addWizard.platMode === 'existing' && wizardModelOptions.length === 0" value="">（该平台暂无模型，请选择"新建模型"或用平台详情页的"发现模型"）</option>
+                                    <option v-for="m in wizardModelOptions" :key="'wz-m-'+m.id" :value="String(m.id)">{{ rapiDisplayName(m) }}</option>
+                                </select>
+                            </div>
+                        </template>
+                        <template v-else>
+                            <div class="form-group">
+                                <label>上游原始模型名 (平台真实调用的 model 字符串)</label>
+                                <input type="text" class="form-control" placeholder="例如 gpt-4o" v-model="addWizard.modelForm.model">
+                            </div>
+                            <div class="form-group">
+                                <label>模型备注</label>
+                                <input type="text" class="form-control" placeholder="可选；4 项命名全空时作为模型名称" v-model="addWizard.modelForm.notes" maxlength="500">
+                            </div>
+                            <div class="form-control-row" style="grid-template-columns:1fr 1fr 1fr 1fr;">
+                                <div class="form-group">
+                                    <label>厂商</label>
+                                    <input type="text" class="form-control" placeholder="openai" v-model="addWizard.modelForm.vendor" autocomplete="off">
+                                </div>
+                                <div class="form-group">
+                                    <label>系列</label>
+                                    <input type="text" class="form-control" placeholder="gpt" v-model="addWizard.modelForm.series" autocomplete="off">
+                                </div>
+                                <div class="form-group">
+                                    <label>版本</label>
+                                    <input type="text" class="form-control" placeholder="5.6" v-model="addWizard.modelForm.version" autocomplete="off">
+                                </div>
+                                <div class="form-group">
+                                    <label>后缀</label>
+                                    <input type="text" class="form-control" placeholder="luna xhigh" v-model="addWizard.modelForm.suffix" autocomplete="off">
+                                </div>
+                            </div>
+                            <div style="padding:6px 12px;border-radius:8px;background:rgba(56,189,248,0.06);border:1px dashed rgba(56,189,248,0.25);font-size:0.8rem;margin-bottom:8px;">
+                                模型名称：
+                                <span style="font-family:var(--font-mono);font-weight:700;color:var(--color-primary);">{{ computeModelName(addWizard.modelForm.vendor, addWizard.modelForm.series, addWizard.modelForm.version, addWizard.modelForm.suffix, addWizard.modelForm.notes, addWizard.modelForm.model) || '（待填写）' }}</span>
+                            </div>
+                        </template>
+                        <div style="display:flex;align-items:center;gap:10px;">
+                            <button class="btn btn-secondary btn-sm" :disabled="addWizard.modelTest.running" @click="testWizardModel">测试模型可用</button>
+                            <span v-if="addWizard.modelTest.status" :style="{ fontSize:'0.76rem', color: addWizard.modelTest.ok ? 'var(--color-success)' : 'var(--color-danger)' }">{{ addWizard.modelTest.msg }}</span>
+                        </div>
+
+                        <!-- 确认清单 -->
+                        <div v-if="addWizard.confirmMode"
+                             style="margin-top:18px;padding:12px 16px;border-radius:10px;background:rgba(16,185,129,0.06);border:1px solid rgba(16,185,129,0.25);">
+                            <div style="font-weight:700;font-size:0.86rem;margin-bottom:8px;">测试通过，确认新增以下内容：</div>
+                            <div v-for="(it, i) in addWizard.confirmItems" :key="'wzc-'+i" style="font-size:0.84rem;color:var(--text-secondary);padding:3px 0;">
+                                ✓ {{ it }}
+                            </div>
+                            <div v-if="!wizardHasNew" style="font-size:0.8rem;color:var(--text-muted);">未选择任何新内容（仅复用已有配置）。</div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-secondary" @click="closeAddWizard">取消</button>
+                        <button v-if="!addWizard.confirmMode" class="btn btn-primary" :disabled="addWizard.busy" @click="submitAddWizard">
+                            {{ addWizard.busy ? '整体测试中…' : '整体测试并继续' }}
+                        </button>
+                        <button v-else class="btn btn-primary" :disabled="addWizard.busy" @click="submitAddWizard">
+                            {{ addWizard.busy ? '保存中…' : '确认保存' }}
+                        </button>
                     </div>
                 </div>
             </div>
@@ -3458,6 +3806,21 @@
                 // TABS
                 const activeTab = ref('dashboard');
                 const gatewayLive = ref(true);
+
+                // DETAIL VIEW — 汇总页点击行进入对应实体的详情页；详情页内展示
+                // 备注与操作按钮，修改/删除必须先点击"修改"进入编辑弹窗。
+                const detail = reactive({ type: null, id: null });
+                const detailTabMap = { platform: 'platforms', key: 'keys', rapi: 'rapis', lapi: 'lapis' };
+                const openDetail = (type, id) => {
+                    detail.type = type;
+                    detail.id = id;
+                    const tab = detailTabMap[type];
+                    if (activeTab.value !== tab) {
+                        activeTab.value = tab;
+                        refreshData();
+                    }
+                };
+                const closeDetail = () => { detail.type = null; detail.id = null; };
                 
                 // STATE CONTAINERS
                 const stats = ref({});
@@ -3504,7 +3867,7 @@
                     pwVisible: false // login password eye toggle
                 });
                 const addToLapiModal = reactive({ show: false, rapi: null, selectedLapiId: null });
-                const rapiModal = reactive({ show: false, item: null, form: { platform_id: '', alias: '', model: '', series: '', model_name: '', version: '' }, headers: [], keyIDs: [] });
+                const rapiModal = reactive({ show: false, item: null, form: { platform_id: '', model: '', vendor: '', series: '', version: '', suffix: '', notes: '' }, headers: [], keyIDs: [] });
                 // Key-model direct test modal (per-RAPI 测试 button).
                 const rapiTestModal = reactive({ show: false, rapi: null, keyId: 0, body: '', sending: false, status: 0, latency: 0, response: '', clearOnSuccess: true });
                 // Keys this RAPI may use (its filtered pool), for the test-key selector.
@@ -3614,8 +3977,71 @@
                     const cool = keys.filter(k => k.failure_type === 1).length;
                     return { perm, cool };
                 };
+
+                // ---- 统一模型命名 ----
+                // 名称 = "{厂商}/" + 非空的[系列, 版本, 后缀]用 "-" 连接；空项直接跳过。
+                // 4 项全空 → 用模型备注；备注也空 → 回退上游模型名。与后端
+                // models.ComputeModelName 保持完全一致的规则。
+                const computeModelName = (vendor, series, version, suffix, notes, fallback) => {
+                    const parts = [series, version, suffix]
+                        .map(p => (p || '').trim())
+                        .filter(p => p !== '');
+                    let name = (vendor || '').trim() !== '' ? vendor.trim() + '/' : '';
+                    if (parts.length > 0) name += parts.join('-');
+                    if (name !== '') return name;
+                    if ((notes || '').trim() !== '') return notes.trim();
+                    return (fallback || '').trim();
+                };
+                const rapiDisplayName = (r) => {
+                    if (!r) return '';
+                    return computeModelName(r.vendor, r.series, r.version, r.suffix, r.notes, r.model || r.alias) || '未命名模型';
+                };
+
+                // ---- 汇总页自动排序：故障(0) → 警告(1) → 禁用(2) → 正常(3) ----
+                const platformRank = (p) => {
+                    if (p.enabled && !p.available) return 0;
+                    const alerts = platKeyAlerts(p);
+                    const hasDeadModel = rapis.value.some(r => Number(r.platform_id) === Number(p.id) && r.enabled && !r.available);
+                    if (alerts.perm > 0 || alerts.cool > 0 || hasDeadModel) return 1;
+                    if (!p.enabled) return 2;
+                    return 3;
+                };
+                const keyRank = (k) => {
+                    if (k.failure_type === 2 || (k.expires_at && isKeyExpired(k))) return 0;
+                    if (k.failure_type === 1) return 1;
+                    if (!k.enabled) return 2;
+                    return 3;
+                };
+                const rapiRank = (r) => {
+                    if (r.enabled && !r.available) return 0;
+                    if (poolWarning(r) || blockedKeysForRapi(r).length > 0) return 1;
+                    if (!r.enabled) return 2;
+                    return 3;
+                };
+                const lapiRank = (l) => {
+                    const nodes = l._rapis || [];
+                    const valid = nodes.filter(r => r.enabled && r.available).length;
+                    const invalid = nodes.length - valid;
+                    if (l.enabled && nodes.length > 0 && valid === 0) return 0;
+                    if (l.enabled && (nodes.length === 0 || invalid > 0 || nodes.some(r => chainIssues(r).length > 0))) return 1;
+                    if (!l.enabled) return 2;
+                    return 3;
+                };
+                // 使用该模型的所有接口（跨实体双向访问）。
+                const lapisForRapi = (rapi) => lapis.value.filter(l => (l._rapis || []).some(r => Number(r.id) === Number(rapi.id)));
+
+                // 当前详情页实体对象（detail.type / detail.id 驱动）。
+                const platformDetail = computed(() => detail.type === 'platform'
+                    ? (platforms.value.find(p => Number(p.id) === Number(detail.id)) || null) : null);
+                const keyDetail = computed(() => detail.type === 'key'
+                    ? (keysList.value.find(k => Number(k.id) === Number(detail.id)) || null) : null);
+                const rapiDetail = computed(() => detail.type === 'rapi'
+                    ? (rapis.value.find(r => Number(r.id) === Number(detail.id)) || null) : null);
+                const lapiDetail = computed(() => detail.type === 'lapi'
+                    ? (lapis.value.find(l => Number(l.id) === Number(detail.id)) || null) : null);
+
                 const headersModal = reactive({ show: false, rapi: null, headers: [] });
-                const lapiModal = reactive({ show: false, item: null, form: { alias: '', notes: '', series: '', model_name: '', version: '' } });
+                const lapiModal = reactive({ show: false, item: null, fromRapiId: 0, form: { alias: '', notes: '', vendor: '', series: '', version: '', suffix: '' } });
                 const lapiRoutesModal = reactive({ show: false, lapi: null, chain: [], selectedRapiId: '' });
                 const importWizard = reactive({ show: false, platform: null, loading: false, fetchError: '', models: [], selected: [], manualInput: '', existing: {}, manualAdded: [] });
                 // 各分类折叠状态：默认全部展开，用户可点击标题折叠/展开。
@@ -3723,35 +4149,57 @@
                     return alerts;
                 });
 
-                // Global fuzzy filters
+                // Global fuzzy filters + auto sort (故障 → 警告 → 禁用 → 正常)
                 const filteredPlatforms = computed(() => {
-                    if (!platformSearchQuery.value) return platforms.value;
-                    const query = platformSearchQuery.value.toLowerCase();
-                    return platforms.value.filter(p => 
-                        (p.name && p.name.toLowerCase().includes(query)) ||
-                        (p.base_url && p.base_url.toLowerCase().includes(query)) ||
-                        (p.notes && p.notes.toLowerCase().includes(query))
-                    );
+                    let list = platforms.value;
+                    if (platformSearchQuery.value) {
+                        const query = platformSearchQuery.value.toLowerCase();
+                        list = list.filter(p =>
+                            (p.name && p.name.toLowerCase().includes(query)) ||
+                            (p.base_url && p.base_url.toLowerCase().includes(query)) ||
+                            (p.notes && p.notes.toLowerCase().includes(query))
+                        );
+                    }
+                    return list;
                 });
+                const sortedPlatforms = computed(() =>
+                    [...filteredPlatforms.value].sort((a, b) => platformRank(a) - platformRank(b))
+                );
 
+                const rapiPlatformFilter = ref('');
                 const filteredRapis = computed(() => {
-                    if (!rapiSearchQuery.value) return rapis.value;
-                    const query = rapiSearchQuery.value.toLowerCase();
-                    return rapis.value.filter(r => 
-                        (r.alias && r.alias.toLowerCase().includes(query)) ||
-                        (r.model && r.model.toLowerCase().includes(query)) ||
-                        (getPlatformName(r.platform_id).toLowerCase().includes(query))
-                    );
+                    let list = rapis.value;
+                    if (rapiPlatformFilter.value) list = list.filter(r => String(r.platform_id) === rapiPlatformFilter.value);
+                    if (rapiSearchQuery.value) {
+                        const query = rapiSearchQuery.value.toLowerCase();
+                        list = list.filter(r =>
+                            rapiDisplayName(r).toLowerCase().includes(query) ||
+                            (r.model && r.model.toLowerCase().includes(query)) ||
+                            getPlatformName(r.platform_id).toLowerCase().includes(query)
+                        );
+                    }
+                    return list;
                 });
+                // 模型页：同状态内按统一命名分组排序（相同命名的模型相邻）。
+                const sortedRapis = computed(() =>
+                    [...filteredRapis.value].sort((a, b) => {
+                        const d = rapiRank(a) - rapiRank(b);
+                        if (d !== 0) return d;
+                        return rapiDisplayName(a).localeCompare(rapiDisplayName(b), 'zh');
+                    })
+                );
 
                 const filteredLapis = computed(() => {
                     if (!lapiSearchQuery.value) return lapis.value;
                     const query = lapiSearchQuery.value.toLowerCase();
-                    return lapis.value.filter(l => 
+                    return lapis.value.filter(l =>
                         (l.alias && l.alias.toLowerCase().includes(query)) ||
-                        (l._rapis && l._rapis.some(r => r.alias.toLowerCase().includes(query)))
+                        (l._rapis && l._rapis.some(r => rapiDisplayName(r).toLowerCase().includes(query)))
                     );
                 });
+                const sortedLapis = computed(() =>
+                    [...filteredLapis.value].sort((a, b) => lapiRank(a) - lapiRank(b))
+                );
 
                 const filteredLogs = computed(() => {
                     return logs.value.filter(l => {
@@ -3820,25 +4268,26 @@
                         .filter(r => {
                             if (!q) return true;
                             const platformName = getPlatformName(r.platform_id) || '';
-                            return (r.alias || '').toLowerCase().includes(q)
+                            return rapiDisplayName(r).toLowerCase().includes(q)
                                 || (r.model || '').toLowerCase().includes(q)
                                 || platformName.toLowerCase().includes(q);
                         })
-                        .map(r => ({ ...r, _score: nameScore(lapiAlias, r.alias) }))
-                        .sort((a, b) => b._score !== a._score ? b._score - a._score : (a.alias || '').localeCompare(b.alias || ''));
+                        .map(r => ({ ...r, _score: nameScore(lapiAlias, rapiDisplayName(r)) }))
+                        .sort((a, b) => b._score !== a._score ? b._score - a._score : rapiDisplayName(a).localeCompare(rapiDisplayName(b), 'zh'));
                 });
 
                 // LAPIs sorted by name similarity to the RAPI being added
                 const addToLapiSortedLapis = computed(() => {
-                    const rapiAlias = addToLapiModal.rapi?.alias || '';
+                    const rapiName = addToLapiModal.rapi ? rapiDisplayName(addToLapiModal.rapi) : '';
                     return lapis.value
-                        .map(l => ({ ...l, _score: nameScore(rapiAlias, l.alias) }))
+                        .map(l => ({ ...l, _score: nameScore(rapiName, l.alias) }))
                         .sort((a, b) => b._score !== a._score ? b._score - a._score : (a.alias || '').localeCompare(b.alias || ''));
                 });
 
                 // METHODS
                 const setTab = (tab) => {
                     activeTab.value = tab;
+                    closeDetail();
                     refreshData();
                 };
                 
@@ -3971,9 +4420,8 @@
                     return tree;
                 });
 
-                // Jump from an alert to the platform edit modal (平台管理 tab)
+                // Jump from an alert to the platform detail page (平台管理 tab)
                 const jumpToPlatform = async (pid) => {
-                    activeTab.value = 'platforms';
                     if (!platforms.value.find(p => Number(p.id) === Number(pid))) {
                         await loadPlatforms();
                     }
@@ -3982,7 +4430,7 @@
                         showToast('提示', '平台不存在或已被删除', 'error');
                         return;
                     }
-                    openPlatformModal(plat);
+                    openDetail('platform', plat.id);
                 };
 
                 // Compute per-RAPI utilization bars from insights counters + rapi config
@@ -4140,11 +4588,6 @@
                                         ? JSON.parse(p.supported_formats) : [];
                                 } catch (_) { p._platformFormats = []; }
                             }));
-                            // Ensure each platform has a per-platform add-form entry for the
-                            // "密钥管理" tab v-model bindings (keysAdd is keyed by platform id).
-                            for (const p of list) {
-                                if (!keysAdd[p.id]) keysAdd[p.id] = { token: '', label: '', is_free: false, expires_at: '' };
-                            }
                             platforms.value = list;
                         }
                     } catch (e) {}
@@ -4152,7 +4595,7 @@
 
                 // PLATFORM KEY MANAGEMENT (flat, lives on the dedicated "密钥管理" tab)
                 // Jump to the keys tab filtered to a specific platform — used by the
-                // platform card badge and the platform edit modal's "管理密钥" button.
+                // platform table badge and the platform edit modal's "管理密钥" button.
                 const openKeysTab = (plat) => {
                     if (platformModal.item) closePlatformModal();
                     keyPlatformFilter.value = plat ? String(plat.id) : '';
@@ -4160,31 +4603,78 @@
                     setTab('keys');
                 };
 
-                const addKeyFlat = async (pid) => {
-                    const f = keysAdd[pid];
-                    if (!f || !f.token.trim()) return;
+                // 平台汇总行的"模型"徽章 → 跳转到模型页并按该平台过滤
+                // （模型发现入口保留在平台详情页的操作按钮中）。
+                const openPlatformModelsTab = (plat) => {
+                    rapiPlatformFilter.value = plat ? String(plat.id) : '';
+                    rapiSearchQuery.value = '';
+                    setTab('rapis');
+                };
+
+                // Key add/edit modal (密钥管理 tab) — same modal pattern as platform/rapi/lapi.
+                const keyModal = reactive({
+                    show: false, item: null, platformName: '',
+                    form: { platform_id: '', token: '', label: '', is_free: false, expires_at: '' }
+                });
+
+                const openKeyModal = (k) => {
+                    keyModal.item = k || null;
+                    if (k) {
+                        keyModal.platformName = k.platform_name || ('平台-' + k.platform_id);
+                        keyModal.form = {
+                            platform_id: String(k.platform_id),
+                            token: '',
+                            label: k.label || '',
+                            is_free: !!k.is_free,
+                            expires_at: k.expires_at ? String(k.expires_at).slice(0, 10) : ''
+                        };
+                    } else {
+                        // Pre-select the filtered platform (if any) for a smoother flow.
+                        keyModal.platformName = '';
+                        keyModal.form = {
+                            platform_id: keyPlatformFilter.value || String(platforms.value[0]?.id || ''),
+                            token: '', label: '', is_free: false, expires_at: ''
+                        };
+                    }
+                    keyModal.show = true;
+                };
+                const closeKeyModal = () => { keyModal.show = false; };
+
+                const saveKeyModal = async () => {
+                    const f = keyModal.form;
+                    if (!keyModal.item && (!f.platform_id || !f.token.trim())) {
+                        showToast('验证失败', '请选择平台并填写 Token', 'error');
+                        return;
+                    }
                     try {
+                        const url = keyModal.item
+                            ? `/api/platforms/${f.platform_id}/keys?key_id=${keyModal.item.id}`
+                            : `/api/platforms/${f.platform_id}/keys`;
                         const body = {
                             token: f.token.trim(),
-                            label: f.label.trim(),
-                            enabled: true,
+                            label: (f.label || '').trim(),
+                            enabled: keyModal.item ? keyModal.item.enabled : true,
                             is_free: !!f.is_free,
                             expires_at: f.expires_at ? f.expires_at + 'T23:59:59Z' : null
                         };
-                        const r = await fetch(`/api/platforms/${pid}/keys`, {
-                            method: 'POST',
+                        const r = await fetch(url, {
+                            method: keyModal.item ? 'PUT' : 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify(body)
                         });
                         if (r.ok) {
-                            f.token = ''; f.label = ''; f.is_free = false; f.expires_at = '';
-                            showToast('成功', 'Key 已添加，已自动探测并恢复受影响的模型。', 'success');
+                            showToast('成功', keyModal.item
+                                ? `Key #${keyModal.item.key_index} 属性已更新`
+                                : 'Key 已添加，已自动探测并恢复受影响的模型。', 'success');
+                            closeKeyModal();
                             refreshData();
                         } else {
                             const err = await r.json().catch(() => ({}));
-                            showToast('错误', err.error || '添加 Key 失败', 'error');
+                            showToast('保存失败', err.error || `服务器返回 ${r.status}`, 'error');
                         }
-                    } catch (e) {}
+                    } catch (e) {
+                        showToast('保存失败', '网络请求失败', 'error');
+                    }
                 };
 
                 const deleteKeyFlat = async (k) => {
@@ -4217,43 +4707,11 @@
                             showToast('成功', removed > 0
                                 ? `Key 已删除，并已从 ${removed} 个模型的白名单中剥离。`
                                 : 'Key 已删除并重新排序。', 'success');
+                            if (keyModal.item) closeKeyModal();
+                            closeDetail();
                             refreshData();
                         }
                     } catch (e) {}
-                };
-
-                const openKeyEditFlat = (k) => {
-                    keysEditId.value = k.id;
-                    keysEditForm.label = k.label || '';
-                    keysEditForm.is_free = !!k.is_free;
-                    keysEditForm.expires_at = k.expires_at ? String(k.expires_at).slice(0, 10) : '';
-                    keysEditForm.token = '';
-                };
-                const saveKeyEditFlat = async (k) => {
-                    try {
-                        const body = {
-                            token: (keysEditForm.token || '').trim(),
-                            label: (keysEditForm.label || '').trim(),
-                            enabled: k.enabled,
-                            is_free: !!keysEditForm.is_free,
-                            expires_at: keysEditForm.expires_at ? keysEditForm.expires_at + 'T23:59:59Z' : null
-                        };
-                        const r = await fetch(`/api/platforms/${k.platform_id}/keys?key_id=${k.id}`, {
-                            method: 'PUT',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(body)
-                        });
-                        if (r.ok) {
-                            keysEditId.value = null;
-                            showToast('成功', `Key #${k.key_index} 属性已更新`, 'success');
-                            refreshData();
-                        } else {
-                            const err = await r.json().catch(() => ({}));
-                            showToast('保存失败', err.error || `服务器返回 ${r.status}`, 'error');
-                        }
-                    } catch (e) {
-                        showToast('保存失败', '网络请求失败', 'error');
-                    }
                 };
 
                 const maskToken = (token) => {
@@ -4379,14 +4837,10 @@
                 const unreadItems = computed(() => unread.items);
                 const unreadCounts = computed(() => unread.counts);
                 const unreadPanelOpen = ref(false);
-                const helpModal = ref(false);
                 const keysList = ref([]);
                 const keyPlatformFilter = ref('');
-                // Flat key-management state for the dedicated "密钥管理" tab.
+                // Flat key-management state for the dedicated "密钥管理" tab (table layout).
                 const keysSearchQuery = ref('');
-                const keysAdd = reactive({});          // pid → {token,label,is_free,expires_at}
-                const keysEditId = ref(null);
-                const keysEditForm = reactive({ label: '', is_free: false, expires_at: '', token: '' });
 
                 const loadUnread = async () => {
                     try {
@@ -4464,8 +4918,9 @@
                             out.push({ menu: 'keys', key: 'k' + k.id, name: label, sub: k.platform_name || '' });
                     }
                     for (const r of rapis.value) {
-                        if ((r.alias || '').toLowerCase().includes(q) || (r.model || '').toLowerCase().includes(q))
-                            out.push({ menu: 'models', key: 'm' + r.id, name: r.alias, sub: r.model || '' });
+                        const name = rapiDisplayName(r);
+                        if (name.toLowerCase().includes(q) || (r.model || '').toLowerCase().includes(q))
+                            out.push({ menu: 'models', key: 'm' + r.id, name: name, sub: r.model || '' });
                     }
                     for (const l of lapis.value) {
                         if ((l.alias || '').toLowerCase().includes(q))
@@ -4524,24 +4979,9 @@
                     }
                     return list;
                 });
-                // Group the filtered key list by platform so the page renders one
-                // section per platform (incl. zero-key platforms when no text filter
-                // is active, so users can add the first key to any platform).
-                const keysByPlatform = computed(() => {
-                    const q = (keysSearchQuery.value || '').trim().toLowerCase();
-                    const plats = platforms.value.filter(p => !keyPlatformFilter.value || String(p.id) === keyPlatformFilter.value);
-                    return plats.map(p => {
-                        let keys = keysList.value.filter(k => String(k.platform_id) === String(p.id));
-                        if (q) {
-                            keys = keys.filter(k => (k.label || '').toLowerCase().includes(q)
-                                || (k.token || '').toLowerCase().includes(q)
-                                || (p.name || '').toLowerCase().includes(q));
-                        }
-                        const perm = keys.filter(k => k.failure_type === 2).length;
-                        const cool = keys.filter(k => k.failure_type === 1).length;
-                        return { platform_id: p.id, platform_name: p.name, billing_address: p.billing_address, keys, permCount: perm, coolCount: cool };
-                    }).filter(grp => !q || grp.keys.length > 0);
-                });
+                const sortedKeys = computed(() =>
+                    [...filteredKeys.value].sort((a, b) => keyRank(a) - keyRank(b))
+                );
                 const keyHealthLabel = (k) => {
                     if (k.failure_type === 2) return '🔴 永久失效';
                     if (k.failure_type === 1) return '🟡 冷却中';
@@ -4557,6 +4997,14 @@
                         else { const err = await r.json().catch(() => ({})); showToast('重置失败', err.error || `平台返回 ${r.status}`, 'error'); }
                     } catch (e) { showToast('错误', '请求失败: ' + e.message, 'error'); }
                     refreshData();
+                };
+                // 模型发现是平台级能力：从密钥行解析出所属平台后，复用平台页
+                // 的 importWizard 流程拉取并导入上游模型。导入后无白名单的模型
+                // 默认由该平台全部 Key 服务，故会出现在本行的「服务模型」列。
+                const discoverKeyModels = (k) => {
+                    const p = platforms.value.find(x => String(x.id) === String(k.platform_id));
+                    if (!p) { showToast('错误', '未找到该密钥所属平台', 'error'); return; }
+                    fetchPlatformModels(p);
                 };
                 const toggleKeyFlat = async (k) => {
                     const newEnabled = !k.enabled;
@@ -4577,14 +5025,14 @@
                     show: false, busy: false, confirmMode: false, confirmItems: [],
                     platMode: 'existing', platId: '', platForm: { name: '', base_url: '', token: '', notes: '' }, platDomainWarn: '', platTest: { running: false, status: 0, ok: false, msg: '' },
                     keyMode: 'existing', keyId: '', keyForm: { token: '', label: '', is_free: false }, keyTest: { running: false, status: 0, ok: false, msg: '' },
-                    modelMode: 'existing', modelId: '', modelForm: { alias: '', model: '', series: '', model_name: '', version: '' }, modelTest: { running: false, status: 0, ok: false, msg: '' }
+                    modelMode: 'existing', modelId: '', modelForm: { model: '', vendor: '', series: '', version: '', suffix: '', notes: '' }, modelTest: { running: false, status: 0, ok: false, msg: '' }
                 });
                 const openAddWizard = () => {
                     Object.assign(addWizard, {
                         show: true, busy: false, confirmMode: false, confirmItems: [],
                         platMode: 'existing', platId: platforms.value[0] ? String(platforms.value[0].id) : '', platForm: { name: '', base_url: '', token: '', notes: '' }, platDomainWarn: '', platTest: { running: false, status: 0, ok: false, msg: '' },
                         keyMode: 'existing', keyId: '', keyForm: { token: '', label: '', is_free: false }, keyTest: { running: false, status: 0, ok: false, msg: '' },
-                        modelMode: 'existing', modelId: '', modelForm: { alias: '', model: '', series: '', model_name: '', version: '' }, modelTest: { running: false, status: 0, ok: false, msg: '' }
+                        modelMode: 'existing', modelId: '', modelForm: { model: '', vendor: '', series: '', version: '', suffix: '', notes: '' }, modelTest: { running: false, status: 0, ok: false, msg: '' }
                     });
                 };
                 const closeAddWizard = () => { addWizard.show = false; addWizard.confirmMode = false; };
@@ -4661,7 +5109,11 @@
                     const platName = addWizard.platMode === 'new' ? (addWizard.platForm.name || addWizard.platForm.base_url) : ((platforms.value.find(x => String(x.id) === String(addWizard.platId)) || {}).name || '所选平台');
                     if (addWizard.platMode === 'new') items.push('新平台：' + (addWizard.platForm.name || addWizard.platForm.base_url));
                     if (addWizard.keyMode === 'new') items.push(`${platName}-新key：` + (addWizard.keyForm.label || maskToken(addWizard.keyForm.token) || '未命名'));
-                    if (addWizard.modelMode === 'new') items.push(`${platName}-新模型：` + (addWizard.modelForm.alias || addWizard.modelForm.model || '未命名'));
+                    if (addWizard.modelMode === 'new') {
+                        const m = addWizard.modelForm;
+                        const name = computeModelName(m.vendor, m.series, m.version, m.suffix, m.notes, m.model) || '未命名';
+                        items.push(`${platName}-新模型：` + name);
+                    }
                     return items;
                 };
                 const runWizardOverallTest = async () => {
@@ -4972,6 +5424,8 @@
                         const r = await fetch(`/api/platforms?id=${plat.id}&force=true`, { method: 'DELETE' });
                         if (r.ok) {
                             showToast('成功', '平台配置已删除', 'success');
+                            if (platformModal.item) closePlatformModal();
+                            closeDetail();
                             refreshData();
                         } else {
                             const data = await r.json();
@@ -5229,7 +5683,7 @@
                         // key_ids is a CSV string on the model; expose as a number array.
                         rapiModal.keyIDs = (item.key_ids || '').split(',').map(s => s.trim()).filter(Boolean).map(Number);
                     } else {
-                        rapiModal.form = { platform_id: platforms.value[0]?.id || '', alias: '', model: '', series: '', model_name: '', version: '' };
+                        rapiModal.form = { platform_id: platforms.value[0]?.id || '', model: '', vendor: '', series: '', version: '', suffix: '', notes: '' };
                         rapiModal.headers = [];
                         rapiModal.keyIDs = [];
                     }
@@ -5356,11 +5810,13 @@
                     const cascadeMsg = refLapis.length > 0
                         ? `\n\n⚠️ 该模型被 ${refLapis.length} 个路由引用（${refLapis.map(l => l.alias).join(', ')}），删除后将自动移除关联。`
                         : '';
-                    if (!confirm(`确定删除模型「${rapi.alias}」吗？${cascadeMsg}`)) return;
+                    if (!confirm(`确定删除模型「${rapiDisplayName(rapi)}」吗？${cascadeMsg}`)) return;
                     try {
                         const r = await fetch(`/api/rapis?id=${rapi.id}&force=true`, { method: 'DELETE' });
                         if (r.ok) {
                             showToast('成功', '模型已成功移除', 'success');
+                            if (rapiModal.item) closeRapiModal();
+                            closeDetail();
                             refreshData();
                         } else {
                             const data = await r.json();
@@ -5372,14 +5828,31 @@
                 // LAPI CONFIG CRUD
                 const openLapiModal = (item) => {
                     lapiModal.item = item;
+                    lapiModal.fromRapiId = 0;
                     if (item) {
                         lapiModal.form = { ...item };
                     } else {
-                        lapiModal.form = { alias: '', notes: '', series: '', model_name: '', version: '' };
+                        lapiModal.form = { alias: '', notes: '', vendor: '', series: '', version: '', suffix: '' };
                     }
                     lapiModal.show = true;
                 };
                 const closeLapiModal = () => { lapiModal.show = false; };
+
+                // 从模型详情新建接口：接口名默认 = 模型统一命名，命名字段一并带入；
+                // 保存后自动把该模型加入新接口的路由链。
+                const openLapiFromRapi = (rapi) => {
+                    lapiModal.item = null;
+                    lapiModal.fromRapiId = rapi.id;
+                    lapiModal.form = {
+                        alias: rapiDisplayName(rapi),
+                        notes: '',
+                        vendor: rapi.vendor || '',
+                        series: rapi.series || '',
+                        version: rapi.version || '',
+                        suffix: rapi.suffix || ''
+                    };
+                    lapiModal.show = true;
+                };
 
                 const saveLapi = async () => {
                     const method = lapiModal.item ? 'PUT' : 'POST';
@@ -5390,7 +5863,25 @@
                             body: JSON.stringify(lapiModal.form)
                         });
                         if (r.ok) {
-                            showToast('成功', '本地接口别名修改完成', 'success');
+                            // 从模型新建：把来源模型自动加入新接口的路由链
+                            if (!lapiModal.item && lapiModal.fromRapiId) {
+                                const created = await r.json().catch(() => null);
+                                if (created && created.id) {
+                                    try {
+                                        await fetch(`/api/lapis/${created.id}/rapis`, {
+                                            method: 'PUT',
+                                            headers: { 'Content-Type': 'application/json' },
+                                            body: JSON.stringify([lapiModal.fromRapiId])
+                                        });
+                                        showToast('成功', '接口已创建，模型已加入路由链', 'success');
+                                    } catch (_) {
+                                        showToast('成功', '接口已创建（自动加入路由链失败，请手动编排）', 'warning');
+                                    }
+                                }
+                            } else {
+                                showToast('成功', '本地接口别名修改完成', 'success');
+                            }
+                            lapiModal.fromRapiId = 0;
                             closeLapiModal();
                             refreshData();
                         }
@@ -5403,6 +5894,8 @@
                         const r = await fetch(`/api/lapis?id=${lapi.id}`, { method: 'DELETE' });
                         if (r.ok) {
                             showToast('成功', '接口路由节点已移除', 'success');
+                            if (lapiModal.item) closeLapiModal();
+                            closeDetail();
                             refreshData();
                         } else {
                             const data = await r.json();
@@ -5959,19 +6452,25 @@
                     logFinishFilter,
 
                     // Computes
-                    filteredPlatforms,
-                    filteredRapis,
-                    filteredLapis,
+                    filteredPlatforms, sortedPlatforms,
+                    filteredRapis, sortedRapis,
+                    filteredLapis, sortedLapis,
                     filteredLogs,
                     unselectedRapisForLapi,
                     sortedUnselectedRapis,
                     addToLapiSortedLapis,
 
+                    // Detail view (详情页)
+                    detail, openDetail, closeDetail,
+                    platformDetail, keyDetail, rapiDetail, lapiDetail,
+                    computeModelName, rapiDisplayName, lapisForRapi,
+                    rapiPlatformFilter, openPlatformModelsTab,
+
                     // Fixed top bar: unread / search / keys / add wizard
                     appVersion, unread, totalUnread, unreadItems, unreadCounts, unreadPanelOpen, unreadGrouped, markMenuRead, markAllRead, openUnreadItem, unreadDotColor, unreadTime,
                     globalSearchQuery, globalSearchCandidates, showSearchResults, searchSelection, onGlobalSearchInput, onSearchBlur, moveSearchSelection, chooseSearchResult, clearGlobalSearch, searchMenuLabel, searchMenuStyle,
-                    keysList, keysByPlatform, keysSearchQuery, keysEditId, keysEditForm, keysAdd, filteredKeys, keyPlatformFilter, loadKeys, keyHealthLabel, probeKeyFlat, toggleKeyFlat, addKeyFlat, deleteKeyFlat, openKeyEditFlat, saveKeyEditFlat, jumpToPlatform,
-                    addWizard, openAddWizard, closeAddWizard, checkPlatDomain, testWizardPlatform, testWizardKey, testWizardModel, submitAddWizard, doWizardSave, wizardHasNew, wizardKeyOptions, wizardModelOptions, helpModal,
+                    keysList, keysSearchQuery, filteredKeys, sortedKeys, keyPlatformFilter, loadKeys, keyHealthLabel, probeKeyFlat, discoverKeyModels, toggleKeyFlat, deleteKeyFlat, keyModal, openKeyModal, closeKeyModal, saveKeyModal, openKeysTab, jumpToPlatform,
+                    addWizard, openAddWizard, closeAddWizard, checkPlatDomain, testWizardPlatform, testWizardKey, testWizardModel, submitAddWizard, doWizardSave, wizardHasNew, wizardKeyOptions, wizardModelOptions,
                     
                     // Log selection
                     selectedLog,
@@ -6031,7 +6530,7 @@
                     onChainDragStart, onChainDragOver, onChainDragLeave, onChainDrop, onChainDragEnd,
                     onCardDragStart, onCardDragOver, onCardDragLeave, onCardDrop, onCardDragEnd,
                     addToLapiModal, openAddToLapiModal, closeAddToLapiModal, confirmAddToLapi,
-                    lapiModal, openLapiModal, closeLapiModal, saveLapi, deleteLapi, toggleLapi,
+                    lapiModal, openLapiModal, closeLapiModal, openLapiFromRapi, saveLapi, deleteLapi, toggleLapi,
                     
                     // Playground
                     playgroundModal, openPlayground, closePlayground, testResendRequest, sendPlaygroundRequest,
