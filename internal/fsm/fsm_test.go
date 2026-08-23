@@ -1,6 +1,7 @@
 package fsm
 
 import (
+	"sync"
 	"testing"
 	"time"
 )
@@ -142,4 +143,44 @@ func TestFirstMatchingGuardWins(t *testing.T) {
 	if !ok || to != "b" {
 		t.Fatalf("got %q ok=%v, want b", to, ok)
 	}
+}
+
+func TestConcurrentFireAndAdvance(t *testing.T) {
+	// Hammer one machine from many goroutines with Fire, Advance and readers.
+	// Run under -race: Fire/Advance must not read m.state after unlocking, and
+	// a returned state must always be one this machine actually visited.
+	m := New(State("healthy"))
+	m.Add(Transition{From: "healthy", Event: "fail", To: "cooling"})
+	m.Add(Transition{From: "cooling", Event: "recover", To: "healthy"})
+	m.Add(Transition{From: "cooling", Event: TimerExpired, To: "healthy"})
+
+	valid := map[State]bool{"healthy": true, "cooling": true}
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-done:
+					return
+				default:
+				}
+				m.SetTimer(time.Now().Add(time.Millisecond))
+				if _, ok := m.Fire("fail", nil); ok {
+					m.Fire("recover", nil)
+				}
+				if to, _ := m.Advance(time.Now().Add(2 * time.Millisecond)); !valid[to] {
+					t.Errorf("Advance returned unknown state %q", to)
+				}
+				if s := m.State(); !valid[s] {
+					t.Errorf("State returned unknown state %q", s)
+				}
+			}
+		}()
+	}
+	time.Sleep(300 * time.Millisecond)
+	close(done)
+	wg.Wait()
 }

@@ -187,6 +187,97 @@ func setupTestDB(t *testing.T) *DB {
 	return instance
 }
 
+// TestMigrateRAPIUniqueAliasPreservesColumns reproduces the upgrade regression where
+// recreating the rapi table (global UNIQUE(alias) → per-platform) silently dropped
+// sort_order (and other earlier-migration columns), breaking ORDER BY r.sort_order.
+// It builds a pre-migration rapi table that already has sort_order + data, runs the
+// recreate, and asserts sort_order and its values survive.
+func TestMigrateRAPIUniqueAliasPreservesColumns(t *testing.T) {
+	initTestCrypto(t)
+	conn, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "mig.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	instance = &DB{conn: conn}
+
+	// Pre-migration schema: global UNIQUE(alias), but with sort_order already
+	// present (migrateAddSortOrderColumns runs before this migration in Init).
+	_, err = conn.Exec(`
+		CREATE TABLE platform (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, base_url TEXT NOT NULL DEFAULT '');
+		CREATE TABLE rapi (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			alias TEXT NOT NULL UNIQUE,
+			model TEXT NOT NULL DEFAULT '',
+			notes TEXT NOT NULL DEFAULT '',
+			platform_id INTEGER NOT NULL DEFAULT 0,
+			sort_order INTEGER NOT NULL DEFAULT 0,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (platform_id) REFERENCES platform(id) ON DELETE CASCADE
+		);
+		INSERT INTO platform (name, base_url) VALUES ('p1', 'https://a'), ('p2', 'https://b');
+		INSERT INTO rapi (alias, model, platform_id, sort_order) VALUES
+			('z-model', 'm-z', 1, 30),
+			('a-model', 'm-a', 2, 10),
+			('m-model', 'm-m', 1, 20);
+	`)
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	if err := instance.migrateRAPIUniqueAliasToPerPlatform(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// sort_order must still exist and carry its values, ordered ascending.
+	rows, err := conn.Query(`SELECT alias, sort_order FROM rapi ORDER BY sort_order ASC, id ASC`)
+	if err != nil {
+		t.Fatalf("select with ORDER BY sort_order failed (column dropped?): %v", err)
+	}
+	defer rows.Close()
+	type row struct {
+		alias string
+		so    int
+	}
+	var got []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.alias, &r.so); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		got = append(got, r)
+	}
+	if len(got) != 3 {
+		t.Fatalf("row count = %d, want 3 (rows lost in migration)", len(got))
+	}
+	wantOrder := []string{"a-model", "m-model", "z-model"}
+	wantSO := []int{10, 20, 30}
+	for i := range wantOrder {
+		if got[i].alias != wantOrder[i] || got[i].so != wantSO[i] {
+			t.Fatalf("row %d = %+v, want alias=%s sort_order=%d", i, got[i], wantOrder[i], wantSO[i])
+		}
+	}
+
+	// Uniqueness is now per-platform: the same alias under two platforms must succeed.
+	if _, err := conn.Exec(`INSERT INTO rapi (alias, model, platform_id) VALUES ('z-model', 'm-z2', 2)`); err != nil {
+		t.Fatalf("per-platform duplicate alias rejected (constraint not migrated?): %v", err)
+	}
+	// But still unique within one platform.
+	if _, err := conn.Exec(`INSERT INTO rapi (alias, model, platform_id) VALUES ('z-model', 'm-z3', 1)`); err == nil {
+		t.Fatal("duplicate alias within one platform should be rejected")
+	}
+
+	// Idempotent: a second run is a no-op and keeps the data.
+	if err := instance.migrateRAPIUniqueAliasToPerPlatform(); err != nil {
+		t.Fatalf("second migrate: %v", err)
+	}
+	var n int
+	if err := conn.QueryRow(`SELECT COUNT(*) FROM rapi`).Scan(&n); err != nil || n != 4 {
+		t.Fatalf("after second run count = %d err=%v, want 4", n, err)
+	}
+}
+
 func TestPlatformCRUD(t *testing.T) {
 	db := setupTestDB(t)
 

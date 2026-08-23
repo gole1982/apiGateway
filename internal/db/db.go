@@ -386,7 +386,7 @@ func (db *DB) migrateOldRAPISchema() error {
 	}
 
 	// Drop old columns (SQLite doesn't support DROP COLUMN before 3.35, so recreate table)
-	_, err = tx.Exec(`
+	if _, err = tx.Exec(`
 		CREATE TABLE rapi_new (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			alias TEXT NOT NULL UNIQUE,
@@ -396,17 +396,69 @@ func (db *DB) migrateOldRAPISchema() error {
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (platform_id) REFERENCES platform(id) ON DELETE CASCADE
 		);
-		INSERT INTO rapi_new (id, alias, model, platform_id, created_at, updated_at)
-			SELECT id, alias, model, platform_id, created_at, updated_at FROM rapi;
+	`); err != nil {
+		return err
+	}
+	// Copy every column the new table keeps, resolved dynamically so no old
+	// column is silently dropped (see migrateRAPIUniqueAliasToPerPlatform).
+	keep := []string{"id", "alias", "model", "platform_id", "created_at", "updated_at"}
+	copySQL, err := buildCopyCommonColumns(tx, "rapi", "rapi_new", keep)
+	if err != nil {
+		return err
+	}
+	if _, err = tx.Exec(copySQL); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`
 		DROP TABLE rapi;
 		ALTER TABLE rapi_new RENAME TO rapi;
 		CREATE INDEX IF NOT EXISTS idx_rapi_platform ON rapi(platform_id);
-	`)
-	if err != nil {
+	`); err != nil {
 		return err
 	}
 
 	return tx.Commit()
+}
+
+// buildCopyCommonColumns builds "INSERT INTO newTbl (cols...) SELECT cols... FROM oldTbl"
+// copying each keep column that exists in oldTbl. The intersection is read live from
+// PRAGMA table_info so a column added by an earlier migration is never silently dropped
+// when a table is recreated. keep must list every column of newTbl; a keep column absent
+// from oldTbl is skipped (its new-table default applies).
+func buildCopyCommonColumns(tx *sql.Tx, oldTbl, newTbl string, keep []string) (string, error) {
+	oldCols, err := tableColumnsTx(tx, oldTbl)
+	if err != nil {
+		return "", err
+	}
+	var cols []string
+	for _, c := range keep {
+		if oldCols[c] {
+			cols = append(cols, c)
+		}
+	}
+	if len(cols) == 0 {
+		return "", fmt.Errorf("no common columns between %s and %s", oldTbl, newTbl)
+	}
+	list := strings.Join(cols, ", ")
+	return fmt.Sprintf("INSERT INTO %s (%s) SELECT %s FROM %s", newTbl, list, list, oldTbl), nil
+}
+
+// tableColumnsTx returns the set of column names of tbl within tx.
+func tableColumnsTx(tx *sql.Tx, tbl string) (map[string]bool, error) {
+	rows, err := tx.Query(`SELECT name FROM pragma_table_info(?)`, tbl)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	cols := make(map[string]bool)
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		cols[name] = true
+	}
+	return cols, rows.Err()
 }
 
 func (db *DB) migrateAddStatusColumns() {
@@ -2652,13 +2704,20 @@ func (db *DB) migrateRAPIUniqueAliasToPerPlatform() error {
 	defer tx.Rollback()
 
 	// Recreate the rapi table without the global UNIQUE(alias) constraint,
-	// preserving all existing data.
-	_, err = tx.Exec(`
+	// preserving all existing data. The schema must include every column any
+	// earlier migration may have added (notably sort_order, added before this
+	// migration runs) or that data is silently dropped on upgrade.
+	if _, err = tx.Exec(`
 		CREATE TABLE rapi_new (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			alias TEXT NOT NULL,
 			model TEXT NOT NULL DEFAULT '',
 			notes TEXT NOT NULL DEFAULT '',
+			vendor TEXT NOT NULL DEFAULT '',
+			series TEXT NOT NULL DEFAULT '',
+			model_name TEXT NOT NULL DEFAULT '',
+			version TEXT NOT NULL DEFAULT '',
+			suffix TEXT NOT NULL DEFAULT '',
 			platform_id INTEGER NOT NULL DEFAULT 0,
 			enabled INTEGER NOT NULL DEFAULT 1,
 			available INTEGER NOT NULL DEFAULT 1,
@@ -2674,21 +2733,39 @@ func (db *DB) migrateRAPIUniqueAliasToPerPlatform() error {
 			time_period_rules TEXT DEFAULT '',
 			supported_formats TEXT NOT NULL DEFAULT '["openai"]',
 			custom_headers TEXT NOT NULL DEFAULT '',
+			key_ids TEXT NOT NULL DEFAULT '',
+			source TEXT NOT NULL DEFAULT 'manual',
+			sort_order INTEGER NOT NULL DEFAULT 0,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (platform_id) REFERENCES platform(id) ON DELETE CASCADE,
 			UNIQUE(platform_id, alias)
 		);
-		INSERT INTO rapi_new SELECT id, alias, model, notes, platform_id, enabled, available, unavailable_reason,
-			base_cost, high_cost, rpm_limit, rph_limit, rpd_limit, tpm_limit, tph_limit, tpd_limit,
-			time_period_rules, supported_formats, custom_headers, created_at, updated_at
-		FROM rapi;
+	`); err != nil {
+		return err
+	}
+	// Copy every column the new table keeps, resolved dynamically so a column
+	// present in the old table is never left behind.
+	keep := []string{
+		"id", "alias", "model", "notes", "vendor", "series", "model_name", "version", "suffix",
+		"platform_id", "enabled", "available", "unavailable_reason",
+		"base_cost", "high_cost", "rpm_limit", "rph_limit", "rpd_limit", "tpm_limit", "tph_limit", "tpd_limit",
+		"time_period_rules", "supported_formats", "custom_headers", "key_ids", "source", "sort_order",
+		"created_at", "updated_at",
+	}
+	copySQL, err := buildCopyCommonColumns(tx, "rapi", "rapi_new", keep)
+	if err != nil {
+		return err
+	}
+	if _, err = tx.Exec(copySQL); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`
 		DROP TABLE rapi;
 		ALTER TABLE rapi_new RENAME TO rapi;
 		CREATE INDEX IF NOT EXISTS idx_rapi_platform ON rapi(platform_id);
 		CREATE UNIQUE INDEX idx_rapi_platform_alias ON rapi(platform_id, alias);
-	`)
-	if err != nil {
+	`); err != nil {
 		return err
 	}
 
@@ -2968,4 +3045,3 @@ func (db *DB) ReorderKeysByGlobalOrder(ids []int64) error {
 }
 
 // ============ Change Log ============
-

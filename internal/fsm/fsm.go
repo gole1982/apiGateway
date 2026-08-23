@@ -121,8 +121,9 @@ func (m *Machine) Fire(event Event, payload any) (State, bool) {
 	m.mu.Lock()
 	to, effect, ok := m.matchLocked(event, payload)
 	if !ok {
+		cur := m.state
 		m.mu.Unlock()
-		return m.state, false
+		return cur, false
 	}
 	m.state = to
 	m.enteredAt = time.Now()
@@ -130,7 +131,9 @@ func (m *Machine) Fire(event Event, payload any) (State, bool) {
 	if effect != nil {
 		effect(&Context{Machine: m, Event: event, Payload: payload})
 	}
-	return m.state, true
+	// Return the captured destination, not m.state: the lock is released and a
+	// concurrent Fire may already have moved the machine on.
+	return to, true
 }
 
 // Advance fires TimerExpired when the machine's timer has elapsed. Returns the
@@ -139,14 +142,16 @@ func (m *Machine) Fire(event Event, payload any) (State, bool) {
 func (m *Machine) Advance(now time.Time) (State, bool) {
 	m.mu.Lock()
 	if m.wakeAt.IsZero() || now.Before(m.wakeAt) {
+		cur := m.state
 		m.mu.Unlock()
-		return m.state, false
+		return cur, false
 	}
 	m.wakeAt = time.Time{}
 	to, effect, ok := m.matchLocked(TimerExpired, nil)
 	if !ok {
+		cur := m.state
 		m.mu.Unlock()
-		return m.state, false
+		return cur, false
 	}
 	m.state = to
 	m.enteredAt = time.Now()
@@ -154,7 +159,8 @@ func (m *Machine) Advance(now time.Time) (State, bool) {
 	if effect != nil {
 		effect(&Context{Machine: m, Event: TimerExpired})
 	}
-	return m.state, true
+	// Return the captured destination, not m.state: see Fire.
+	return to, true
 }
 
 // matchLocked finds the first transition from the current state on event whose
