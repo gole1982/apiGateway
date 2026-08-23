@@ -1103,143 +1103,12 @@
             outline-offset: 2px;
         }
 
-        /* OBSERVABILITY HUB LAYOUT */
-        .logs-split-container {
-            display: grid;
-            grid-template-columns: 1fr 1.2fr;
-            gap: 30px;
-            min-height: calc(100vh - 160px);
-        }
-        .logs-list-pane {
-            display: flex;
-            flex-direction: column;
-            gap: 16px;
-        }
-        .logs-list-header {
-            display: flex;
-            gap: 12px;
-            flex-wrap: wrap;
-        }
         .filter-input {
             flex-grow: 1;
             min-width: 150px;
         }
-        .filter-select {
-            width: 130px;
-        }
-        .logs-list-items {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            overflow-y: auto;
-            max-height: 70vh;
-            padding-right: 8px;
-        }
-        .log-row-card {
-            background: rgba(13, 17, 39, 0.45);
-            border: 1px solid rgba(255, 255, 255, 0.04);
-            border-radius: 12px;
-            padding: 14px 18px;
-            display: grid;
-            grid-template-columns: auto 1fr auto;
-            align-items: center;
-            gap: 16px;
-            cursor: pointer;
-            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-        }
-        .log-row-card:hover {
-            background: rgba(22, 28, 64, 0.5);
-            border-color: rgba(56, 189, 248, 0.15);
-            transform: translateX(2px);
-        }
-        .log-row-card.active {
-            background: rgba(56, 189, 248, 0.05);
-            border-color: var(--border-glow);
-            box-shadow: 0 0 15px rgba(56, 189, 248, 0.03);
-        }
-        .log-row-status {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            width: 38px;
-            height: 38px;
-            border-radius: 10px;
-            font-weight: 700;
-            font-size: 0.85rem;
-            font-family: var(--font-mono);
-        }
-        .log-row-status.success {
-            background: rgba(16, 185, 129, 0.12);
-            color: var(--color-success);
-        }
-        .log-row-status.warn {
-            background: rgba(245, 158, 11, 0.12);
-            color: var(--color-warning);
-        }
-        .log-row-status.danger {
-            background: rgba(244, 63, 94, 0.12);
-            color: var(--color-danger);
-        }
-        .log-row-meta {
-            display: flex;
-            flex-direction: column;
-            gap: 3px;
-        }
-        .log-row-title {
-            font-weight: 600;
-            font-size: 0.95rem;
-            color: #fff;
-        }
-        .log-row-sub {
-            font-size: 0.8rem;
-            color: var(--text-secondary);
-            display: flex;
-            gap: 8px;
-            align-items: center;
-        }
-        .log-row-latency {
-            text-align: right;
-            font-family: var(--font-mono);
-            font-size: 0.88rem;
-            color: var(--text-secondary);
-            display: flex;
-            flex-direction: column;
-            gap: 2px;
-        }
 
         /* DETAIL PANEL OBSERVABILITY EXTREME */
-        .logs-detail-pane {
-            display: flex;
-            flex-direction: column;
-            gap: 20px;
-            position: sticky;
-            top: 20px;
-            max-height: calc(100vh - 120px);
-        }
-        .detail-placeholder {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-muted);
-            height: 400px;
-            gap: 16px;
-            border: 2px dashed rgba(255, 255, 255, 0.04);
-            border-radius: 16px;
-        }
-        .detail-placeholder svg {
-            width: 48px;
-            height: 48px;
-            opacity: 0.3;
-            fill: currentColor;
-        }
-        .detail-header {
-            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-            padding-bottom: 18px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
         .detail-meta-id {
             font-family: var(--font-mono);
             font-size: 0.82rem;
@@ -1248,44 +1117,7 @@
             padding: 4px 10px;
             border-radius: 6px;
         }
-        .detail-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 16px;
-            background: rgba(0, 0, 0, 0.15);
-            padding: 16px;
-            border-radius: 12px;
-            border: 1px solid rgba(255, 255, 255, 0.02);
-        }
-        .detail-grid-item {
-            display: flex;
-            flex-direction: column;
-            gap: 2px;
-        }
-        .detail-grid-label {
-            font-size: 0.75rem;
-            color: var(--text-muted);
-        }
-        .detail-grid-val {
-            font-size: 0.95rem;
-            font-weight: 600;
-            font-family: var(--font-mono);
-        }
 
-        /* ROUTING FAILOVER TIMELINE */
-        .timeline-box {
-            display: flex;
-            flex-direction: column;
-            gap: 16px;
-            margin-top: 10px;
-        }
-        .timeline-section-title {
-            font-size: 0.9rem;
-            font-weight: 600;
-            color: var(--text-secondary);
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
         .timeline {
             position: relative;
             padding-left: 28px;
@@ -1534,6 +1366,24 @@
         .u-muted-md { font-size: 0.78rem; color: var(--text-muted); }
         .u-muted-lg { font-size: 0.75rem; color: var(--text-muted); }
         .u-flex-gap8 { display: flex; gap: 8px; flex-wrap: wrap; }
+
+        /* KPI strip: 仪表盘首屏核心指标卡 */
+        .kpi-card { padding: 14px 18px; cursor: pointer; transition: transform 0.15s, border-color 0.15s; }
+        .kpi-card:hover { transform: translateY(-1px); border-color: rgba(56,189,248,0.35); }
+        .kpi-label { font-size: 0.72rem; color: var(--text-muted); margin-bottom: 4px; letter-spacing: 0.02em; }
+        .kpi-value { font-size: 1.45rem; font-weight: 700; font-family: var(--font-mono); line-height: 1.2; }
+        .kpi-sub { font-size: 0.72rem; color: var(--text-muted); margin-top: 4px; }
+        @media (max-width: 1100px) {
+            .kpi-card { grid-column: span 1; }
+        }
+
+        /* 全绿健康状态：单行细条，不占首屏 */
+        .health-ok-strip {
+            display: flex; align-items: center; gap: 8px;
+            padding: 8px 14px; margin-bottom: 16px;
+            border-radius: 8px; font-size: 0.8rem; color: var(--color-success);
+            background: rgba(52,211,153,0.06); border: 1px solid rgba(52,211,153,0.18);
+        }
     </style>
 </head>
 <body>
@@ -1674,6 +1524,35 @@
             <!-- 1. DASHBOARD OVERVIEW -->
             <div v-if="activeTab === 'dashboard'" class="tab-pane">
 
+                <!-- ============ LAYER 0: KPI STRIP — 用户最关心的核心指标 ============ -->
+                <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:16px;">
+                    <div class="glass-card kpi-card" @click="setTab('logs')" title="查看请求日志">
+                        <div class="kpi-label">总请求数</div>
+                        <div class="kpi-value">{{ fmtNum(dashHealth.total_requests) }}</div>
+                        <div class="kpi-sub">{{ dashHealth.lapi_count }} 接口 · {{ dashHealth.rapi_count }} 模型 · {{ dashHealth.platform_count }} 平台</div>
+                    </div>
+                    <div class="glass-card kpi-card" @click="setTab('logs')" title="查看请求日志">
+                        <div class="kpi-label">整体成功率</div>
+                        <div class="kpi-value" :style="{ color: dashSuccessColor }">{{ dashSuccessText }}</div>
+                        <div class="kpi-sub">{{ fmtNum(dashHealth.total_success) }} 成功</div>
+                    </div>
+                    <div class="glass-card kpi-card">
+                        <div class="kpi-label">平均延迟</div>
+                        <div class="kpi-value" :style="{ color: dashLatencyColor }">{{ dashHealth.avg_latency_ms > 0 ? Math.round(dashHealth.avg_latency_ms) + ' ms' : '—' }}</div>
+                        <div class="kpi-sub">全部模型均值</div>
+                    </div>
+                    <div class="glass-card kpi-card" @click="goLogsWithStatus('429')" title="查看 429 限流日志">
+                        <div class="kpi-label">429 限流</div>
+                        <div class="kpi-value" :style="{ color: dashHealth.fail_429 > 0 ? 'var(--color-warning)' : 'var(--text-muted)' }">{{ dashHealth.fail_429 || '—' }}</div>
+                        <div class="kpi-sub">{{ dashHealth.fail_401 > 0 ? dashHealth.fail_401 + ' 次 401' : '无 401' }}</div>
+                    </div>
+                    <div class="glass-card kpi-card" @click="goLogsWithStatus('500')" title="查看 5xx 错误日志">
+                        <div class="kpi-label">5xx 错误</div>
+                        <div class="kpi-value" :style="{ color: dashHealth.fail_500 > 0 ? 'var(--color-danger)' : 'var(--text-muted)' }">{{ dashHealth.fail_500 || '—' }}</div>
+                        <div class="kpi-sub" :style="{ color: issueModels.length > 0 ? 'var(--color-warning)' : '' }">{{ issueModels.length > 0 ? issueModels.length + ' 个模型待处理' : '模型全部正常' }}</div>
+                    </div>
+                </div>
+
                 <!-- ============ LAYER 1: SYSTEM HEALTH ============ -->
                 <!-- Alert banners: critical insights + cooling items -->
                 <div v-if="healthAlerts.length > 0" style="display:flex;flex-direction:column;gap:8px;margin-bottom:20px;">
@@ -1690,10 +1569,17 @@
                     </div>
                 </div>
 
-                <!-- Health row: Cooling + Error breakdown -->
-                <div v-show="!insightFilter || insightFilter === 'cooling' || insightFilter === 'error'" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;">
+                <!-- 全绿时只显示一行细条，不占首屏空间 -->
+                <div v-if="coolingTree.length === 0 && insightData.health.error_summary.length === 0"
+                     class="health-ok-strip">
+                    <svg style="width:14px;height:14px;flex-shrink:0;" viewBox="0 0 24 24" fill="none" stroke="var(--color-success)" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                    全部资源在线 · 无错误记录
+                </div>
+
+                <!-- Health row: Cooling + Error breakdown（仅在有异常时渲染；单卡自动占满整行） -->
+                <div v-else-if="!insightFilter || insightFilter === 'cooling' || insightFilter === 'error'" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(400px,1fr));gap:16px;margin-bottom:20px;">
                     <!-- Cooling resources: hierarchical 平台 → 平台-key → 平台-key-模型 -->
-                    <div v-show="!insightFilter || insightFilter === 'cooling'" class="glass-card" style="padding:18px;">
+                    <div v-show="coolingTree.length > 0 && (!insightFilter || insightFilter === 'cooling')" class="glass-card" style="padding:18px;">
                         <div class="card-header-row u-mb12">
                             <span class="card-title">
                                 <svg style="width:15px;height:15px;" viewBox="0 0 24 24" fill="none" stroke="var(--color-warning)" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
@@ -1766,7 +1652,7 @@
                     </div>
 
                     <!-- Error breakdown -->
-                    <div v-show="!insightFilter || insightFilter === 'error'" class="glass-card" style="padding:18px;">
+                    <div v-show="insightData.health.error_summary.length > 0 && (!insightFilter || insightFilter === 'error')" class="glass-card" style="padding:18px;">
                         <div class="card-header-row u-mb12">
                             <span class="card-title">
                                 <svg style="width:15px;height:15px;" viewBox="0 0 24 24" fill="none" stroke="var(--color-danger)" stroke-width="2"><polygon points="12 2 22 22 2 22"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
@@ -2779,134 +2665,147 @@
 
             <!-- 5. OBSERVABILITY HUB tab -->
             <div v-if="activeTab === 'logs'" class="tab-pane">
-                <div class="logs-split-container">
-                    <!-- LEFT PANE: Filter & List -->
-                    <div class="logs-list-pane">
-                        <div class="logs-list-header">
-                            <div class="search-container" style="flex-grow:1;max-width:none;">
-                                <svg class="search-icon-svg" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
-                                <input type="text" class="form-control" placeholder="模糊过滤请求ID、客户端IP、目标模型、状态码或报错..." v-model="logSearchQuery">
-                            </div>
-                            <select class="form-control filter-select" v-model="logStatusFilter">
-                                <option value="">全部状态</option>
-                                <option value="200">2xx 成功</option>
-                                <option value="429">429 限流</option>
-                                <option value="401">401 未认证</option>
-                                <option value="500">5xx 平台错</option>
-                            </select>
-                            <select class="form-control filter-select" v-model="logFinishFilter">
-                                <option value="">全部结束原因</option>
-                                <option value="stop">stop 正常结束</option>
-                                <option value="length">length 长度截断</option>
-                                <option value="content_filter">content_filter 内容过滤</option>
-                            </select>
-                            <select class="form-control filter-select" v-model="logLapiFilter">
-                                <option value="">全部接口</option>
-                                <option v-for="l in lapis" :value="l.alias">{{ l.alias }}</option>
-                            </select>
-                            <button class="btn btn-secondary" style="padding:10px;" @click="clearLogs" title="清空数据库全部日志记录">🗑️ 清理</button>
-                            <button class="btn btn-primary" style="padding:10px;" @click="openPlayground">⚡ Playground</button>
-                        </div>
-
-                        <div class="logs-list-items">
-                            <div v-if="filteredLogs.length === 0" style="text-align:center;color:var(--text-muted);padding:50px 0;">
-                                未检索到符合筛选条件的请求记录。
-                            </div>
-                            <div v-for="log in filteredLogs" :key="log.id" class="log-row-card" :class="{ active: selectedLog && selectedLog.id === log.id }" @click="selectLog(log)">
-                                <div class="log-row-status" :class="getStatusClass(log.response_status)">
-                                    {{ log.response_status > 0 ? log.response_status : '—' }}
-                                </div>
-                                <div class="log-row-meta">
-                                    <span class="log-row-title">{{ log.lapi_alias || '未匹配接口' }}</span>
-                                    <div class="log-row-sub">
-                                        <span>IP: {{ log.client_ip }}</span>
-                                        <span>•</span>
-                                        <span>{{ formatTime(log.timestamp) }}</span>
-                                        <template v-if="log.finish_reason && log.finish_reason !== 'stop'">
-                                            <span>•</span>
-                                            <span :style="log.finish_reason === 'length' ? 'color:var(--color-warning,#f59e0b);font-size:0.72rem;' : 'color:var(--color-danger);font-size:0.72rem;'">
-                                                ⚑ {{ log.finish_reason }}
-                                            </span>
-                                        </template>
-                                        <template v-if="log.error_message">
-                                            <span>•</span>
-                                            <span style="color:var(--color-danger);font-size:0.72rem;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" :title="log.error_message">⚠ {{ log.error_message }}</span>
-                                        </template>
-                                    </div>
-                                </div>
-                                <div class="log-row-latency">
-                                    <span style="color:#fff;font-weight:600;">{{ log.latency_ms }} ms</span>
-                                    <span style="font-size:0.75rem;color:var(--text-muted)">{{ log.tokens_used }} Toks</span>
-                                </div>
-                            </div>
+                <!-- 详情页：行点击后整页展示（与其他 tab 的详情页同构） -->
+                <template v-if="selectedLogDetail">
+                    <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;flex-wrap:wrap;">
+                        <button class="btn btn-secondary btn-sm" @click="closeLogDetail">← 返回列表</button>
+                        <span style="font-size:1.1rem;font-weight:700;color:var(--color-primary);">{{ selectedLogDetail.lapi_alias || '未匹配接口' }}</span>
+                        <span class="badge-status" :class="getStatusClass(selectedLogDetail.response_status) === 'success' ? 'active' : 'inactive'"
+                              :style="getStatusClass(selectedLogDetail.response_status) !== 'success' ? 'color:var(--color-danger);background:rgba(244,63,94,0.08);border-color:rgba(244,63,94,0.2);' : ''">
+                            {{ selectedLogDetail.response_status > 0 ? selectedLogDetail.response_status : '—' }}
+                        </span>
+                        <span class="detail-meta-id">请求 ID: {{ selectedLogDetail.id }}</span>
+                        <span class="u-flex1"></span>
+                        <div class="u-flex-gap8">
+                            <button class="btn btn-secondary btn-sm" @click="testResendRequest(selectedLogDetail)">直接重试</button>
                         </div>
                     </div>
 
-                    <!-- RIGHT PANE: Observability Failover Trace Timeline -->
-                    <div class="logs-detail-pane glass-card">
-                        <div v-if="!selectedLogDetail" class="detail-placeholder">
-                            <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
-                            <span>请在左侧列表中点击具体日志以加载详细路由生命周期链路。</span>
-                        </div>
-                        <div v-else style="display:flex;flex-direction:column;gap:18px;overflow-y:auto;padding-right:4px;">
-                            <div class="detail-header">
-                                <div>
-                                    <h2 style="font-size:1.15rem;color:#fff;">接口 {{ selectedLogDetail.lapi_alias }} 的转发 Trace 链路</h2>
-                                    <span class="detail-meta-id">请求 ID: {{ selectedLogDetail.id }}</span>
-                                </div>
-                                <button class="btn btn-secondary btn-sm" @click="testResendRequest(selectedLogDetail)">直接重试</button>
-                            </div>
-
-                            <div class="detail-grid">
-                                <div class="detail-grid-item">
-                                    <span class="detail-grid-label">客户端 Host IP</span>
-                                    <span class="detail-grid-val">{{ selectedLogDetail.client_ip }}</span>
-                                </div>
-                                <div class="detail-grid-item">
-                                    <span class="detail-grid-label">网关总处理延迟</span>
-                                    <span class="detail-grid-val" style="color:var(--color-primary);">{{ selectedLogDetail.latency_ms }} ms</span>
-                                </div>
-                                <div class="detail-grid-item">
-                                    <span class="detail-grid-label">消耗 Token 数量</span>
-                                    <span class="detail-grid-val" style="color:var(--color-secondary);">{{ selectedLogDetail.tokens_used }}</span>
-                                </div>
-                                <div class="detail-grid-item">
-                                    <span class="detail-grid-label">响应结束原因</span>
-                                    <span class="detail-grid-val" :style="selectedLogDetail.finish_reason === 'length' ? 'color:var(--color-warning,#f59e0b)' : selectedLogDetail.finish_reason === 'content_filter' ? 'color:var(--color-danger)' : ''">
-                                        {{ selectedLogDetail.finish_reason || '—' }}
-                                    </span>
-                                </div>
-                                <div class="detail-grid-item">
-                                    <span class="detail-grid-label">客户端 max_tokens</span>
-                                    <span class="detail-grid-val" :style="selectedLogDetail.req_max_tokens > 0 && selectedLogDetail.req_max_tokens < 1000 ? 'color:var(--color-warning,#f59e0b)' : ''">
-                                        {{ selectedLogDetail.req_max_tokens > 0 ? selectedLogDetail.req_max_tokens : '未设置' }}
-                                    </span>
-                                </div>
-                            </div>
-
-                            <div class="timeline-box">
-                                <span class="timeline-section-title">故障转移及路由转发时序追踪 (Trace Timeline)</span>
-                                <div class="timeline">
-                                    <!-- Timeline items dynamically generated from log.Events -->
-                                    <div v-for="(evt, idx) in selectedLogDetail.events" :key="idx" class="timeline-item" :class="getEventNodeClass(evt)">
-                                        <div class="timeline-icon"></div>
-                                        <div class="timeline-meta">
-                                            <span class="timeline-title">{{ formatEventTitle(evt.event_type) }}</span>
-                                            <span class="timeline-time">{{ formatTime(evt.timestamp) }}</span>
-                                        </div>
-                                        <div class="timeline-content-card">
-                                            <div class="timeline-text">{{ formatEventDescription(evt) }}</div>
-                                            <button v-if="hasEventPayload(evt)" class="timeline-payload-trigger" @click="togglePayload(idx)">
-                                                {{ activePayloadIdx === idx ? '收起 Payload 细节' : '展开 Payload / Headers' }}
-                                            </button>
-                                            <pre v-if="activePayloadIdx === idx && hasEventPayload(evt)" class="payload-pre">{{ formatEventPayload(evt) }}</pre>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
+                    <div class="glass-card" style="padding:18px;margin-bottom:16px;">
+                        <div class="card-header-row u-mb12"><span class="card-title">基本信息</span></div>
+                        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px 28px;font-size:0.85rem;">
+                            <div><div class="u-muted-sm u-mb3">客户端 Host IP</div>
+                                <div class="u-primary">{{ selectedLogDetail.client_ip }}</div></div>
+                            <div><div class="u-muted-sm u-mb3">网关总处理延迟</div>
+                                <div style="color:var(--color-primary);font-family:var(--font-mono);">{{ selectedLogDetail.latency_ms }} ms</div></div>
+                            <div><div class="u-muted-sm u-mb3">消耗 Token 数量</div>
+                                <div style="color:var(--color-secondary);font-family:var(--font-mono);">{{ selectedLogDetail.tokens_used }}</div></div>
+                            <div><div class="u-muted-sm u-mb3">响应结束原因</div>
+                                <div :style="selectedLogDetail.finish_reason === 'length' ? 'color:var(--color-warning)' : selectedLogDetail.finish_reason === 'content_filter' ? 'color:var(--color-danger)' : 'color:var(--text-primary);'">
+                                    {{ selectedLogDetail.finish_reason || '—' }}</div></div>
+                            <div><div class="u-muted-sm u-mb3">客户端 max_tokens</div>
+                                <div :style="selectedLogDetail.req_max_tokens > 0 && selectedLogDetail.req_max_tokens < 1000 ? 'color:var(--color-warning)' : 'color:var(--text-primary);'">
+                                    {{ selectedLogDetail.req_max_tokens > 0 ? selectedLogDetail.req_max_tokens : '未设置' }}</div></div>
+                            <div><div class="u-muted-sm u-mb3">发生时间</div>
+                                <div class="u-primary">{{ formatTime(selectedLogDetail.timestamp) }}</div></div>
                         </div>
                     </div>
-                </div>
+
+                    <!-- 请求 / 响应 JSON（充分利用结构化日志） -->
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+                        <div class="glass-card" style="padding:18px;">
+                            <div class="card-header-row u-mb12">
+                                <span class="card-title">请求报文</span>
+                                <button class="btn btn-secondary btn-sm" @click="logBodyShow.req = !logBodyShow.req">{{ logBodyShow.req ? '收起' : '展开' }}</button>
+                            </div>
+                            <pre v-if="logBodyShow.req" class="payload-pre" style="max-height:320px;">{{ prettyJSON(selectedLogDetail.request_body) }}</pre>
+                            <div v-else class="u-muted" style="font-size:0.82rem;">点击"展开"查看客户端原始请求 JSON</div>
+                        </div>
+                        <div class="glass-card" style="padding:18px;">
+                            <div class="card-header-row u-mb12">
+                                <span class="card-title">响应报文</span>
+                                <button class="btn btn-secondary btn-sm" @click="logBodyShow.resp = !logBodyShow.resp">{{ logBodyShow.resp ? '收起' : '展开' }}</button>
+                            </div>
+                            <pre v-if="logBodyShow.resp" class="payload-pre" style="max-height:320px;">{{ prettyJSON(selectedLogDetail.response_body) }}</pre>
+                            <div v-else class="u-muted" style="font-size:0.82rem;">点击"展开"查看上游返回 JSON</div>
+                        </div>
+                    </div>
+
+                    <div class="glass-card" style="padding:18px;">
+                        <div class="card-header-row u-mb12"><span class="card-title">故障转移及路由转发时序追踪 (Trace Timeline)</span></div>
+                        <div class="timeline">
+                            <div v-for="(evt, idx) in selectedLogDetail.events" :key="idx" class="timeline-item" :class="getEventNodeClass(evt)">
+                                <div class="timeline-icon"></div>
+                                <div class="timeline-meta">
+                                    <span class="timeline-title">{{ formatEventTitle(evt.event_type) }}</span>
+                                    <span class="timeline-time">{{ formatTime(evt.timestamp) }}</span>
+                                </div>
+                                <div class="timeline-content-card">
+                                    <div class="timeline-text">{{ formatEventDescription(evt) }}</div>
+                                    <button v-if="hasEventPayload(evt)" class="timeline-payload-trigger" @click="togglePayload(idx)">
+                                        {{ activePayloadIdx === idx ? '收起 Payload 细节' : '展开 Payload / Headers' }}
+                                    </button>
+                                    <pre v-if="activePayloadIdx === idx && hasEventPayload(evt)" class="payload-pre">{{ formatEventPayload(evt) }}</pre>
+                                </div>
+                            </div>
+                            <div v-if="!selectedLogDetail.events || selectedLogDetail.events.length === 0" class="u-muted" style="font-size:0.84rem;padding:12px 0;">本次请求无 Trace 事件记录。</div>
+                        </div>
+                    </div>
+                </template>
+
+                <!-- 汇总表视图：与其他 tab 同构（搜索左 / 主操作右 / 表格在下） -->
+                <template v-else>
+                    <div style="margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+                        <div class="search-container" style="flex-grow:1;max-width:520px;">
+                            <svg class="search-icon-svg" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+                            <input type="text" class="form-control" placeholder="模糊过滤请求ID、客户端IP、接口、模型、状态码或报错..." v-model="logSearchQuery">
+                        </div>
+                        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                            <span class="chip" :class="{ active: logStatusFilter === '' }" @click="logStatusFilter = ''">全部</span>
+                            <span class="chip" :class="{ active: logStatusFilter === '200', success: logStatusFilter === '200' }" @click="logStatusFilter = logStatusFilter === '200' ? '' : '200'">2xx</span>
+                            <span class="chip" :class="{ active: logStatusFilter === '429', warning: logStatusFilter === '429' }" @click="logStatusFilter = logStatusFilter === '429' ? '' : '429'">429</span>
+                            <span class="chip" :class="{ active: logStatusFilter === '401', warning: logStatusFilter === '401' }" @click="logStatusFilter = logStatusFilter === '401' ? '' : '401'">401</span>
+                            <span class="chip" :class="{ active: logStatusFilter === '500', danger: logStatusFilter === '500' }" @click="logStatusFilter = logStatusFilter === '500' ? '' : '500'">5xx</span>
+                            <button class="btn btn-secondary" @click="clearLogs" title="清空数据库全部日志记录">🗑️ 清理</button>
+                            <button class="btn btn-primary" @click="openPlayground">⚡ Playground</button>
+                        </div>
+                    </div>
+
+                    <div class="table-responsive">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>时间</th>
+                                    <th>状态</th>
+                                    <th>接口</th>
+                                    <th>选中模型</th>
+                                    <th>客户端 IP</th>
+                                    <th class="u-tr">延迟</th>
+                                    <th class="u-tr">Tokens</th>
+                                    <th>结束原因</th>
+                                    <th>报错</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-if="filteredLogs.length === 0">
+                                    <td colspan="9" style="text-align:center;color:var(--text-muted);padding:32px;">未检索到符合筛选条件的请求记录。</td>
+                                </tr>
+                                <tr v-for="log in filteredLogs" :key="log.id" class="u-pointer" @click="selectLog(log)">
+                                    <td style="font-size:0.8rem;color:var(--text-muted);white-space:nowrap;">{{ formatTime(log.timestamp) }}</td>
+                                    <td>
+                                        <span class="badge-status" :class="getStatusClass(log.response_status) === 'success' ? 'active' : 'inactive'"
+                                              :style="getStatusClass(log.response_status) === 'warn' ? 'color:var(--color-warning);background:rgba(245,158,11,0.08);border-color:rgba(245,158,11,0.2);' : getStatusClass(log.response_status) === 'danger' ? 'color:var(--color-danger);background:rgba(244,63,94,0.08);border-color:rgba(244,63,94,0.2);' : ''">
+                                            {{ log.response_status > 0 ? log.response_status : '—' }}
+                                        </span>
+                                    </td>
+                                    <td><span style="font-weight:600;color:var(--color-primary);">{{ log.lapi_alias || '未匹配接口' }}</span></td>
+                                    <td style="font-family:var(--font-mono);font-size:0.82rem;color:var(--text-secondary);">{{ log.selected_rapi || '—' }}</td>
+                                    <td style="font-family:var(--font-mono);font-size:0.8rem;color:var(--text-muted);">{{ log.client_ip }}</td>
+                                    <td class="u-tr" style="font-family:var(--font-mono);">
+                                        <span :style="{ color: log.latency_ms > 10000 ? 'var(--color-danger)' : log.latency_ms > 5000 ? 'var(--color-warning)' : 'var(--text-primary)' }">{{ log.latency_ms }} ms</span>
+                                    </td>
+                                    <td class="u-tr" style="font-family:var(--font-mono);color:var(--text-secondary);">{{ log.tokens_used }}</td>
+                                    <td>
+                                        <span v-if="log.finish_reason && log.finish_reason !== 'stop'"
+                                              :style="log.finish_reason === 'length' ? 'color:var(--color-warning);font-size:0.78rem;' : 'color:var(--color-danger);font-size:0.78rem;'">⚑ {{ log.finish_reason }}</span>
+                                        <span v-else class="u-muted-lg">stop</span>
+                                    </td>
+                                    <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:0.78rem;color:var(--color-danger);" :title="log.error_message">{{ log.error_message || '—' }}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </template>
             </div>
 
             <!-- MODALS -->
@@ -3836,7 +3735,7 @@
                         refreshData();
                     }
                 };
-                const closeDetail = () => { detail.type = null; detail.id = null; };
+                const closeDetail = () => { detail.type = null; detail.id = null; selectedLog.value = null; selectedLogDetail.value = null; };
                 
                 // STATE CONTAINERS
                 const stats = ref({});
@@ -3863,8 +3762,6 @@
                 const importSearchQuery = ref('');
                 const logSearchQuery = ref('');
                 const logStatusFilter = ref('');
-                const logLapiFilter = ref('');
-                const logFinishFilter = ref('');
                 // Insight category & level filters
                 const insightFilter = ref('');
                 const levelFilter = ref('');
@@ -4231,8 +4128,6 @@
                                 if (l.response_status < 500) return false;
                             }
                         }
-                        if (logLapiFilter.value && l.lapi_alias !== logLapiFilter.value) return false;
-                        if (logFinishFilter.value && l.finish_reason !== logFinishFilter.value) return false;
                         if (logSearchQuery.value) {
                             const q = logSearchQuery.value.toLowerCase();
                             return (
@@ -4304,6 +4199,15 @@
                 const setTab = (tab) => {
                     activeTab.value = tab;
                     closeDetail();
+                    refreshData();
+                };
+
+                // 从仪表盘 KPI 卡跳转日志页并预设状态过滤
+                const goLogsWithStatus = (status) => {
+                    logStatusFilter.value = status;
+                    selectedLog.value = null;
+                    selectedLogDetail.value = null;
+                    activeTab.value = 'logs';
                     refreshData();
                 };
                 
@@ -6103,15 +6007,30 @@
                 };
 
                 // OBSERVABILITY / LOG UTILS
+                const logBodyShow = reactive({ req: false, resp: false });
+
                 const selectLog = async (log) => {
                     selectedLog.value = log;
                     activePayloadIdx.value = -1;
+                    logBodyShow.req = false;
+                    logBodyShow.resp = false;
                     try {
                         const r = await fetch(`/api/logs/request/${log.id}`);
                         if (r.ok) {
                             selectedLogDetail.value = await r.json();
                         }
                     } catch (e) {}
+                };
+
+                const closeLogDetail = () => {
+                    selectedLog.value = null;
+                    selectedLogDetail.value = null;
+                };
+
+                // 日志报文美化：合法 JSON 格式化缩进，否则原文展示
+                const prettyJSON = (raw) => {
+                    if (!raw) return '（空）';
+                    try { return JSON.stringify(JSON.parse(raw), null, 2); } catch (e) { return raw; }
                 };
 
                 const clearLogs = async () => {
@@ -6446,6 +6365,7 @@
                 return {
                     activeTab,
                     setTab,
+                    goLogsWithStatus,
                     getTabTitle,
                     getTabSubtitle,
                     gatewayLive,
@@ -6464,8 +6384,6 @@
                     importSearchQuery,
                     logSearchQuery,
                     logStatusFilter,
-                    logLapiFilter,
-                    logFinishFilter,
 
                     // Computes
                     filteredPlatforms, sortedPlatforms,
@@ -6493,6 +6411,9 @@
                     selectedLogDetail,
                     activePayloadIdx,
                     selectLog,
+                    closeLogDetail,
+                    logBodyShow,
+                    prettyJSON,
                     clearLogs,
                     getStatusClass,
                     getEventNodeClass,
