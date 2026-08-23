@@ -1517,6 +1517,23 @@
         ::-webkit-scrollbar-thumb:hover {
             background: rgba(56, 189, 248, 0.4);
         }
+
+        /* ---- Utility classes: replace high-frequency inline styles ---- */
+        .u-muted { color: var(--text-muted); }
+        .u-primary { color: var(--text-primary); }
+        .u-mb3 { margin-bottom: 3px; }
+        .u-mb12 { margin-bottom: 12px; }
+        .u-flex1 { flex: 1; }
+        .u-pointer { cursor: pointer; }
+        .u-nowrap { white-space: nowrap; }
+        .u-tr { text-align: right; }
+        .u-noevents { pointer-events: none; }
+        .u-mono { font-family: var(--font-mono); }
+        .u-muted-xs { font-size: 0.7rem; color: var(--text-muted); }
+        .u-muted-sm { font-size: 0.72rem; color: var(--text-muted); }
+        .u-muted-md { font-size: 0.78rem; color: var(--text-muted); }
+        .u-muted-lg { font-size: 0.75rem; color: var(--text-muted); }
+        .u-flex-gap8 { display: flex; gap: 8px; flex-wrap: wrap; }
     </style>
 </head>
 <body>
@@ -1645,7 +1662,7 @@
                 </div>
                 <div class="gateway-info">
                     代理端口: <span style="font-family:var(--font-mono); color:var(--color-primary)">{{ stats.proxy_port || '13579' }}</span><br>
-                    控制台端口: <span style="font-family:var(--font-mono);">{{ stats.web_port || '24680' }}</span>
+                    控制台端口: <span class="u-mono">{{ stats.web_port || '24680' }}</span>
                 </div>
             </div>
         </aside>
@@ -1677,12 +1694,12 @@
                 <div v-show="!insightFilter || insightFilter === 'cooling' || insightFilter === 'error'" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;">
                     <!-- Cooling resources: hierarchical 平台 → 平台-key → 平台-key-模型 -->
                     <div v-show="!insightFilter || insightFilter === 'cooling'" class="glass-card" style="padding:18px;">
-                        <div class="card-header-row" style="margin-bottom:12px;">
+                        <div class="card-header-row u-mb12">
                             <span class="card-title">
                                 <svg style="width:15px;height:15px;" viewBox="0 0 24 24" fill="none" stroke="var(--color-warning)" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                                 冷却中的资源
                             </span>
-                            <span style="font-size:0.78rem;color:var(--text-muted);">平台 → 密钥 → 模型 · 点击跳转</span>
+                            <span class="u-muted-md">平台 → 密钥 → 模型 · 点击跳转</span>
                         </div>
                         <div v-if="coolingTree.length === 0"
                              style="text-align:center;color:var(--text-muted);padding:24px 0;font-size:0.86rem;">
@@ -1700,7 +1717,7 @@
                                     <span style="font-weight:700;font-size:0.86rem;">{{ grp.platform_name || ('平台-'+grp.platform_id) }}</span>
                                     <span v-if="grp.keyCount > 0" style="font-size:0.72rem;padding:1px 7px;border-radius:4px;background:rgba(245,158,11,0.12);color:var(--color-warning);">密钥 ×{{ grp.keyCount }}</span>
                                     <span v-if="grp.modelCount > 0" style="font-size:0.72rem;padding:1px 7px;border-radius:4px;background:rgba(56,189,248,0.12);color:var(--color-primary);">模型 ×{{ grp.modelCount }}</span>
-                                    <span style="flex:1;"></span>
+                                    <span class="u-flex1"></span>
                                     <a v-if="grp.billing_address" :href="grp.billing_address" target="_blank" rel="noopener noreferrer"
                                        @click.stop title="打开账单地址"
                                        style="font-size:0.76rem;color:var(--color-primary);text-decoration:none;flex-shrink:0;border:1px solid rgba(56,189,248,0.25);padding:1px 7px;border-radius:4px;">账单 ↗</a>
@@ -1725,7 +1742,7 @@
                                                 boxShadow: '0 0 5px ' + (m.invalidated ? 'var(--color-danger)' : 'var(--color-warning)') }"></span>
                                             <span style="font-family:var(--font-mono);font-weight:600;">{{ m.alias || ('模型-'+m.id) }}</span>
                                             <span v-if="m.invalidated" style="font-size:0.7rem;padding:0 5px;border-radius:3px;background:rgba(244,63,94,0.12);color:var(--color-danger);">已禁用</span>
-                                            <span v-else style="font-size:0.7rem;color:var(--text-muted);">×{{ m.consecutive_failures }}</span>
+                                            <span v-else class="u-muted-xs">×{{ m.consecutive_failures }}</span>
                                             <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-muted);font-size:0.75rem;" :title="m.reason">{{ m.reason }}</span>
                                             <span v-if="!m.invalidated && m.recover_at" style="font-size:0.74rem;font-family:var(--font-mono);color:var(--text-secondary);flex-shrink:0;">{{ fmtCountdown(m.recover_at) }}</span>
                                         </div>
@@ -1740,7 +1757,7 @@
                                         boxShadow: '0 0 5px ' + (m.invalidated ? 'var(--color-danger)' : 'var(--color-warning)') }"></span>
                                     <span style="font-family:var(--font-mono);font-weight:600;">{{ m.alias || ('模型-'+m.id) }}</span>
                                     <span v-if="m.invalidated" style="font-size:0.72rem;padding:1px 5px;border-radius:3px;background:rgba(244,63,94,0.12);color:var(--color-danger);">已禁用</span>
-                                    <span v-else style="font-size:0.72rem;color:var(--text-muted);">×{{ m.consecutive_failures }}</span>
+                                    <span v-else class="u-muted-sm">×{{ m.consecutive_failures }}</span>
                                     <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-muted);font-size:0.78rem;" :title="m.reason">{{ m.reason }}</span>
                                     <span v-if="!m.invalidated && m.recover_at" style="font-size:0.76rem;font-family:var(--font-mono);color:var(--text-secondary);flex-shrink:0;">{{ fmtCountdown(m.recover_at) }}</span>
                                 </div>
@@ -1750,12 +1767,12 @@
 
                     <!-- Error breakdown -->
                     <div v-show="!insightFilter || insightFilter === 'error'" class="glass-card" style="padding:18px;">
-                        <div class="card-header-row" style="margin-bottom:12px;">
+                        <div class="card-header-row u-mb12">
                             <span class="card-title">
                                 <svg style="width:15px;height:15px;" viewBox="0 0 24 24" fill="none" stroke="var(--color-danger)" stroke-width="2"><polygon points="12 2 22 22 2 22"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
                                 错误分布
                             </span>
-                            <span style="font-size:0.78rem;color:var(--text-muted);">按错误类型分类 · 不同错误需不同处理</span>
+                            <span class="u-muted-md">按错误类型分类 · 不同错误需不同处理</span>
                         </div>
                         <div v-if="insightData.health.error_summary.length === 0"
                              style="text-align:center;color:var(--text-muted);padding:24px 0;font-size:0.86rem;">
@@ -1817,7 +1834,7 @@
                             <svg style="width:15px;height:15px;" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary)" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
                             资源效率
                         </span>
-                        <span style="font-size:0.78rem;color:var(--text-muted);">{{ filteredEfficiency.length }} 条优化建议</span>
+                        <span class="u-muted-md">{{ filteredEfficiency.length }} 条优化建议</span>
                     </div>
                     <div style="display:flex;flex-direction:column;gap:2px;">
                         <template v-for="(ins, idx) in filteredEfficiency" :key="'eff-'+idx">
@@ -1834,15 +1851,15 @@
                                     <div style="font-weight:600;font-size:0.84rem;margin-bottom:4px;">{{ ins.context.lapi_alias }}</div>
                                     <div style="display:flex;gap:14px;font-size:0.76rem;">
                                         <div style="display:flex;align-items:center;gap:4px;">
-                                            <span style="color:var(--text-muted);">{{ ins.context.primary_rapi }}</span>
+                                            <span class="u-muted">{{ ins.context.primary_rapi }}</span>
                                             <div class="compare-bar-wrap">
                                                 <div class="compare-bar-fill" :style="{ width: Math.min(ins.context.primary_hour_pct,100)+'%', background: ins.context.primary_hour_pct>=90 ? 'var(--color-danger)' : 'var(--color-warning)' }"></div>
                                             </div>
                                             <span style="font-family:var(--font-mono);color:var(--text-secondary);">{{ ins.context.primary_hour_pct.toFixed(0) }}%</span>
                                         </div>
-                                        <span style="color:var(--text-muted);">vs</span>
+                                        <span class="u-muted">vs</span>
                                         <div style="display:flex;align-items:center;gap:4px;">
-                                            <span style="color:var(--text-muted);">{{ ins.context.alt_rapi }}</span>
+                                            <span class="u-muted">{{ ins.context.alt_rapi }}</span>
                                             <div class="compare-bar-wrap">
                                                 <div class="compare-bar-fill" :style="{ width: Math.min(ins.context.alt_hour_pct,100)+'%', background: 'var(--color-success)' }"></div>
                                             </div>
@@ -1905,7 +1922,7 @@
                             <svg style="width:15px;height:15px;" viewBox="0 0 24 24" fill="none" stroke="var(--color-success)" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
                             容量与用量
                         </span>
-                        <span style="font-size:0.78rem;color:var(--text-muted);">实时限额占用 · 按模型分组</span>
+                        <span class="u-muted-md">实时限额占用 · 按模型分组</span>
                     </div>
                     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px;">
                         <template v-for="g in capacityGrouped" :key="'cg-'+g.rapi_id">
@@ -2026,7 +2043,7 @@
                 <div class="glass-card" style="margin-bottom:20px;">
                     <div class="card-header-row">
                         <span class="card-title">模型健康报表</span>
-                        <span style="font-size:0.78rem;color:var(--text-muted);">按请求量降序 · 仅展示有流量或存在问题的模型</span>
+                        <span class="u-muted-md">按请求量降序 · 仅展示有流量或存在问题的模型</span>
                     </div>
                     <div class="table-responsive">
                         <table>
@@ -2035,12 +2052,12 @@
                                     <th>模型别名</th>
                                     <th>所属平台</th>
                                     <th>状态</th>
-                                    <th style="text-align:right;">请求总数</th>
-                                    <th style="text-align:right;">成功率</th>
-                                    <th style="text-align:right;">均值延迟</th>
-                                    <th style="text-align:right;">429</th>
-                                    <th style="text-align:right;">5xx</th>
-                                    <th style="text-align:right;">最后使用</th>
+                                    <th class="u-tr">请求总数</th>
+                                    <th class="u-tr">成功率</th>
+                                    <th class="u-tr">均值延迟</th>
+                                    <th class="u-tr">429</th>
+                                    <th class="u-tr">5xx</th>
+                                    <th class="u-tr">最后使用</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -2063,7 +2080,7 @@
                                         </span>
                                     </td>
                                     <td style="text-align:right;font-family:var(--font-mono);">{{ fmtNum(m.total_req) }}</td>
-                                    <td style="text-align:right;">
+                                    <td class="u-tr">
                                         <span :style="{ color: m.total_req===0 ? 'var(--text-muted)' : m.success_rate>=95 ? 'var(--color-success)' : m.success_rate>=80 ? 'var(--color-warning)' : 'var(--color-danger)', fontWeight:600, fontFamily:'var(--font-mono)' }">
                                             {{ m.total_req > 0 ? m.success_rate.toFixed(1) + '%' : '—' }}
                                         </span>
@@ -2095,14 +2112,14 @@
                     <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;flex-wrap:wrap;">
                         <button class="btn btn-secondary btn-sm" @click="closeDetail">← 返回列表</button>
                         <span style="font-size:1.1rem;font-weight:700;color:var(--color-primary);">{{ platformDetail.name }}</span>
-                        <span :class="['plat-toggle', platformDetail.enabled ? (platformDetail.available ? 'on' : 'invalid') : 'off']" style="pointer-events:none;">
+                        <span :class="['plat-toggle', platformDetail.enabled ? (platformDetail.available ? 'on' : 'invalid') : 'off']" class="u-noevents">
                             <span class="plat-toggle-dot"></span>
                             {{ platformDetail.enabled ? (platformDetail.available ? '生效' : '失效') : '禁用' }}
                         </span>
                         <span v-if="!platformDetail.available && platformDetail.unavailable_reason"
                               style="font-size:0.76rem;color:var(--color-danger);">{{ platformDetail.unavailable_reason }}</span>
-                        <span style="flex:1;"></span>
-                        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                        <span class="u-flex1"></span>
+                        <div class="u-flex-gap8">
                             <button v-if="platformDetail.enabled && !platformDetail.available"
                                     class="btn btn-sm" :disabled="platformDetail._restoring" @click="restorePlatform(platformDetail)"
                                     style="background:rgba(239,68,68,0.12);color:var(--color-danger);border:1px solid rgba(239,68,68,0.3);">重试</button>
@@ -2116,27 +2133,27 @@
                     </div>
 
                     <div class="glass-card" style="padding:18px;margin-bottom:16px;">
-                        <div class="card-header-row" style="margin-bottom:12px;"><span class="card-title">基本信息</span></div>
+                        <div class="card-header-row u-mb12"><span class="card-title">基本信息</span></div>
                         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px 28px;font-size:0.85rem;">
-                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">Base URL</div>
+                            <div><div class="u-muted-sm u-mb3">Base URL</div>
                                 <div style="font-family:var(--font-mono);color:var(--text-primary);word-break:break-all;">{{ platformDetail.base_url || '—' }}</div></div>
-                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">备注</div>
-                                <div style="color:var(--text-primary);">{{ platformDetail.notes || '—' }}</div></div>
-                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">支持协议</div>
-                                <div style="color:var(--text-primary);">{{ (platformDetail._platformFormats && platformDetail._platformFormats.length) ? platformDetail._platformFormats.join('、') : '—' }}</div></div>
-                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">账单地址</div>
+                            <div><div class="u-muted-sm u-mb3">备注</div>
+                                <div class="u-primary">{{ platformDetail.notes || '—' }}</div></div>
+                            <div><div class="u-muted-sm u-mb3">支持协议</div>
+                                <div class="u-primary">{{ (platformDetail._platformFormats && platformDetail._platformFormats.length) ? platformDetail._platformFormats.join('、') : '—' }}</div></div>
+                            <div><div class="u-muted-sm u-mb3">账单地址</div>
                                 <a v-if="platformDetail.billing_address" :href="platformDetail.billing_address" target="_blank" rel="noopener noreferrer" style="color:var(--color-primary);text-decoration:none;">{{ platformDetail.billing_address }} ↗</a>
-                                <div v-else style="color:var(--text-muted);">—</div></div>
-                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">登录账号</div>
-                                <div style="color:var(--text-primary);">{{ platformDetail.login_account || '—' }}</div></div>
-                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">Token 最近获取</div>
-                                <div style="color:var(--text-primary);">{{ platformDetail.last_token_fetch && platformDetail.last_token_fetch !== '0001-01-01T00:00:00Z' ? formatTime(platformDetail.last_token_fetch) : '从未' }}</div></div>
+                                <div v-else class="u-muted">—</div></div>
+                            <div><div class="u-muted-sm u-mb3">登录账号</div>
+                                <div class="u-primary">{{ platformDetail.login_account || '—' }}</div></div>
+                            <div><div class="u-muted-sm u-mb3">Token 最近获取</div>
+                                <div class="u-primary">{{ platformDetail.last_token_fetch && platformDetail.last_token_fetch !== '0001-01-01T00:00:00Z' ? formatTime(platformDetail.last_token_fetch) : '从未' }}</div></div>
                         </div>
                     </div>
 
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
                         <div class="glass-card" style="padding:18px;">
-                            <div class="card-header-row" style="margin-bottom:12px;">
+                            <div class="card-header-row u-mb12">
                                 <span class="card-title">密钥（{{ (platformDetail._keys || []).length }}）</span>
                                 <button class="btn btn-secondary btn-sm" @click="openKeysTab(platformDetail)">全部管理 ›</button>
                             </div>
@@ -2147,14 +2164,14 @@
                                      @click="openDetail('key', k.id)">
                                     <span :style="keyBadgeStyle(k)">{{ keyHealthMeta[keyHealth(k)].icon }} {{ keyShortLabel(k) }}</span>
                                     <span style="font-family:var(--font-mono);color:var(--text-muted);">#{{ k.key_index }}</span>
-                                    <span style="flex:1;"></span>
+                                    <span class="u-flex1"></span>
                                     <span v-if="k.failure_reason" style="font-size:0.74rem;color:var(--text-muted);max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" :title="k.failure_reason">{{ k.failure_reason }}</span>
-                                    <span style="color:var(--text-muted);">›</span>
+                                    <span class="u-muted">›</span>
                                 </div>
                             </div>
                         </div>
                         <div class="glass-card" style="padding:18px;">
-                            <div class="card-header-row" style="margin-bottom:12px;">
+                            <div class="card-header-row u-mb12">
                                 <span class="card-title">模型（{{ getPlatformRapiCount(platformDetail.id) }}）</span>
                                 <button class="btn btn-secondary btn-sm" @click="openPlatformModelsTab(platformDetail)">全部查看 ›</button>
                             </div>
@@ -2165,9 +2182,9 @@
                                      @click="openDetail('rapi', r.id)">
                                     <span style="font-family:var(--font-mono);font-weight:600;color:var(--color-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ rapiDisplayName(r) }}</span>
                                     <span v-if="!r.available" style="font-size:0.7rem;color:var(--color-danger);font-weight:600;">失效</span>
-                                    <span v-else-if="!r.enabled" style="font-size:0.7rem;color:var(--text-muted);">禁用</span>
-                                    <span style="flex:1;"></span>
-                                    <span style="color:var(--text-muted);">›</span>
+                                    <span v-else-if="!r.enabled" class="u-muted-xs">禁用</span>
+                                    <span class="u-flex1"></span>
+                                    <span class="u-muted">›</span>
                                 </div>
                             </div>
                         </div>
@@ -2195,7 +2212,7 @@
                         </thead>
                         <tbody>
                             <tr v-for="plat in sortedPlatforms" :key="plat.id" :id="'el-p'+plat.id"
-                                style="cursor:pointer;"
+                                class="u-pointer"
                                 @click="openDetail('platform', plat.id)">
                                 <td style="max-width:300px;">
                                     <span style="font-weight:600;color:var(--color-primary);">{{ plat.name }}</span>
@@ -2214,7 +2231,7 @@
                                               :class="'fmt-' + f"
                                               :title="f">{{ f.charAt(0) }}</span>
                                     </span>
-                                    <span v-else style="font-size:0.75rem;color:var(--text-muted);">—</span>
+                                    <span v-else class="u-muted-lg">—</span>
                                 </td>
                                 <td @click.stop>
                                     <!-- 密钥数 → 跳转独立的密钥管理页（按该平台过滤） -->
@@ -2235,7 +2252,7 @@
                                     </button>
                                 </td>
                                 <td>
-                                    <span :class="['plat-toggle', plat.enabled ? (plat.available ? 'on' : 'invalid') : 'off']" style="pointer-events:none;">
+                                    <span :class="['plat-toggle', plat.enabled ? (plat.available ? 'on' : 'invalid') : 'off']" class="u-noevents">
                                         <span class="plat-toggle-dot"></span>
                                         {{ plat.enabled ? (plat.available ? '生效' : '失效') : '禁用' }}
                                     </span>
@@ -2257,10 +2274,10 @@
                     <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;flex-wrap:wrap;">
                         <button class="btn btn-secondary btn-sm" @click="closeDetail">← 返回列表</button>
                         <span style="font-size:1.1rem;font-weight:700;color:var(--color-primary);">{{ keyDetail.label || ('Key #' + keyDetail.key_index) }}</span>
-                        <span class="platform-type type-static" style="cursor:pointer;" @click="openDetail('platform', keyDetail.platform_id)" title="查看平台详情">{{ keyDetail.platform_name || ('平台-'+keyDetail.platform_id) }} ›</span>
+                        <span class="platform-type type-static u-pointer" @click="openDetail('platform', keyDetail.platform_id)" title="查看平台详情">{{ keyDetail.platform_name || ('平台-'+keyDetail.platform_id) }} ›</span>
                         <span :style="keyBadgeStyle(keyDetail)">{{ keyHealthLabel(keyDetail) }}</span>
-                        <span style="flex:1;"></span>
-                        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                        <span class="u-flex1"></span>
+                        <div class="u-flex-gap8">
                             <button class="plat-toggle" :class="keyDetail.enabled ? 'on' : 'off'" @click="toggleKeyFlat(keyDetail)">
                                 <span class="plat-toggle-dot"></span>
                                 {{ keyDetail.enabled ? '生效' : '禁用' }}
@@ -2275,28 +2292,28 @@
                     </div>
 
                     <div class="glass-card" style="padding:18px;margin-bottom:16px;">
-                        <div class="card-header-row" style="margin-bottom:12px;"><span class="card-title">基本信息</span></div>
+                        <div class="card-header-row u-mb12"><span class="card-title">基本信息</span></div>
                         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px 28px;font-size:0.85rem;">
-                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">备注标签</div>
-                                <div style="color:var(--text-primary);">{{ keyDetail.label || '—' }}</div></div>
-                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">Token</div>
+                            <div><div class="u-muted-sm u-mb3">备注标签</div>
+                                <div class="u-primary">{{ keyDetail.label || '—' }}</div></div>
+                            <div><div class="u-muted-sm u-mb3">Token</div>
                                 <div class="key-token-display" style="display:inline-block;" :title="keyDetail.token">{{ maskToken(keyDetail.token) }}</div></div>
-                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">平台内轮换顺序</div>
+                            <div><div class="u-muted-sm u-mb3">平台内轮换顺序</div>
                                 <div style="font-family:var(--font-mono);color:var(--text-primary);">#{{ keyDetail.key_index }}</div></div>
-                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">资费</div>
-                                <div style="color:var(--text-primary);">{{ keyDetail.is_free ? '免费' : '付费' }}</div></div>
-                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">有效期</div>
-                                <div style="color:var(--text-primary);">
+                            <div><div class="u-muted-sm u-mb3">资费</div>
+                                <div class="u-primary">{{ keyDetail.is_free ? '免费' : '付费' }}</div></div>
+                            <div><div class="u-muted-sm u-mb3">有效期</div>
+                                <div class="u-primary">
                                     <span v-if="keyDetail.expires_at">{{ formatKeyExpiry(keyDetail.expires_at) }}{{ isKeyExpired(keyDetail) ? '（已过期）' : '' }}</span>
                                     <span v-else>永久</span>
                                 </div></div>
-                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">失败原因</div>
+                            <div><div class="u-muted-sm u-mb3">失败原因</div>
                                 <div style="color:keyDetail.failure_reason ? 'var(--color-danger)' : 'var(--text-muted)';">{{ keyDetail.failure_reason || '—' }}</div></div>
                         </div>
                     </div>
 
                     <div class="glass-card" style="padding:18px;">
-                        <div class="card-header-row" style="margin-bottom:12px;">
+                        <div class="card-header-row u-mb12">
                             <span class="card-title">服务模型（{{ (keyDetail.models || []).length }}）</span>
                             <span style="font-size:0.76rem;color:var(--text-muted);">🔒 = 该 Key 被限制服务此模型，点击模型查看详情</span>
                         </div>
@@ -2345,10 +2362,10 @@
                         </thead>
                         <tbody>
                             <tr v-for="k in sortedKeys" :key="k.id" :id="'el-k'+k.id"
-                                style="cursor:pointer;"
+                                class="u-pointer"
                                 @click="openDetail('key', k.id)">
                                 <td style="text-align:center;font-family:var(--font-mono);font-weight:700;color:var(--color-secondary);">{{ k.key_index }}</td>
-                                <td style="white-space:nowrap;" @click.stop>
+                                <td class="u-nowrap" @click.stop>
                                     <span class="platform-type type-static" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;display:inline-block;vertical-align:middle;cursor:pointer;"
                                           @click="openDetail('platform', k.platform_id)" title="查看平台详情">{{ k.platform_name || ('平台-'+k.platform_id) }}</span>
                                 </td>
@@ -2365,7 +2382,7 @@
                                             付费
                                         </span>
                                     </td>
-                                    <td style="white-space:nowrap;">
+                                    <td class="u-nowrap">
                                         <span v-if="k.expires_at && isKeyExpired(k)"
                                               :title="'已于 ' + formatKeyExpiry(k.expires_at) + ' 过期'"
                                               style="display:inline-flex;align-items:center;font-size:0.7rem;padding:1px 8px;border-radius:12px;font-weight:600;background:rgba(239,68,68,0.12);color:var(--color-danger);border:1px solid rgba(239,68,68,0.35);">
@@ -2381,7 +2398,7 @@
                                             ♾ 永久
                                         </span>
                                     </td>
-                                    <td style="white-space:nowrap;">
+                                    <td class="u-nowrap">
                                         <span :style="keyBadgeStyle(k)" style="font-size:0.74rem;">{{ keyHealthLabel(k) }}</span>
                                     </td>
                                     <td style="max-width:220px;" @click.stop>
@@ -2397,7 +2414,7 @@
                                             </span>
                                             <span v-if="k.models.length > 4" style="font-size:0.7rem;color:var(--text-muted);align-self:center;" :title="k.models.slice(4).map(m => m.alias).join('、')">+{{ k.models.length - 4 }}</span>
                                         </div>
-                                        <span v-else style="font-size:0.75rem;color:var(--text-muted);">—</span>
+                                        <span v-else class="u-muted-lg">—</span>
                                     </td>
                             </tr>
                             <tr v-if="sortedKeys.length === 0">
@@ -2416,13 +2433,13 @@
                     <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;flex-wrap:wrap;">
                         <button class="btn btn-secondary btn-sm" @click="closeDetail">← 返回列表</button>
                         <span style="font-size:1.05rem;font-weight:700;color:var(--color-primary);font-family:var(--font-mono);">{{ rapiDisplayName(rapiDetail) }}</span>
-                        <span class="platform-type type-static" style="cursor:pointer;" @click="openDetail('platform', rapiDetail.platform_id)" title="查看平台详情">{{ getPlatformName(rapiDetail.platform_id) }} ›</span>
-                        <span :class="['plat-toggle', rapiDetail.enabled ? (rapiDetail.available ? 'on' : 'invalid') : 'off']" style="pointer-events:none;">
+                        <span class="platform-type type-static u-pointer" @click="openDetail('platform', rapiDetail.platform_id)" title="查看平台详情">{{ getPlatformName(rapiDetail.platform_id) }} ›</span>
+                        <span :class="['plat-toggle', rapiDetail.enabled ? (rapiDetail.available ? 'on' : 'invalid') : 'off']" class="u-noevents">
                             <span class="plat-toggle-dot"></span>
                             {{ rapiDetail.enabled ? (rapiDetail.available ? '生效' : '失效') : '禁用' }}
                         </span>
-                        <span style="flex:1;"></span>
-                        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                        <span class="u-flex1"></span>
+                        <div class="u-flex-gap8">
                             <button v-if="rapiDetail.enabled && !rapiDetail.available" class="btn btn-sm" style="background:rgba(239,68,68,0.12);color:var(--color-danger);border:1px solid rgba(239,68,68,0.3);" @click="restoreRapi(rapiDetail)" title="重试连接，成功则恢复生效状态">重试</button>
                             <button v-else class="plat-toggle" :class="rapiDetail.enabled ? 'on' : 'off'" @click="toggleRapi(rapiDetail)">
                                 <span class="plat-toggle-dot"></span>
@@ -2436,29 +2453,29 @@
                     </div>
 
                     <div class="glass-card" style="padding:18px;margin-bottom:16px;">
-                        <div class="card-header-row" style="margin-bottom:12px;"><span class="card-title">基本信息</span></div>
+                        <div class="card-header-row u-mb12"><span class="card-title">基本信息</span></div>
                         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px 28px;font-size:0.85rem;">
-                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">模型名称（自动生成）</div>
+                            <div><div class="u-muted-sm u-mb3">模型名称（自动生成）</div>
                                 <div style="font-family:var(--font-mono);font-weight:600;color:var(--color-primary);">{{ rapiDisplayName(rapiDetail) }}</div></div>
-                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">模型备注</div>
-                                <div style="color:var(--text-primary);">{{ rapiDetail.notes || '—' }}</div></div>
-                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">上游原始模型名</div>
+                            <div><div class="u-muted-sm u-mb3">模型备注</div>
+                                <div class="u-primary">{{ rapiDetail.notes || '—' }}</div></div>
+                            <div><div class="u-muted-sm u-mb3">上游原始模型名</div>
                                 <div style="font-family:var(--font-mono);color:var(--text-secondary);font-style:italic;">{{ rapiDetail.model || '—' }}</div></div>
-                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">厂商 / 系列 / 版本 / 后缀</div>
+                            <div><div class="u-muted-sm u-mb3">厂商 / 系列 / 版本 / 后缀</div>
                                 <div style="color:var(--text-primary);font-family:var(--font-mono);">{{ [rapiDetail.vendor, rapiDetail.series, rapiDetail.version, rapiDetail.suffix].filter(x => x).join(' · ') || '—' }}</div></div>
-                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">来源</div>
-                                <div style="color:var(--text-primary);">{{ rapiDetail.source === 'auto_discover' ? '自动发现' : '手动添加' }}</div></div>
-                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">失败原因</div>
+                            <div><div class="u-muted-sm u-mb3">来源</div>
+                                <div class="u-primary">{{ rapiDetail.source === 'auto_discover' ? '自动发现' : '手动添加' }}</div></div>
+                            <div><div class="u-muted-sm u-mb3">失败原因</div>
                                 <div v-if="!rapiDetail.available" style="color:var(--color-danger);">{{ rapiDetail.unavailable_reason || '平台级失效（如 403/402），需手动恢复' }}</div>
-                                <div v-else style="color:var(--text-muted);">—</div></div>
-                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">自定义 Headers</div>
-                                <div style="color:var(--text-primary);">{{ (rapiDetail.custom_headers && rapiDetail.custom_headers !== '[]') ? rapiDetail.custom_headers : '—' }}</div></div>
+                                <div v-else class="u-muted">—</div></div>
+                            <div><div class="u-muted-sm u-mb3">自定义 Headers</div>
+                                <div class="u-primary">{{ (rapiDetail.custom_headers && rapiDetail.custom_headers !== '[]') ? rapiDetail.custom_headers : '—' }}</div></div>
                         </div>
                     </div>
 
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
                         <div class="glass-card" style="padding:18px;">
-                            <div class="card-header-row" style="margin-bottom:12px;">
+                            <div class="card-header-row u-mb12">
                                 <span class="card-title">Key 池（{{ keyPoolForRapi(rapiDetail).keys.length }}{{ keyPoolForRapi(rapiDetail).restricted ? ' · 🔒 白名单受限' : '' }}）</span>
                             </div>
                             <div v-if="keyPoolForRapi(rapiDetail).all.length === 0" style="color:var(--text-muted);font-size:0.84rem;">所属平台暂无 Key</div>
@@ -2468,13 +2485,13 @@
                                      @click="openDetail('key', k.id)">
                                     <span :style="keyBadgeStyle(k)">{{ keyHealthMeta[keyHealth(k)].icon }} {{ keyShortLabel(k) }}</span>
                                     <span style="font-family:var(--font-mono);color:var(--text-muted);">#{{ k.key_index }}</span>
-                                    <span style="flex:1;"></span>
-                                    <span style="color:var(--text-muted);">›</span>
+                                    <span class="u-flex1"></span>
+                                    <span class="u-muted">›</span>
                                 </div>
                                 <template v-for="k in blockedKeysForRapi(rapiDetail)" :key="'rdblk-'+k.id">
                                     <div v-if="!keyPoolForRapi(rapiDetail).keys.some(x => x.id === k.id)"
                                          style="display:flex;align-items:center;gap:8px;font-size:0.84rem;padding:5px 8px;border-radius:6px;border:1px dashed rgba(148,163,184,0.3);">
-                                        <span :style="keyBadgeStyleFor(k, rapiDetail)" style="cursor:pointer;" @click="openDetail('key', k.id)">🔒 {{ keyShortLabel(k) }}</span>
+                                        <span :style="keyBadgeStyleFor(k, rapiDetail)" class="u-pointer" @click="openDetail('key', k.id)">🔒 {{ keyShortLabel(k) }}</span>
                                         <span style="flex:1;font-size:0.74rem;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" :title="keyBadgeTitleFor(k, rapiDetail)">{{ (keyModelBlock(k, rapiDetail) || {}).reason || '无权访问此模型' }}</span>
                                         <button class="btn btn-secondary btn-sm" @click="unblockKeyModel(k, rapiDetail)">解除限制</button>
                                     </div>
@@ -2483,7 +2500,7 @@
                             </div>
                         </div>
                         <div class="glass-card" style="padding:18px;">
-                            <div class="card-header-row" style="margin-bottom:12px;">
+                            <div class="card-header-row u-mb12">
                                 <span class="card-title">所属接口（{{ lapisForRapi(rapiDetail).length }}）</span>
                                 <span style="font-size:0.76rem;color:var(--text-muted);">使用该模型的路由链</span>
                             </div>
@@ -2493,9 +2510,9 @@
                                      style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.84rem;padding:5px 8px;border-radius:6px;border:1px solid rgba(255,255,255,0.05);"
                                      @click="openDetail('lapi', l.id)">
                                     <span style="font-family:var(--font-mono);font-weight:600;color:var(--color-primary);">{{ l.alias }}</span>
-                                    <span v-if="!l.enabled" style="font-size:0.7rem;color:var(--text-muted);">禁用</span>
-                                    <span style="flex:1;"></span>
-                                    <span style="color:var(--text-muted);">›</span>
+                                    <span v-if="!l.enabled" class="u-muted-xs">禁用</span>
+                                    <span class="u-flex1"></span>
+                                    <span class="u-muted">›</span>
                                 </div>
                             </div>
                         </div>
@@ -2512,7 +2529,7 @@
                         <option value="">全部平台</option>
                         <option v-for="p in platforms" :key="'rf-'+p.id" :value="String(p.id)">{{ p.name }}</option>
                     </select>
-                    <span style="font-size:0.78rem;color:var(--text-muted);">模型可从平台详情页"发现模型"导入，或经顶栏"新增"向导添加</span>
+                    <span class="u-muted-md">模型可从平台详情页"发现模型"导入，或经顶栏"新增"向导添加</span>
                 </div>
 
                 <div class="table-responsive">
@@ -2528,7 +2545,7 @@
                         </thead>
                         <tbody>
                             <tr v-for="rapi in sortedRapis" :key="rapi.id" :id="'el-r'+rapi.id"
-                                style="cursor:pointer;"
+                                class="u-pointer"
                                 @click="openDetail('rapi', rapi.id)">
                                 <td style="max-width:260px;">
                                     <span style="font-weight:600;color:var(--color-primary);font-family:var(--font-mono);">{{ rapiDisplayName(rapi) }}</span>
@@ -2539,7 +2556,7 @@
                                         <span style="font-weight:600;">失效</span>
                                     </div>
                                 </td>
-                                <td style="white-space:nowrap;" @click.stop>
+                                <td class="u-nowrap" @click.stop>
                                     <span class="platform-type type-static" style="max-width:110px;overflow:hidden;text-overflow:ellipsis;display:inline-block;vertical-align:middle;cursor:pointer;"
                                           @click="openDetail('platform', rapi.platform_id)" title="查看平台详情">
                                         {{ getPlatformName(rapi.platform_id) }}
@@ -2553,17 +2570,17 @@
                                               @click="openDetail('lapi', l.id)">{{ l.alias }}</span>
                                         <span v-if="lapisForRapi(rapi).length > 3" style="font-size:0.7rem;color:var(--text-muted);align-self:center;">+{{ lapisForRapi(rapi).length - 3 }}</span>
                                     </div>
-                                    <span v-else style="font-size:0.75rem;color:var(--text-muted);">—</span>
+                                    <span v-else class="u-muted-lg">—</span>
                                 </td>
                                 <td>
-                                    <span :class="['plat-toggle', rapi.enabled ? (rapi.available ? 'on' : 'invalid') : 'off']" style="pointer-events:none;">
+                                    <span :class="['plat-toggle', rapi.enabled ? (rapi.available ? 'on' : 'invalid') : 'off']" class="u-noevents">
                                         <span class="plat-toggle-dot"></span>
                                         {{ rapi.enabled ? (rapi.available ? '生效' : '失效') : '禁用' }}
                                     </span>
                                 </td>
                                 <td style="max-width:240px;" @click.stop>
                                     <template v-if="keyPoolForRapi(rapi).all.length === 0">
-                                        <span style="font-size:0.75rem;color:var(--text-muted);">— 平台无 Key</span>
+                                        <span class="u-muted-lg">— 平台无 Key</span>
                                     </template>
                                     <template v-else>
                                         <div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;">
@@ -2572,16 +2589,16 @@
                                                   style="font-size:0.66rem;font-weight:600;color:var(--color-secondary,#38bdf8);background:rgba(56,189,248,0.08);border:1px solid rgba(56,189,248,0.22);border-radius:3px;padding:0 5px;white-space:nowrap;">🔒 受限</span>
                                             <span v-for="k in keyPoolForRapi(rapi).keys.filter(kk => !keyModelBlock(kk, rapi)).slice(0,4)" :key="k.id"
                                                   :style="keyBadgeStyle(k)" :title="keyBadgeTitle(k, rapi)"
-                                                  style="cursor:pointer;" @click="openDetail('key', k.id)">
+                                                  class="u-pointer" @click="openDetail('key', k.id)">
                                                 {{ keyHealthMeta[keyHealth(k)].icon }} {{ keyShortLabel(k) }}
                                             </span>
                                             <span v-for="k in blockedKeysForRapi(rapi).slice(0,2)" :key="'blk'+k.id"
                                                   :style="keyBadgeStyleFor(k, rapi)" :title="keyBadgeTitleFor(k, rapi)"
-                                                  style="cursor:pointer;" @click="openDetail('key', k.id)">
+                                                  class="u-pointer" @click="openDetail('key', k.id)">
                                                 🔒 {{ keyShortLabel(k) }}
                                             </span>
                                             <span v-if="poolOverflow(rapi) > 0"
-                                                  style="font-size:0.7rem;color:var(--text-muted);">+{{ poolOverflow(rapi) }}</span>
+                                                  class="u-muted-xs">+{{ poolOverflow(rapi) }}</span>
                                             <span v-if="keyPoolForRapi(rapi).restricted && keyPoolForRapi(rapi).keys.length === 0"
                                                   style="font-size:0.7rem;color:var(--color-danger);font-weight:600;"
                                                   title="key_ids 白名单未匹配到该平台的任何 Key，模型请求将直接失败">⚠ 白名单未匹配</span>
@@ -2610,12 +2627,12 @@
                     <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;flex-wrap:wrap;">
                         <button class="btn btn-secondary btn-sm" @click="closeDetail">← 返回列表</button>
                         <span style="font-size:1.05rem;font-weight:700;color:var(--color-primary);font-family:var(--font-mono);">{{ lapiDetail.alias }}</span>
-                        <span :class="['plat-toggle', lapiDetail.enabled ? 'on' : 'off']" style="pointer-events:none;">
+                        <span :class="['plat-toggle', lapiDetail.enabled ? 'on' : 'off']" class="u-noevents">
                             <span class="plat-toggle-dot"></span>
                             {{ lapiDetail.enabled ? '生效' : '禁用' }}
                         </span>
-                        <span style="flex:1;"></span>
-                        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                        <span class="u-flex1"></span>
+                        <div class="u-flex-gap8">
                             <button class="plat-toggle" :class="lapiDetail.enabled ? 'on' : 'off'" @click="toggleLapi(lapiDetail)">
                                 <span class="plat-toggle-dot"></span>
                                 {{ lapiDetail.enabled ? '生效' : '禁用' }}
@@ -2626,27 +2643,27 @@
                     </div>
 
                     <div class="glass-card" style="padding:18px;margin-bottom:16px;">
-                        <div class="card-header-row" style="margin-bottom:12px;"><span class="card-title">基本信息</span></div>
+                        <div class="card-header-row u-mb12"><span class="card-title">基本信息</span></div>
                         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px 28px;font-size:0.85rem;">
-                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">接口名（客户端请求的 model 字段）</div>
+                            <div><div class="u-muted-sm u-mb3">接口名（客户端请求的 model 字段）</div>
                                 <div style="font-family:var(--font-mono);color:var(--text-primary);">{{ lapiDetail.alias }}</div></div>
-                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">备注</div>
-                                <div style="color:var(--text-primary);">{{ lapiDetail.notes || '—' }}</div></div>
-                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">厂商 / 系列 / 版本 / 后缀</div>
+                            <div><div class="u-muted-sm u-mb3">备注</div>
+                                <div class="u-primary">{{ lapiDetail.notes || '—' }}</div></div>
+                            <div><div class="u-muted-sm u-mb3">厂商 / 系列 / 版本 / 后缀</div>
                                 <div style="color:var(--text-primary);font-family:var(--font-mono);">{{ [lapiDetail.vendor, lapiDetail.series, lapiDetail.version, lapiDetail.suffix].filter(x => x).join(' · ') || '—' }}</div></div>
-                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">节点状态</div>
+                            <div><div class="u-muted-sm u-mb3">节点状态</div>
                                 <div style="font-family:var(--font-mono);font-size:0.8rem;">
                                     <span :style="{ color: (lapiDetail._rapis || []).filter(r => r.enabled && r.available).length > 0 ? 'var(--color-success)' : 'var(--text-muted)', fontWeight:600 }">● 有效 {{ (lapiDetail._rapis || []).filter(r => r.enabled && r.available).length }}</span>
                                     <span v-if="(lapiDetail._rapis || []).filter(r => !r.enabled || !r.available).length > 0" style="color:var(--color-danger);font-weight:600;margin-left:8px;">● 失效 {{ (lapiDetail._rapis || []).filter(r => !r.enabled || !r.available).length }}</span>
-                                    <span v-if="!(lapiDetail._rapis && lapiDetail._rapis.length)" style="color:var(--text-muted);">暂无节点</span>
+                                    <span v-if="!(lapiDetail._rapis && lapiDetail._rapis.length)" class="u-muted">暂无节点</span>
                                 </div></div>
-                            <div><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:3px;">创建时间</div>
-                                <div style="color:var(--text-primary);">{{ formatTime(lapiDetail.created_at) }}</div></div>
+                            <div><div class="u-muted-sm u-mb3">创建时间</div>
+                                <div class="u-primary">{{ formatTime(lapiDetail.created_at) }}</div></div>
                         </div>
                     </div>
 
                     <div class="glass-card" style="padding:18px;">
-                        <div class="card-header-row" style="margin-bottom:12px;">
+                        <div class="card-header-row u-mb12">
                             <span class="card-title">路由链（{{ (lapiDetail._rapis || []).length }} 个节点，按序容灾）</span>
                             <button class="btn btn-secondary btn-sm" @click="editLapiRoutes(lapiDetail)">编排 ›</button>
                         </div>
@@ -2660,15 +2677,15 @@
                                 <span style="font-family:var(--font-mono);font-weight:600;color:var(--color-primary);">{{ rapiDisplayName(r) }}</span>
                                 <span v-if="r.enabled && r.available" style="font-size:0.7rem;color:var(--color-success);">有效</span>
                                 <span v-else style="font-size:0.7rem;color:var(--color-danger);">失效</span>
-                                <span style="flex:1;"></span>
+                                <span class="u-flex1"></span>
                                 <template v-if="chainIssues(r).length > 0">
                                     <span v-for="k in chainIssues(r)" :key="'ldc-'+r.id+'-'+k.id" :style="keyBadgeStyleFor(k, r)" :title="keyBadgeTitleFor(k, r)"
-                                          style="cursor:pointer;" @click.stop="openDetail('key', k.id)">
+                                          class="u-pointer" @click.stop="openDetail('key', k.id)">
                                         <template v-if="keyModelBlock(k, r)">🔒 {{ keyShortLabel(k) }}</template>
                                         <template v-else>{{ keyHealthMeta[keyHealth(k)].icon }} {{ keyShortLabel(k) }}</template>
                                     </span>
                                 </template>
-                                <span style="color:var(--text-muted);">›</span>
+                                <span class="u-muted">›</span>
                             </div>
                         </div>
                     </div>
@@ -2695,7 +2712,7 @@
                         </thead>
                         <tbody>
                             <tr v-for="lapi in sortedLapis" :key="lapi.id" :id="'el-l'+lapi.id"
-                                style="cursor:pointer;"
+                                class="u-pointer"
                                 @click="openDetail('lapi', lapi.id)">
                                 <td>
                                     <div style="font-weight:600;color:var(--color-primary);">{{ lapi.alias }}</div>
@@ -2708,7 +2725,7 @@
                                           style="color:var(--color-danger);font-weight:600;margin-left:8px;">
                                         ● 失效 {{ lapi._rapis.filter(r => !r.enabled || !r.available).length }}
                                     </span>
-                                    <span v-if="!lapi._rapis || lapi._rapis.length === 0" style="color:var(--text-muted);">暂无节点</span>
+                                    <span v-if="!lapi._rapis || lapi._rapis.length === 0" class="u-muted">暂无节点</span>
                                 </td>
                                 <td style="max-width:260px;" @click.stop>
                                     <template v-if="lapi._rapis && lapi._rapis.find(r => r.enabled && r.available)">
@@ -2734,18 +2751,18 @@
                                                   :style="{ color: r.enabled && r.available ? 'var(--text-primary)' : 'var(--color-danger)' }"
                                                   @click="openDetail('rapi', r.id)">{{ rapiDisplayName(r) }}</span>
                                             <span v-for="k in chainIssues(r)" :key="k.id" :style="keyBadgeStyleFor(k, r)" :title="keyBadgeTitleFor(k, r)"
-                                                  style="cursor:pointer;" @click="openDetail('key', k.id)">
+                                                  class="u-pointer" @click="openDetail('key', k.id)">
                                                 <template v-if="keyModelBlock(k, r)">🔒 {{ keyShortLabel(k) }}</template>
                                                 <template v-else>{{ keyHealthMeta[keyHealth(k)].icon }} {{ keyShortLabel(k) }}</template>
                                             </span>
                                             <span v-if="chainIssues(r).length === 0 && keyPoolForRapi(r).keys.length === 0 && keyPoolForRapi(r).all.length === 0"
-                                                  style="font-size:0.7rem;color:var(--text-muted);">(平台无 Key)</span>
+                                                  class="u-muted-xs">(平台无 Key)</span>
                                         </div>
                                     </template>
-                                    <span v-else style="font-size:0.75rem;color:var(--text-muted);">—</span>
+                                    <span v-else class="u-muted-lg">—</span>
                                 </td>
                                 <td>
-                                    <span :class="['plat-toggle', lapi.enabled ? 'on' : 'off']" style="pointer-events:none;">
+                                    <span :class="['plat-toggle', lapi.enabled ? 'on' : 'off']" class="u-noevents">
                                         <span class="plat-toggle-dot"></span>
                                         {{ lapi.enabled ? '生效' : '禁用' }}
                                     </span>
@@ -2932,12 +2949,12 @@
                         <!-- ═══ 平台账号 / 账单区 ═══ -->
                         <div style="margin-top:16px;">
                             <!-- 账单地址 + 外链 -->
-                            <div class="form-group" style="margin-bottom:12px;">
+                            <div class="form-group u-mb12">
                                 <label style="margin:0 0 6px 0;display:block;">账单地址 (Billing URL)</label>
                                 <div style="display:flex;gap:8px;">
-                                    <input type="text" class="form-control" placeholder="https://console.provider.com/billing（可选）"
+                                    <input class="form-control u-flex1" type="text" placeholder="https://console.provider.com/billing（可选）"
                                            v-model="platformModal.form.billing_address"
-                                           maxlength="512" autocomplete="off" spellcheck="false" style="flex:1;">
+                                           maxlength="512" autocomplete="off" spellcheck="false">
                                     <a v-if="platformModal.form.billing_address" :href="platformModal.form.billing_address" target="_blank" rel="noopener noreferrer"
                                        class="btn btn-secondary btn-sm" style="white-space:nowrap;display:inline-flex;align-items:center;gap:5px;">
                                         <svg style="width:13px;height:13px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
@@ -2947,18 +2964,18 @@
                             </div>
 
                             <div class="form-control-row">
-                                <div class="form-group" style="flex:1;">
+                                <div class="form-group u-flex1">
                                     <label style="margin:0 0 6px 0;display:block;">登录账号 (可选)</label>
                                     <input type="text" class="form-control" placeholder="提供商控制台登录账号"
                                            v-model="platformModal.form.login_account"
                                            maxlength="200" autocomplete="off" spellcheck="false">
                                 </div>
-                                <div class="form-group" style="flex:1;">
+                                <div class="form-group u-flex1">
                                     <label style="margin:0 0 6px 0;display:block;">登录密码 (可选，留空=不修改)</label>
                                     <div style="display:flex;gap:8px;">
-                                        <input :type="platformModal.pwVisible ? 'text' : 'password'" class="form-control"
+                                        <input class="form-control u-flex1" :type="platformModal.pwVisible ? 'text' : 'password'"
                                                placeholder="••••••••" v-model="platformModal.form.login_password"
-                                               maxlength="512" autocomplete="new-password" spellcheck="false" style="flex:1;">
+                                               maxlength="512" autocomplete="new-password" spellcheck="false">
                                         <button class="btn btn-secondary btn-sm btn-icon" type="button"
                                                 @click="platformModal.pwVisible = !platformModal.pwVisible"
                                                 :title="platformModal.pwVisible ? '隐藏密码' : '显示密码'">
@@ -2973,7 +2990,7 @@
                             <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;padding-top:14px;border-top:1px dashed rgba(255,255,255,0.1);">
                                 <div>
                                     <label style="font-weight:600;display:block;">API 密钥</label>
-                                    <small style="color:var(--text-muted);">多个 Key 按顺序轮换，遭遇 429/503 自动切换</small>
+                                    <small class="u-muted">多个 Key 按顺序轮换，遭遇 429/503 自动切换</small>
                                 </div>
                                 <button v-if="platformModal.item" class="btn btn-primary" @click="openKeysTab(platformModal.item)">
                                     🔑 管理密钥
@@ -3015,11 +3032,10 @@
                         </div>
                         <div class="form-group">
                             <label>Token (API Key)</label>
-                            <input type="text" class="form-control"
+                            <input type="text" class="form-control u-mono"
                                    :placeholder="keyModal.item ? '留空 = 不修改 Token' : 'sk-...'"
                                    v-model="keyModal.form.token"
-                                   maxlength="512" autocomplete="off" spellcheck="false"
-                                   style="font-family:var(--font-mono);">
+                                   maxlength="512" autocomplete="off" spellcheck="false">
                         </div>
                         <div class="form-group">
                             <label>备注标签</label>
@@ -3168,7 +3184,7 @@
                             </div>
                             <div class="form-group">
                                 <label>上游模型</label>
-                                <input type="text" class="form-control" :value="rapiTestModal.rapi?.model" disabled style="font-family:var(--font-mono);">
+                                <input type="text" class="form-control u-mono" :value="rapiTestModal.rapi?.model" disabled>
                             </div>
                         </div>
                         <div class="form-group">
@@ -3232,7 +3248,7 @@
                         <!-- 快捷模板 -->
                         <div style="margin-top:20px;padding-top:16px;border-top:1px solid rgba(255,255,255,0.06);">
                             <p style="font-size:0.82rem;color:var(--text-secondary);margin-bottom:10px;">快速插入常用模板：</p>
-                            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                            <div class="u-flex-gap8">
                                 <button class="btn btn-secondary btn-sm" @click="headersModal.headers.push({key:'Cookie',value:''})">Cookie</button>
                                 <button class="btn btn-secondary btn-sm" @click="headersModal.headers.push({key:'X-Request-ID',value:'{{uuid}}'})">请求 ID (UUID)</button>
                                 <button class="btn btn-secondary btn-sm" @click="headersModal.headers.push({key:'X-Timestamp',value:'{{timestamp}}'})">时间戳</button>
@@ -3276,10 +3292,10 @@
 
                             <!-- 搜索过滤框 + 批量选择 -->
                             <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;">
-                                <input type="text" class="form-control" placeholder="搜索模型名称..."
-                                       v-model="importSearchQuery" style="flex:1;">
-                                <button class="btn btn-secondary btn-sm" style="white-space:nowrap;" @click="selectAllFiltered">全选筛选</button>
-                                <button class="btn btn-secondary btn-sm" style="white-space:nowrap;" @click="clearSelection">清空选择</button>
+                                <input class="form-control u-flex1" type="text" placeholder="搜索模型名称..."
+                                       v-model="importSearchQuery">
+                                <button class="btn btn-secondary btn-sm u-nowrap" @click="selectAllFiltered">全选筛选</button>
+                                <button class="btn btn-secondary btn-sm u-nowrap" @click="clearSelection">清空选择</button>
                             </div>
 
                             <!-- 4-section model list: 每个分类独立滚动 + 可点击标题折叠/展开 -->
@@ -3289,7 +3305,7 @@
                                 <div v-if="wizardSections.manual.length > 0" style="border:1px solid rgba(245,158,11,0.25);border-radius:10px;overflow:hidden;">
                                     <div @click="toggleSection('manual')" style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:rgba(245,158,11,0.08);cursor:pointer;user-select:none;">
                                         <span style="font-size:0.82rem;font-weight:600;color:var(--color-warning);"><span style="display:inline-block;width:10px;">{{ wizardCollapsed.manual ? '▸' : '▾' }}</span> 手工添加</span>
-                                        <span style="font-size:0.72rem;color:var(--text-muted);">{{ wizardSections.manual.length }} 个</span>
+                                        <span class="u-muted-sm">{{ wizardSections.manual.length }} 个</span>
                                     </div>
                                     <div v-show="!wizardCollapsed.manual" style="padding:8px 12px;display:flex;flex-wrap:wrap;gap:6px;max-height:220px;overflow-y:auto;">
                                         <div v-for="m in wizardSections.manual" :key="'m-'+m.key" style="display:flex;align-items:center;gap:6px;padding:3px 8px;background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.2);border-radius:6px;">
@@ -3305,7 +3321,7 @@
                                 <div v-if="wizardSections.validSelected.length > 0" style="border:1px solid rgba(16,185,129,0.25);border-radius:10px;overflow:hidden;">
                                     <div @click="toggleSection('validSelected')" style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:rgba(16,185,129,0.08);cursor:pointer;user-select:none;">
                                         <span style="font-size:0.82rem;font-weight:600;color:var(--color-success);"><span style="display:inline-block;width:10px;">{{ wizardCollapsed.validSelected ? '▸' : '▾' }}</span> 有效已选</span>
-                                        <span style="font-size:0.72rem;color:var(--text-muted);">{{ wizardSections.validSelected.length }} 个</span>
+                                        <span class="u-muted-sm">{{ wizardSections.validSelected.length }} 个</span>
                                     </div>
                                     <div v-show="!wizardCollapsed.validSelected" style="padding:6px 12px;display:flex;flex-direction:column;gap:2px;max-height:240px;overflow-y:auto;">
                                         <div v-for="m in wizardSections.validSelected" :key="'vs-'+m" style="display:flex;align-items:flex-start;gap:8px;width:100%;padding:3px 0;">
@@ -3320,7 +3336,7 @@
                                 <div v-if="wizardSections.invalidSelected.length > 0" style="border:1px solid rgba(239,68,68,0.25);border-radius:10px;overflow:hidden;">
                                     <div @click="toggleSection('invalidSelected')" style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:rgba(239,68,68,0.08);cursor:pointer;user-select:none;">
                                         <span style="font-size:0.82rem;font-weight:600;color:var(--color-danger);"><span style="display:inline-block;width:10px;">{{ wizardCollapsed.invalidSelected ? '▸' : '▾' }}</span> 无效已选（同步后将删除）</span>
-                                        <span style="font-size:0.72rem;color:var(--text-muted);">{{ wizardSections.invalidSelected.length }} 个</span>
+                                        <span class="u-muted-sm">{{ wizardSections.invalidSelected.length }} 个</span>
                                     </div>
                                     <div v-show="!wizardCollapsed.invalidSelected" style="padding:8px 12px;display:flex;flex-wrap:wrap;gap:6px;max-height:220px;overflow-y:auto;">
                                         <div v-for="m in wizardSections.invalidSelected" :key="'is-'+m.key" style="display:flex;align-items:center;gap:6px;padding:3px 8px;background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.2);border-radius:6px;opacity:0.85;">
@@ -3334,7 +3350,7 @@
                                 <div v-if="wizardSections.validUnselected.length > 0" style="border:1px solid rgba(255,255,255,0.08);border-radius:10px;overflow:hidden;">
                                     <div @click="toggleSection('validUnselected')" style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:rgba(255,255,255,0.03);cursor:pointer;user-select:none;">
                                         <span style="font-size:0.82rem;font-weight:600;color:var(--text-secondary);"><span style="display:inline-block;width:10px;">{{ wizardCollapsed.validUnselected ? '▸' : '▾' }}</span> 有效未选</span>
-                                        <span style="font-size:0.72rem;color:var(--text-muted);">{{ wizardSections.validUnselected.length }} 个</span>
+                                        <span class="u-muted-sm">{{ wizardSections.validUnselected.length }} 个</span>
                                     </div>
                                     <div v-show="!wizardCollapsed.validUnselected" style="padding:6px 12px;display:flex;flex-direction:column;gap:2px;max-height:240px;overflow-y:auto;">
                                         <div v-for="m in wizardSections.validUnselected" :key="'vu-'+m" style="display:flex;align-items:flex-start;gap:8px;width:100%;padding:3px 0;" :style="importWizard.existing[m.toLowerCase()] ? 'opacity:1;' : 'opacity:0.7;'">
@@ -3359,7 +3375,7 @@
                                            v-model="importWizard.manualInput"
                                            style="font-family:var(--font-mono);font-size:0.85rem;"
                                            @keyup.enter="addManualModel">
-                                    <button class="btn btn-secondary" style="white-space:nowrap;" @click="addManualModel">+ 添加</button>
+                                    <button class="btn btn-secondary u-nowrap" @click="addManualModel">+ 添加</button>
                                 </div>
                             </div>
                         </div>
@@ -3422,9 +3438,9 @@
                         <div style="margin-top:20px;border-top:1px solid rgba(255,255,255,0.05);padding-top:20px;">
                             <label style="font-weight:600;font-size:0.88rem;color:var(--text-secondary);display:block;margin-bottom:10px;">追加模型到路由链</label>
                             <!-- 搜索过滤框 -->
-                            <input type="text" class="form-control" placeholder="搜索模型别名 / 上游模型 / 平台..."
+                            <input class="form-control u-mb12" type="text" placeholder="搜索模型别名 / 上游模型 / 平台..."
                                    v-model="lapiRouteSearch"
-                                   style="margin-bottom:12px;">
+                                  >
                             <!-- 快速匹配区：名称与 LAPI alias 相似的模型，按匹配分排序 -->
                             <div v-if="sortedUnselectedRapis.length > 0" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;max-height:220px;overflow-y:auto;">
                                 <button v-for="r in sortedUnselectedRapis" :key="r.id"
@@ -3613,7 +3629,7 @@
                             </div>
                             <div class="form-group">
                                 <label>平台 Token（可空，建议在密钥管理中添加 Key）</label>
-                                <input type="text" class="form-control" placeholder="sk-..." v-model="addWizard.platForm.token" style="font-family:var(--font-mono);">
+                                <input type="text" class="form-control u-mono" placeholder="sk-..." v-model="addWizard.platForm.token">
                             </div>
                             <div class="form-group">
                                 <label>备注</label>
@@ -3651,7 +3667,7 @@
                         <template v-else>
                             <div class="form-group">
                                 <label>密钥 Token</label>
-                                <input type="text" class="form-control" placeholder="sk-..." v-model="addWizard.keyForm.token" style="font-family:var(--font-mono);">
+                                <input type="text" class="form-control u-mono" placeholder="sk-..." v-model="addWizard.keyForm.token">
                             </div>
                             <div class="form-control-row" style="grid-template-columns:1fr 1fr;">
                                 <div class="form-group">
