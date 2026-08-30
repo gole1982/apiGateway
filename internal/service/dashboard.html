@@ -2009,7 +2009,7 @@
                             <button v-if="platformDetail.enabled && !platformDetail.available"
                                     class="btn btn-sm" :disabled="platformDetail._restoring" @click="restorePlatform(platformDetail)"
                                     style="background:rgba(239,68,68,0.12);color:var(--color-danger);border:1px solid rgba(239,68,68,0.3);">重试</button>
-                            <button v-else class="plat-toggle" :class="platformDetail.enabled ? 'on' : 'off'" @click="togglePlatform(platformDetail)">
+                            <button class="plat-toggle" :class="platformDetail.enabled ? 'on' : 'off'" @click="togglePlatform(platformDetail)">
                                 <span class="plat-toggle-dot"></span>
                                 {{ platformDetail.enabled ? '生效' : '禁用' }}
                             </button>
@@ -2327,7 +2327,7 @@
                         <span class="u-flex1"></span>
                         <div class="u-flex-gap8">
                             <button v-if="rapiDetail.enabled && !rapiDetail.available" class="btn btn-sm" style="background:rgba(239,68,68,0.12);color:var(--color-danger);border:1px solid rgba(239,68,68,0.3);" @click="restoreRapi(rapiDetail)" title="重试连接，成功则恢复生效状态">重试</button>
-                            <button v-else class="plat-toggle" :class="rapiDetail.enabled ? 'on' : 'off'" @click="toggleRapi(rapiDetail)">
+                            <button class="plat-toggle" :class="rapiDetail.enabled ? 'on' : 'off'" @click="toggleRapi(rapiDetail)">
                                 <span class="plat-toggle-dot"></span>
                                 {{ rapiDetail.enabled ? '生效' : '禁用' }}
                             </button>
@@ -3183,9 +3183,15 @@
                                 <div style="font-size:0.82rem;color:var(--text-secondary);">{{ importWizard.fetchError }}</div>
                             </div>
 
+                            <!-- 空列表提示：平台 200 但未返回任何模型（Serverless/推理网关常见） -->
+                            <div v-if="importWizard.emptyList && !importWizard.fetchError" style="background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.3);border-radius:10px;padding:14px 16px;margin-bottom:16px;">
+                                <div style="font-weight:600;color:var(--color-warning);margin-bottom:4px;font-size:0.88rem;">⚠ 该平台未返回可用模型列表</div>
+                                <div style="font-size:0.82rem;color:var(--text-secondary);">密钥校验已通过，但平台的 /v1/models 返回了空列表（部分 Serverless / HTTP-node 网关不维护模型白名单，任意模型名都会被接受）。请在下方<span style="color:var(--text-primary);">手工输入模型名称</span>，添加后勾选并批量导入。</div>
+                            </div>
+
                             <!-- 说明文字：成功时显示正常提示，失败时提示可手动配置 -->
                             <p style="font-size:0.88rem;color:var(--text-secondary);margin-bottom:15px;">
-                                <template v-if="!importWizard.fetchError">网关已向平台 /v1/models 路径发起查询，检测到以下支持的模型，请勾选您需要导入到网关中的模型：</template>
+                                <template v-if="!importWizard.fetchError && !importWizard.emptyList">网关已向平台 /v1/models 路径发起查询，检测到以下支持的模型，请勾选您需要导入到网关中的模型：</template>
                                 <template v-else>您仍可在下方手动输入模型名称，添加后勾选并批量导入。</template>
                             </p>
 
@@ -3261,7 +3267,7 @@
                                 </div>
 
                                 <!-- Empty state -->
-                                <div v-if="wizardSections.manual.length === 0 && wizardSections.validSelected.length === 0 && wizardSections.invalidSelected.length === 0 && wizardSections.validUnselected.length === 0 && !importWizard.fetchError" style="text-align:center;color:var(--text-muted);font-size:0.85rem;padding:20px 0;">
+                                <div v-if="wizardSections.manual.length === 0 && wizardSections.validSelected.length === 0 && wizardSections.invalidSelected.length === 0 && wizardSections.validUnselected.length === 0 && !importWizard.fetchError && !importWizard.emptyList" style="text-align:center;color:var(--text-muted);font-size:0.85rem;padding:20px 0;">
                                     无可用模型
                                 </div>
                             </div>
@@ -3956,7 +3962,7 @@
                 const headersModal = reactive({ show: false, rapi: null, headers: [] });
                 const lapiModal = reactive({ show: false, item: null, fromRapiId: 0, form: { alias: '', notes: '', vendor: '', series: '', version: '', suffix: '' } });
                 const lapiRoutesModal = reactive({ show: false, lapi: null, chain: [], selectedRapiId: '' });
-                const importWizard = reactive({ show: false, platform: null, loading: false, fetchError: '', models: [], selected: [], manualInput: '', existing: {}, manualAdded: [] });
+                const importWizard = reactive({ show: false, platform: null, loading: false, fetchError: '', emptyList: false, models: [], selected: [], manualInput: '', existing: {}, manualAdded: [] });
                 // 各分类折叠状态：默认全部展开，用户可点击标题折叠/展开。
                 // 每个分类体独立滚动，避免大类目把其他类目挤到视线外。
                 const wizardCollapsed = reactive({ manual: false, validSelected: false, invalidSelected: false, validUnselected: false });
@@ -5361,6 +5367,7 @@
                     importWizard.selected = [];
                     importWizard.existing = {};
                     importWizard.fetchError = '';
+                    importWizard.emptyList = false;
                     importWizard.manualInput = '';
                     importWizard.manualAdded = [];
                     importSearchQuery.value = '';
@@ -5392,6 +5399,14 @@
                         if (r.ok) {
                             const data = await r.json();
                             importWizard.models = data.models || [];
+                            // Serverless / HTTP-node gateways often answer /v1/models with
+                            // HTTP 200 + an empty data array (no maintained model whitelist;
+                            // any model name is accepted). Surfacing an empty list as "you
+                            // just didn't pick anything" is confusing, so flag it explicitly
+                            // and guide the user to the manual input below.
+                            if (importWizard.models.length === 0) {
+                                importWizard.emptyList = true;
+                            }
                             // Pre-check existing auto_discover models that are still in remote list.
                             for (const m of importWizard.models) {
                                 const key = m.toLowerCase();
