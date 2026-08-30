@@ -1,0 +1,130 @@
+name: CI
+
+# 触发：
+#  - 针对 master/main 的 push（含合并）
+#  - 所有 pull request
+#  - 手动触发（workflow_dispatch，便于重新跑）
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ===========================================================================
+  # Job 1: 校验 —— 单元测试 + go vet + 编译。这是合入门槛。
+  # ===========================================================================
+  test:
+    name: Test & vet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: true
+
+
+      - name: go vet
+        run: go vet ./...
+
+      # 说明：本项目是单进程 SQLite（modernc.org/sqlite），且既有代码可能存在
+      # 状态层面的并发依赖（FSM / 调度器）。`-race` 可能让第一版 CI 暴露既有
+      # 竞态而一直红。先以普通测试 + vet 作为合入门槛，竞态问题收敛后再启用
+      # `-race`（见下方向第三阶段）。
+      - name: Unit tests
+        run: go test ./... -count=1
+
+      - name: Build (linux)
+        run: CGO_ENABLED=0 go build -o bin/gateway-linux ./cmd/gateway
+
+      - name: Build diaglog
+        run: CGO_ENABLED=0 go build -o bin/diaglog-linux ./cmd/diaglog
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gateway-binaries
+          path: bin/
+          if-no-files-found: warn
+
+  # ===========================================================================
+  # Job 2: 静态分析 (golangci-lint)
+  #
+  # 说明：本仓库 .golangci.yml 启用了较严格的 linter 集合（gosec / staticcheck
+  # / lll / gocyclo 等）。为让 CI 先稳定跑起来，此 job 当前【允许失败】——
+  # 先让它给出报告，回头收敛问题、再由 has_* 输出改为阻断。
+  #   has_errors 也可以通过到时再把 continue-on-error 移除。
+  # ===========================================================================
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    continue-on-error: true   # TODO: 待存量问题清零后移除
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: true
+
+      # 固定版本而非 latest：latest 会随时间漂移，且 .golangci.yml 的
+      # depguard 规则块是旧格式（rules ->），新版本已改名为 linters。先固定到
+      # v1.60 稳妥跑通，后续需要再升。
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.60.3
+          args: --timeout=5m
+
+  # ===========================================================================
+  # Job 3: Docker 镜像构建
+  # ===========================================================================
+  docker:
+    name: Docker image
+    needs: [test]
+    runs-on: ubuntu-latest
+    # 仅 push 到主分支 / push tag 时构建镜像（PR 阶段不做镜像，节省时间）
+    if: github.event_name == 'push' && (startsWith(github.ref, 'refs/heads/') || startsWith(github.ref, 'refs/tags/'))
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=tag
+            type=sha
+            # 主分支固定 tag，便于部署引用
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64, linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

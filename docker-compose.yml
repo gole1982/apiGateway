@@ -2,6 +2,8 @@ version: "3.8"
 
 services:
   gateway:
+    # 远程部署时从 GitHub 拉取镜像（CI 自动构建推送）；本地开发可用 docker compose up --build
+    image: ghcr.io/gole1982/apiGateway:latest
     build: .
     container_name: api-gateway
     restart: unless-stopped

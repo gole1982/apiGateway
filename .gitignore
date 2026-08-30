@@ -16,3 +16,6 @@ glm_verify.txt
 
 # DB backups
 *.db.bak*
+
+# CI build output
+bin/
