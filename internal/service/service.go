@@ -278,7 +278,13 @@ func (s *Service) Run() error {
 			"method", r.Method, "path", r.URL.Path, "from", r.RemoteAddr)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprintf(w, `{"error":{"message":"Unknown endpoint: %s %s","type":"invalid_request","code":"unknown_endpoint"}}`, r.Method, r.URL.Path)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]string{
+				"message": fmt.Sprintf("Unknown endpoint: %s %s", r.Method, r.URL.Path),
+				"type":    "invalid_request",
+				"code":    "unknown_endpoint",
+			},
+		})
 	})
 	proxyMux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -886,17 +892,7 @@ func createWebHandler() http.Handler {
 			httpReq.URL, _ = url.Parse(modelsURL)
 			httpReq.Header.Set(apiformat.GoogleAPIKeyHeader, fetchToken)
 		} else {
-			baseURL := platform.BaseURL
-			for _, suffix := range []string{"/v1/chat/completions", "/v1/messages", "/v1beta/models", "/v1beta", "/v1/chat", "/v1"} {
-				if len(baseURL) >= len(suffix) && baseURL[len(baseURL)-len(suffix):] == suffix {
-					baseURL = baseURL[:len(baseURL)-len(suffix)]
-					break
-				}
-			}
-			for len(baseURL) > 0 && baseURL[len(baseURL)-1] == '/' {
-				baseURL = baseURL[:len(baseURL)-1]
-			}
-			modelsURL := baseURL + "/v1/models"
+			modelsURL := apiformat.NormalizeModelsBaseURL(platform.BaseURL) + "/v1/models"
 			httpReq.URL, _ = url.Parse(modelsURL)
 			httpReq.Header.Set("Authorization", "Bearer "+fetchToken)
 		}
@@ -1149,15 +1145,7 @@ func createWebHandler() http.Handler {
 				modelsURL = apiformat.BuildGoogleListModelsURL(req.BaseURL, req.Token)
 				hreq.Header.Set(apiformat.GoogleAPIKeyHeader, req.Token)
 			} else {
-				normalized := req.BaseURL
-				for _, suffix := range []string{"/v1/chat/completions", "/v1/messages", "/v1beta/models", "/v1beta", "/v1/chat", "/v1"} {
-					if strings.HasSuffix(normalized, suffix) {
-						normalized = strings.TrimSuffix(normalized, suffix)
-						break
-					}
-				}
-				normalized = strings.TrimRight(normalized, "/")
-				modelsURL = normalized + "/v1/models"
+				modelsURL = apiformat.NormalizeModelsBaseURL(req.BaseURL) + "/v1/models"
 				hreq.Header.Set("Authorization", "Bearer "+req.Token)
 			}
 			hreq.URL, _ = url.Parse(modelsURL)
@@ -1252,15 +1240,7 @@ func createWebHandler() http.Handler {
 			httpReq.Header.Set(apiformat.GoogleAPIKeyHeader, fetchToken) // Google API key auth (not Bearer).
 		} else {
 			// OpenAI-compatible: normalise base URL and call /v1/models.
-			normalized := platform.BaseURL
-			for _, suffix := range []string{"/v1/chat/completions", "/v1/messages", "/v1beta/models", "/v1beta", "/v1/chat", "/v1"} {
-				if strings.HasSuffix(normalized, suffix) {
-					normalized = strings.TrimSuffix(normalized, suffix)
-					break
-				}
-			}
-			normalized = strings.TrimRight(normalized, "/")
-			modelsURL = normalized + "/v1/models"
+			modelsURL = apiformat.NormalizeModelsBaseURL(platform.BaseURL) + "/v1/models"
 			httpReq.Header.Set("Authorization", "Bearer "+fetchToken)
 		}
 		httpReq.URL, _ = url.Parse(modelsURL)
@@ -2533,17 +2513,7 @@ func handleKeyProbe(w http.ResponseWriter, r *http.Request, platformID int64, ke
 		httpReq.URL, _ = url.Parse(modelsURL)
 		httpReq.Header.Set(apiformat.GoogleAPIKeyHeader, targetKey.Token)
 	} else {
-		baseURL := platform.BaseURL
-		for _, suffix := range []string{"/v1/chat/completions", "/v1/messages", "/v1beta/models", "/v1beta", "/v1/chat", "/v1"} {
-			if len(baseURL) >= len(suffix) && baseURL[len(baseURL)-len(suffix):] == suffix {
-				baseURL = baseURL[:len(baseURL)-len(suffix)]
-				break
-			}
-		}
-		for len(baseURL) > 0 && baseURL[len(baseURL)-1] == '/' {
-			baseURL = baseURL[:len(baseURL)-1]
-		}
-		modelsURL := baseURL + "/v1/models"
+		modelsURL := apiformat.NormalizeModelsBaseURL(platform.BaseURL) + "/v1/models"
 		httpReq.URL, _ = url.Parse(modelsURL)
 		httpReq.Header.Set("Authorization", "Bearer "+targetKey.Token)
 	}
@@ -2557,10 +2527,23 @@ func handleKeyProbe(w http.ResponseWriter, r *http.Request, platformID int64, ke
 		return
 	}
 	defer resp.Body.Close()
-	io.ReadAll(resp.Body)
+	respBody, _ := io.ReadAll(resp.Body)
+	if len(respBody) > 2048 {
+		respBody = respBody[:2048]
+	}
 
 	if resp.StatusCode != 200 {
-		writeJSONError(w, 502, fmt.Errorf("平台返回 %d，重置失败", resp.StatusCode))
+		// Surface the upstream body so operators can see the real rejection reason
+		// (e.g. a path-allowlist message from a serverless gateway) and fix the
+		// platform baseURL accordingly — instead of a generic "平台返回 502".
+		hint := strings.TrimSpace(string(respBody))
+		if hint == "" {
+			hint = http.StatusText(resp.StatusCode)
+		}
+		logger.DefaultConsole().Warn("service", "[PROBE] key probe rejected",
+			"key_id", keyID, "platform", platform.Name, "url", httpReq.URL.String(),
+			"status", resp.StatusCode, "body", hint)
+		writeJSONError(w, 502, fmt.Errorf("密钥测试失败（HTTP %d）：%s", resp.StatusCode, hint))
 		return
 	}
 

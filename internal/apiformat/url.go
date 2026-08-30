@@ -12,6 +12,43 @@ func BuildURL(baseURL string, model string, format APIFormat) string {
 	return BuildURLs(baseURL, model, format)[0]
 }
 
+// knownSuffixes lists the well-known inference/model path suffixes that an
+// OpenAI-compatible baseURL may carry. A baseURL that ends in one of these is
+// stripped back to the platform root before appending a new path segment.
+//
+// Order matters: longer/more-specific suffixes must come first so that e.g.
+// "/v1/chat/completions" is stripped whole rather than merely its trailing "/v1".
+var knownSuffixes = []string{
+	"/v1/chat/completions",
+	"/v1/messages",
+	"/v1/responses",
+	"/v1/images/",
+	"/v1beta/models",
+	"/v1beta",
+	"/v1/chat",
+	"/v1",
+}
+
+// NormalizeModelsBaseURL strips trailing slashes and any known API-path suffix
+// from an OpenAI-compatible baseURL so a new segment (e.g. "/v1/models") can be
+// appended without duplication.
+//
+// The trailing-slash trim MUST happen before suffix matching: a baseURL like
+// "https://host/v1/" fails every "...ends with /v1" check while it still ends
+// in '/', then would render a doubled ".../v1/v1/models". That doubled path is
+// rejected by serverless/HTTP-node gateways with "only allows access to
+// inference API paths".
+func NormalizeModelsBaseURL(baseURL string) string {
+	u := strings.TrimRight(baseURL, "/")
+	for _, suffix := range knownSuffixes {
+		if strings.HasSuffix(u, suffix) {
+			u = strings.TrimSuffix(u, suffix)
+			break
+		}
+	}
+	return strings.TrimRight(u, "/")
+}
+
 // stripKnownSuffix removes any well-known API path suffix from baseURL so
 // subsequent suffix concatenation starts from the platform root.
 func stripKnownSuffix(u, model string) string {

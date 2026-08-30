@@ -93,3 +93,37 @@ func TestEnsureGeminiStreamSSE(t *testing.T) {
 		})
 	}
 }
+
+// TestNormalizeModelsBaseURL is a regression test for a real incident where a
+// baseURL ending in "/v1/" (trailing slash) produced the doubled, rejected
+// path ".../v1/v1/models". Serverless/HTTP-node gateways reject that doubled
+// path with "only allows access to inference API paths" (
+// Gateway key-probe returned {"message":"...inference API paths..."}).
+// NormalizeModelsBaseURL must trim trailing slashes BEFORE stripping a known
+// "/v1"/"/v1beta" suffix so the two steps do not fight.
+func TestNormalizeModelsBaseURL(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      string
+		wantURL string
+	}{
+		{"clean root", "https://api.example.com", "https://api.example.com/v1/models"},
+		{"single trailing slash", "https://api.example.com/", "https://api.example.com/v1/models"},
+		{"root with /v1", "https://api.example.com/v1", "https://api.example.com/v1/models"},
+		// REGRESSION: trailing slash after /v1 must not double the path.
+		{"v1 with trailing slash", "https://api.example.com/v1/", "https://api.example.com/v1/models"},
+		{"v1 with multiple trailing slashes", "https://api.example.com/v1///", "https://api.example.com/v1/models"},
+		{"full chat path", "https://api.example.com/v1/chat/completions", "https://api.example.com/v1/models"},
+		{"full messages path", "https://api.example.com/v1/messages", "https://api.example.com/v1/models"},
+		{"v1beta", "https://api.example.com/v1beta", "https://api.example.com/v1/models"},
+		{"v1beta trailing slash", "https://api.example.com/v1beta/", "https://api.example.com/v1/models"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := NormalizeModelsBaseURL(tc.in) + "/v1/models"
+			if got != tc.wantURL {
+				t.Errorf("NormalizeModelsBaseURL(%q) + /v1/models = %q, want %q", tc.in, got, tc.wantURL)
+			}
+		})
+	}
+}

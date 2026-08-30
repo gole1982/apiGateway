@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -50,6 +51,11 @@ type ProxyGateway struct {
 	blockMu          sync.RWMutex
 	blocks           map[int64]map[int64]keyModelBlock
 	capabilityBlockT time.Duration
+
+	// recoveryRunning prevents overlapping background recovery scans. Recovery
+	// is best-effort maintenance; callers should continue using normal failover
+	// while another scan is in progress.
+	recoveryRunning atomic.Bool
 }
 
 // NewProxyGateway creates a gateway with default timeouts.
@@ -179,6 +185,11 @@ type RetryReport struct {
 //
 // The returned report is safe to surface to the dashboard.
 func (g *ProxyGateway) RecoverUnhealthyRAPIs(ctx context.Context, concurrency, perProbeTimeoutSec int) *RetryReport {
+	if !g.recoveryRunning.CompareAndSwap(false, true) {
+		return &RetryReport{}
+	}
+	defer g.recoveryRunning.Store(false)
+
 	concurrency, perProbeTimeout := normalizeProbe(concurrency, perProbeTimeoutSec)
 
 	report := &RetryReport{}
@@ -244,6 +255,11 @@ func normalizeProbe(concurrency, perProbeTimeoutSec int) (int, time.Duration) {
 // pool and restored only if they actually respond. RAPIs whose pool is still
 // dead stay marked unavailable.
 func (g *ProxyGateway) RecoverPlatformRAPIs(ctx context.Context, platformID int64, concurrency, perProbeTimeoutSec int) *RetryReport {
+	if !g.recoveryRunning.CompareAndSwap(false, true) {
+		return &RetryReport{}
+	}
+	defer g.recoveryRunning.Store(false)
+
 	concurrency, perProbeTimeout := normalizeProbe(concurrency, perProbeTimeoutSec)
 	report := &RetryReport{}
 	probeClient := &http.Client{Timeout: perProbeTimeout}
@@ -262,6 +278,11 @@ func (g *ProxyGateway) RecoverPlatformRAPIs(ctx context.Context, platformID int6
 // unavailable) and restores the ones that respond with a supported format.
 // Used e.g. after a model's key_ids whitelist gains a usable key.
 func (g *ProxyGateway) RecoverRAPIs(ctx context.Context, rapiIDs []int64, concurrency, perProbeTimeoutSec int) *RetryReport {
+	if !g.recoveryRunning.CompareAndSwap(false, true) {
+		return &RetryReport{}
+	}
+	defer g.recoveryRunning.Store(false)
+
 	concurrency, perProbeTimeout := normalizeProbe(concurrency, perProbeTimeoutSec)
 	report := &RetryReport{}
 	probeClient := &http.Client{Timeout: perProbeTimeout}
@@ -421,17 +442,7 @@ func (g *ProxyGateway) probePlatform(ctx context.Context, p models.Platform, cli
 		req.Header.Set(apiformat.GoogleAPIKeyHeader, token)
 	} else {
 		// OpenAI-compatible platforms.
-		baseURL := p.BaseURL
-		for _, suffix := range []string{"/v1/chat/completions", "/v1/messages", "/v1beta/models", "/v1beta", "/v1/chat", "/v1"} {
-			if len(baseURL) >= len(suffix) && baseURL[len(baseURL)-len(suffix):] == suffix {
-				baseURL = baseURL[:len(baseURL)-len(suffix)]
-				break
-			}
-		}
-		for len(baseURL) > 0 && baseURL[len(baseURL)-1] == '/' {
-			baseURL = baseURL[:len(baseURL)-1]
-		}
-		modelsURL := baseURL + "/v1/models"
+		modelsURL := apiformat.NormalizeModelsBaseURL(p.BaseURL) + "/v1/models"
 		req, err = http.NewRequestWithContext(ctx, http.MethodGet, modelsURL, nil)
 		if err != nil {
 			return false, err.Error()
@@ -653,7 +664,7 @@ func (g *ProxyGateway) HandleChatCompletions(w http.ResponseWriter, r *http.Requ
 		var converted []byte
 		converted, err = apiformat.ConvertRequest(body, clientFormat, apiformat.FormatOpenAI, geminiURLModel)
 		if err != nil {
-			http.Error(w, fmt.Sprintf(`{"error":{"message":"Failed to parse %s request: %s","type":"invalid_request"}}`, clientFormat, err.Error()), http.StatusBadRequest)
+			writeGatewayJSONError(w, http.StatusBadRequest, fmt.Sprintf("Failed to parse %s request: %s", clientFormat, err.Error()), "invalid_request")
 			if g.log != nil {
 				g.log.RecordError(requestID, "Failed to parse request: "+err.Error(), "REQUEST_RECEIVED")
 				g.log.RecordClientResponse(requestID, http.StatusBadRequest, int(time.Since(startTime).Milliseconds()), false)
@@ -712,7 +723,7 @@ func (g *ProxyGateway) HandleChatCompletions(w http.ResponseWriter, r *http.Requ
 	lapi, err := g.db.GetLAPIByAlias(strings.ToLower(modelName))
 	if err != nil {
 		reqLog.Warn("gateway", "[ROUTE] unknown model", "model", modelName)
-		http.Error(w, fmt.Sprintf(`{"error":{"message":"Unknown model: %s","type":"invalid_request"}}`, modelName), http.StatusUnauthorized)
+		writeGatewayJSONError(w, http.StatusUnauthorized, "Unknown model: "+modelName, "invalid_request")
 		if g.log != nil {
 			g.log.RecordRoutingDecision(requestID, modelName, nil)
 			g.log.RecordError(requestID, "Unknown model: "+modelName, "ROUTING_DECISION")
@@ -723,7 +734,7 @@ func (g *ProxyGateway) HandleChatCompletions(w http.ResponseWriter, r *http.Requ
 
 	if !lapi.Enabled {
 		reqLog.Warn("gateway", "[ROUTE] model is disabled", "model", modelName)
-		http.Error(w, fmt.Sprintf(`{"error":{"message":"Model %s is disabled","type":"service_unavailable"}}`, modelName), http.StatusServiceUnavailable)
+		writeGatewayJSONError(w, http.StatusServiceUnavailable, "Model "+modelName+" is disabled", "service_unavailable")
 		if g.log != nil {
 			g.log.RecordRoutingDecision(requestID, lapi.Alias, nil)
 			g.log.RecordError(requestID, "Model is disabled: "+modelName, "ROUTING_DECISION")
@@ -1294,7 +1305,7 @@ func (g *ProxyGateway) handleNonStreamingRequest(w http.ResponseWriter, r *http.
 					// All RAPIs are hard-disabled (not just cooling down) — no point waiting.
 					const msg = "all RAPIs are disabled or unavailable"
 					reqLog.Error("gateway", "[FAIL] "+msg, "lapi", lapi.Alias)
-					http.Error(w, fmt.Sprintf(`{"error":{"message":"%s","type":"service_unavailable"}}`, msg), http.StatusServiceUnavailable)
+					writeGatewayJSONError(w, http.StatusServiceUnavailable, msg, "service_unavailable")
 					if g.log != nil {
 						g.log.RecordError(requestID, msg, "UPSTREAM_RESPONSE")
 					}
@@ -1304,7 +1315,7 @@ func (g *ProxyGateway) handleNonStreamingRequest(w http.ResponseWriter, r *http.
 					"wait_until", waitUntil.Format("15:04:05"), "attempt", retryCount)
 				if waitErr := g.scheduler.Wait(reqCtx, lapi.ID, waitUntil); waitErr != nil {
 					reqLog.Error("gateway", "[FAIL] wait exhausted", "lapi", lapi.Alias, "error", waitErr.Error())
-					http.Error(w, fmt.Sprintf(`{"error":{"message":"%s","type":"service_unavailable"}}`, waitErr.Error()), http.StatusServiceUnavailable)
+					writeGatewayJSONError(w, http.StatusServiceUnavailable, waitErr.Error(), "service_unavailable")
 					if g.log != nil {
 						g.log.RecordError(requestID, waitErr.Error(), "UPSTREAM_RESPONSE")
 					}
@@ -1313,7 +1324,7 @@ func (g *ProxyGateway) handleNonStreamingRequest(w http.ResponseWriter, r *http.
 				continue
 			}
 			reqLog.Error("gateway", "[FAIL] PickAvailable error", "error", err.Error())
-			http.Error(w, fmt.Sprintf(`{"error":{"message":"%s","type":"service_unavailable"}}`, err.Error()), http.StatusServiceUnavailable)
+			writeGatewayJSONError(w, http.StatusServiceUnavailable, err.Error(), "service_unavailable")
 			return fallbackUsed, http.StatusServiceUnavailable
 		}
 
@@ -1497,6 +1508,17 @@ func (g *ProxyGateway) doUpstreamRequest(ctx context.Context, rapi models.RAPIWi
 		return nil, 0, err
 	}
 	return resp, resp.StatusCode, nil
+}
+
+func writeGatewayJSONError(w http.ResponseWriter, status int, message, errorType string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"error": map[string]string{
+			"message": message,
+			"type":    errorType,
+		},
+	})
 }
 
 func (g *ProxyGateway) sendErrorStream(w http.ResponseWriter, flusher http.Flusher, message string) {
