@@ -19,3 +19,8 @@ glm_verify.txt
 
 # CI build output
 bin/
+
+# local tooling data/config (never commit)
+.freebuff/
+.workbuddy/
+opencode.json
