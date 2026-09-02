@@ -1220,27 +1220,6 @@
         }
 
         /* PLAYGROUND */
-        .playground-modal-body {
-            display: grid;
-            grid-template-columns: 1.2fr 1fr;
-            gap: 25px;
-            max-height: 75vh;
-            overflow-y: auto;
-        }
-        .playground-editor-pane {
-            display: flex;
-            flex-direction: column;
-            gap: 16px;
-        }
-        .playground-response-pane {
-            background: #04060f;
-            border: 1px solid var(--border-glow);
-            border-radius: 12px;
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-        }
         .playground-response-header {
             display: flex;
             justify-content: space-between;
@@ -1257,6 +1236,89 @@
             overflow-y: auto;
             white-space: pre-wrap;
             word-break: break-all;
+        }
+
+        /* PLAYGROUND TAB (independent module) */
+        .pg-layout {
+            display: grid;
+            grid-template-columns: minmax(380px, 1.15fr) minmax(320px, 1fr);
+            gap: 18px;
+            height: calc(100vh - 230px);
+            min-height: 520px;
+        }
+        .pg-editor-pane {
+            background: var(--bg-solid);
+            border: 1px solid var(--border-glow);
+            border-radius: 14px;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            overflow-y: auto;
+        }
+        .pg-response-pane {
+            background: #04060f;
+            border: 1px solid var(--border-glow);
+            border-radius: 14px;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .pg-selects-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+        .pg-selects-grid .form-group { margin-bottom: 0; }
+        .pg-mode-tabs {
+            display: flex;
+            gap: 6px;
+            padding: 4px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+        .pg-mode-tab {
+            flex: 1;
+            padding: 7px 10px;
+            border: none;
+            border-radius: 8px;
+            background: transparent;
+            color: var(--text-muted);
+            font-size: 0.84rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+            white-space: nowrap;
+        }
+        .pg-mode-tab.active {
+            background: rgba(56, 189, 248, 0.12);
+            color: var(--color-primary);
+        }
+        .pg-msg-row {
+            display: grid;
+            grid-template-columns: 108px 1fr 32px;
+            gap: 8px;
+            align-items: start;
+        }
+        .pg-msg-row .form-control { font-size: 0.84rem; }
+        .pg-msg-body {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            overflow-y: auto;
+            min-height: 120px;
+        }
+        .pg-params-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+        .pg-params-row .form-group { margin-bottom: 0; }
+        @media (max-width: 1100px) {
+            .pg-layout { grid-template-columns: 1fr; height: auto; }
+            .pg-response-pane { min-height: 320px; }
         }
 
         /* SYSTEM TOAST */
@@ -1500,6 +1562,12 @@
                         <button :class="{ active: activeTab === 'logs' }" @click="setTab('logs')">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
                             日志监控
+                        </button>
+                    </li>
+                    <li class="nav-item">
+                        <button :class="{ active: activeTab === 'playground' }" @click="setTab('playground')">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/><line x1="5" y1="3" x2="5" y2="21"/></svg>
+                            Playground
                         </button>
                     </li>
                 </ul>
@@ -2757,7 +2825,7 @@
                             <span class="chip" :class="{ active: logStatusFilter === '401', warning: logStatusFilter === '401' }" @click="logStatusFilter = logStatusFilter === '401' ? '' : '401'">401</span>
                             <span class="chip" :class="{ active: logStatusFilter === '500', danger: logStatusFilter === '500' }" @click="logStatusFilter = logStatusFilter === '500' ? '' : '500'">5xx</span>
                             <button class="btn btn-secondary" @click="clearLogs" title="清空数据库全部日志记录">🗑️ 清理</button>
-                            <button class="btn btn-primary" @click="openPlayground">⚡ Playground</button>
+                            <button class="btn btn-primary" @click="setTab('playground')">⚡ Playground</button>
                         </div>
                     </div>
 
@@ -2806,6 +2874,157 @@
                         </table>
                     </div>
                 </template>
+            </div>
+
+            <!-- 6. PLAYGROUND tab — independent debug module -->
+            <div v-if="activeTab === 'playground'" class="tab-pane">
+                <!-- 发送通道切换 -->
+                <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
+                    <span style="font-size:0.8rem;color:var(--text-muted);">发送通道：</span>
+                    <span class="chip" :class="{ active: playground.channel === 'upstream' }" @click="playground.channel = 'upstream'"
+                          title="绕过路由链，直接用所选 Key 向所选模型的上游端点发真实请求">直测上游</span>
+                    <span class="chip" :class="{ active: playground.channel === 'gateway' }" @click="playground.channel = 'gateway'"
+                          title="以客户端身份走本地网关 /v1/chat/completions，验证完整路由链">本地网关</span>
+                    <span style="flex:1;"></span>
+                    <span style="font-size:0.76rem;color:var(--text-muted);">
+                        {{ playground.channel === 'upstream' ? '验证 平台+Key+模型 配对是否可用' : '验证 LAPI 路由链与故障转移行为' }}
+                    </span>
+                </div>
+
+                <div class="pg-layout">
+                    <!-- 左：配置 + 请求编辑 -->
+                    <div class="pg-editor-pane">
+                        <!-- 上游通道：平台 / Key / 模型 级联选择 -->
+                        <template v-if="playground.channel === 'upstream'">
+                            <div class="form-group">
+                                <label>平台 (Platform)</label>
+                                <select class="form-control" v-model="playground.platformId">
+                                    <option value="" disabled>选择平台…</option>
+                                    <option v-for="p in platforms" :key="'pgp-'+p.id" :value="String(p.id)">
+                                        {{ p.name }}{{ p.enabled ? '' : '（已禁用）' }}
+                                    </option>
+                                </select>
+                            </div>
+                            <div class="pg-selects-grid">
+                                <div class="form-group">
+                                    <label>密钥 (Key)</label>
+                                    <select class="form-control" v-model="playground.keyId">
+                                        <option :value="0">平台 Token（无 Key 时）</option>
+                                        <option v-for="k in pgKeys" :key="'pgk-'+k.id" :value="k.id">
+                                            {{ keyHealthMeta[keyHealth(k)].icon }} #{{ k.key_index }} {{ k.label || '未命名' }}{{ k.enabled ? '' : '（已禁用）' }}
+                                        </option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label>模型 (RAPI)</label>
+                                    <select class="form-control" v-model="playground.rapiId" :disabled="!playground.platformId">
+                                        <option value="" disabled>选择模型…</option>
+                                        <option v-for="rp in pgRapis" :key="'pgr-'+rp.id" :value="String(rp.id)">
+                                            {{ rp.alias }}（{{ rp.model }}）
+                                        </option>
+                                    </select>
+                                </div>
+                            </div>
+                        </template>
+                        <!-- 网关通道：LAPI 选择 -->
+                        <template v-else>
+                            <div class="form-group">
+                                <label>本地接口 (LAPI)</label>
+                                <select class="form-control" v-model="playground.lapiAlias">
+                                    <option value="" disabled>选择接口…</option>
+                                    <option v-for="l in lapis" :key="'pgl-'+l.id" :value="l.alias">
+                                        {{ l.alias }}{{ l.enabled ? '' : '（已禁用）' }}
+                                    </option>
+                                </select>
+                                <small style="color:var(--text-muted);font-size:0.77rem;margin-top:3px;display:block;">
+                                    请求将发往本地代理端口 {{ stats.proxy_port || '13579' }}，model 字段自动填接口别名
+                                </small>
+                            </div>
+                        </template>
+
+                        <!-- 对话 / 报文 双模式 -->
+                        <div class="pg-mode-tabs">
+                            <button type="button" class="pg-mode-tab" :class="{ active: playground.mode === 'chat' }" @click="pgSwitchMode('chat')">💬 对话模式</button>
+                            <button type="button" class="pg-mode-tab" :class="{ active: playground.mode === 'raw' }" @click="pgSwitchMode('raw')">📝 报文模式</button>
+                        </div>
+
+                        <!-- 对话模式：消息编辑 -->
+                        <template v-if="playground.mode === 'chat'">
+                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                <label style="font-weight:600;font-size:0.88rem;color:var(--text-secondary);">对话消息 (Messages)</label>
+                                <button class="btn btn-secondary btn-sm" @click="playground.messages.push({ role: 'user', content: '' })">+ 添加消息</button>
+                            </div>
+                            <div class="pg-msg-body">
+                                <div v-for="(m, idx) in playground.messages" :key="'pgm-'+idx" class="pg-msg-row">
+                                    <select class="form-control" v-model="m.role">
+                                        <option value="system">system</option>
+                                        <option value="user">user</option>
+                                        <option value="assistant">assistant</option>
+                                    </select>
+                                    <textarea class="form-control" rows="2" v-model="m.content"
+                                              :placeholder="m.role === 'system' ? '系统设定，如：你是一个严谨的翻译助手' : '消息内容…'"
+                                              style="font-size:0.84rem;resize:vertical;"></textarea>
+                                    <button class="btn btn-danger btn-sm btn-icon" @click="playground.messages.splice(idx, 1)"
+                                            :disabled="playground.messages.length <= 1" title="删除此条消息">
+                                        <svg style="width:12px;height:12px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="pg-params-row">
+                                <div class="form-group">
+                                    <label>Temperature (可选)</label>
+                                    <input type="number" step="0.1" min="0" max="2" class="form-control" v-model="playground.params.temperature" placeholder="如 0.7，留空则不发送">
+                                </div>
+                                <div class="form-group">
+                                    <label>Max Tokens (可选)</label>
+                                    <input type="number" step="1" min="1" class="form-control" v-model="playground.params.maxTokens" placeholder="如 1024，留空则不发送">
+                                </div>
+                            </div>
+                        </template>
+                        <!-- 报文模式：直接编辑发送内容 -->
+                        <template v-else>
+                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                <label style="font-weight:600;font-size:0.88rem;color:var(--text-secondary);">请求体 Payload (JSON)</label>
+                                <span style="font-size:0.74rem;color:var(--text-muted);">
+                                    {{ playground.channel === 'upstream' ? 'model 将按所选模型自动覆盖' : 'model 将按所选接口自动覆盖' }}
+                                </span>
+                            </div>
+                            <textarea class="form-control" rows="14" v-model="playground.rawBody"
+                                      style="font-family:var(--font-mono);font-size:0.8rem;flex:1;min-height:220px;resize:vertical;"
+                                      spellcheck="false"></textarea>
+                        </template>
+
+                        <!-- 发送选项 + 按钮 -->
+                        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding-top:4px;border-top:1px solid rgba(255,255,255,0.05);">
+                            <label class="checkbox-container" style="margin:0;gap:6px;font-size:0.8rem;" title="请求体带 stream:true；本地网关通道将实时逐块显示">
+                                <input type="checkbox" v-model="playground.stream">
+                                <span>流式输出 (Stream)</span>
+                            </label>
+                            <label v-if="playground.channel === 'upstream'" class="checkbox-container" style="margin:0;gap:6px;font-size:0.8rem;" title="2xx 成功时清除该 Key 的失败/冷却标记并解除该 Key×模型限制">
+                                <input type="checkbox" v-model="playground.clearOnSuccess">
+                                <span>成功后恢复 Key 状态</span>
+                            </label>
+                            <span style="flex:1;"></span>
+                            <button class="btn btn-primary" :disabled="playground.sending" @click="pgSend">
+                                {{ playground.sending ? '请求发送中…' : '🚀 发送请求' }}
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 右：响应面板 -->
+                    <div class="pg-response-pane">
+                        <div class="playground-response-header">
+                            <span style="font-weight:600;font-size:0.85rem;color:var(--text-secondary)">响应结果</span>
+                            <span style="display:inline-flex;align-items:center;gap:8px;">
+                                <span v-if="playground.latency" style="font-size:0.76rem;color:var(--text-muted);font-family:var(--font-mono);">{{ playground.latency }} ms</span>
+                                <span v-if="playground.status" class="badge-status" :class="playground.status < 400 ? 'active' : 'inactive'">
+                                    状态码: {{ playground.status }}
+                                </span>
+                            </span>
+                        </div>
+                        <pre class="playground-response-pre">{{ playground.response || '选择目标、填写对话信息后点击发送按钮查看上游返回…' }}</pre>
+                    </div>
+                </div>
             </div>
 
             <!-- MODALS -->
@@ -3450,50 +3669,7 @@
                 </div>
             </div>
 
-            <!-- 6. API PLAYGROUND MODAL -->
-            <div v-if="playgroundModal.show" class="modal-overlay" @click.self="closePlayground">
-                <div class="modal-container" style="max-width: 900px; width:95%;">
-                    <div class="modal-header">
-                        <h3>⚡ 本地接口 API 模拟调试中心</h3>
-                        <button class="btn btn-secondary btn-sm" @click="closePlayground">✕</button>
-                    </div>
-                    <div class="modal-body playground-modal-body">
-                        <!-- Left pane edit -->
-                        <div class="playground-editor-pane">
-                            <div class="form-group">
-                                <label>选择要测试的本地接口</label>
-                                <select class="form-control" v-model="playgroundModal.form.model">
-                                    <option v-for="l in lapis" :value="l.alias">{{ l.alias }}</option>
-                                </select>
-                            </div>
-                            <div class="form-group">
-                                <label>请求体 Payload Body (JSON 格式)</label>
-                                <textarea class="form-control" rows="12" v-model="playgroundModal.form.body"></textarea>
-                            </div>
-                            <div class="form-group">
-                                <label class="checkbox-container">
-                                    <input type="checkbox" v-model="playgroundModal.form.stream">
-                                    开启流式输出 (Stream chunks)
-                                </label>
-                            </div>
-                            <button class="btn btn-primary" :disabled="playgroundModal.sending" @click="sendPlaygroundRequest">
-                                {{ playgroundModal.sending ? '网关中继请求中...' : '🚀 发送本地代理请求' }}
-                            </button>
-                        </div>
-
-                        <!-- Right pane output -->
-                        <div class="playground-response-pane">
-                            <div class="playground-response-header">
-                                <span style="font-weight:600;font-size:0.85rem;color:var(--text-secondary)">接口流式 / 静态返回结果</span>
-                                <span v-if="playgroundModal.status" class="badge-status" :class="playgroundModal.status < 400 ? 'active' : 'inactive'">
-                                    状态码: {{ playgroundModal.status }}
-                                </span>
-                            </div>
-                            <pre class="playground-response-pre">{{ playgroundModal.response || '配置参数并点击发送按钮以查看网关转换和返回数据...' }}</pre>
-                        </div>
-                    </div>
-                </div>
-            </div>
+            <!-- 6. (removed) API PLAYGROUND MODAL — promoted to a dedicated sidebar tab -->
 
             <!-- 7. ADD WIZARD MODAL (顶栏 ＋新增：平台 → 密钥 → 模型 → 测试 → 保存) -->
             <div v-if="addWizard.show" class="modal-overlay" @click.self="closeAddWizard">
@@ -3967,7 +4143,25 @@
                 // 每个分类体独立滚动，避免大类目把其他类目挤到视线外。
                 const wizardCollapsed = reactive({ manual: false, validSelected: false, invalidSelected: false, validUnselected: false });
                 const toggleSection = (key) => { wizardCollapsed[key] = !wizardCollapsed[key]; };
-                const playgroundModal = reactive({ show: false, sending: false, status: 0, response: '', form: { model: '', body: '{\n  "messages": [\n    {\n      "role": "user",\n      "content": "用中文写一首关于API网关高可用的四句短诗。"\n    }\n  ],\n  "temperature": 0.7\n}', stream: false } });
+
+                // PLAYGROUND (independent module tab) — see pgSend/pgSwitchMode below.
+                const playground = reactive({
+                    channel: 'upstream',            // 'upstream' 直测上游 | 'gateway' 本地网关
+                    platformId: '',
+                    keyId: 0,                       // 0 = 平台 Token
+                    rapiId: '',
+                    lapiAlias: '',
+                    mode: 'chat',                   // 'chat' 对话模式 | 'raw' 报文模式
+                    messages: [{ role: 'user', content: '用中文写一首关于API网关高可用的四句短诗。' }],
+                    params: { temperature: '0.7', maxTokens: '' },
+                    rawBody: '',
+                    stream: false,
+                    clearOnSuccess: true,
+                    sending: false,
+                    status: 0,
+                    latency: 0,
+                    response: '',
+                });
 
                 // TRAFFIC CHART instance
                 let trafficChart = null;
@@ -4225,6 +4419,7 @@
                         case 'rapis': return '目标模型映射';
                         case 'lapis': return '本地路由接口 (LAPI)';
                         case 'logs': return '日志追踪与故障排查';
+                        case 'playground': return 'Playground 调试';
                         default: return 'API 网关';
                     }
                 };
@@ -4237,6 +4432,7 @@
                         case 'rapis': return '设置模型端点、Key 能力白名单与直测验证';
                         case 'lapis': return '向最终用户暴露的统一别名接口，可编排冗余容灾链';
                         case 'logs': return '查询完整的请求转发时序 Trace，深度查看 failover 详细细节';
+                        case 'playground': return '选平台 / 密钥 / 模型直测上游，或走本地网关模拟客户端请求';
                         default: return '';
                     }
                 };
@@ -6139,74 +6335,178 @@
                     return "";
                 };
 
-                // DEVELOPER PLAYGROUND
-                const openPlayground = () => {
-                    playgroundModal.form.model = lapis.value[0]?.alias || '';
-                    playgroundModal.response = '';
-                    playgroundModal.status = 0;
-                    playgroundModal.sending = false;
-                    playgroundModal.show = true;
-                };
-                const closePlayground = () => { playgroundModal.show = false; };
+                // DEVELOPER PLAYGROUND (independent tab)
+                // Keys of the selected platform (upstream channel).
+                const pgKeys = computed(() => {
+                    if (!playground.platformId) return [];
+                    return keysList.value.filter(k => String(k.platform_id) === String(playground.platformId));
+                });
+                // Models (RAPIs) of the selected platform (upstream channel).
+                const pgRapis = computed(() => {
+                    if (!playground.platformId) return [];
+                    return rapis.value.filter(rp => String(rp.platform_id) === String(playground.platformId));
+                });
+                // Platform switch → cascade reset key/model to the first healthy choice.
+                watch(() => playground.platformId, () => {
+                    const keys = pgKeys.value;
+                    const firstOk = keys.find(k => keyHealth(k) === 'healthy');
+                    playground.keyId = firstOk ? firstOk.id : (keys[0] ? keys[0].id : 0);
+                    playground.rapiId = pgRapis.value[0] ? String(pgRapis.value[0].id) : '';
+                });
+                // First entry to the tab → default platform/model/interface selection.
+                watch(() => activeTab.value, (tab) => {
+                    if (tab !== 'playground' || playground.platformId) return;
+                    playground.platformId = platforms.value[0] ? String(platforms.value[0].id) : '';
+                    playground.lapiAlias = lapis.value[0]?.alias || '';
+                    const rapisOfPlat = rapis.value.filter(rp => String(rp.platform_id) === String(playground.platformId));
+                    playground.rapiId = rapisOfPlat[0] ? String(rapisOfPlat[0].id) : '';
+                    const keys = pgKeys.value;
+                    const firstOk = keys.find(k => keyHealth(k) === 'healthy');
+                    playground.keyId = firstOk ? firstOk.id : (keys[0] ? keys[0].id : 0);
+                });
 
+                // Build the request payload from the current editor mode (chat or raw).
+                // Returns the parsed object, or null when raw JSON is invalid.
+                const pgBuildPayload = () => {
+                    if (playground.mode === 'raw') return tryParseJSON(playground.rawBody);
+                    const payload = { messages: playground.messages.map(m => ({ role: m.role, content: m.content })) };
+                    if (playground.params.temperature !== '' && playground.params.temperature !== null) payload.temperature = Number(playground.params.temperature);
+                    if (playground.params.maxTokens !== '' && playground.params.maxTokens !== null) payload.max_tokens = Number(playground.params.maxTokens);
+                    return payload;
+                };
+
+                // Switch between chat editor and raw JSON editor, syncing content both ways.
+                const pgSwitchMode = (target) => {
+                    if (target === playground.mode) return;
+                    if (target === 'raw') {
+                        // chat → raw: serialize current conversation into editable JSON.
+                        const payload = pgBuildPayload();
+                        if (payload !== null) playground.rawBody = JSON.stringify(payload, null, 2);
+                    } else {
+                        // raw → chat: parse messages back into the conversation editor.
+                        const payload = tryParseJSON(playground.rawBody);
+                        if (payload === null || !Array.isArray(payload.messages) || payload.messages.length === 0) {
+                            showToast('无法切换', '报文不是有效的对话 JSON（需含 messages 数组），请先修正。', 'error');
+                            return;
+                        }
+                        playground.messages = payload.messages
+                            .filter(m => m && typeof m.content === 'string')
+                            .map(m => ({ role: ['system', 'user', 'assistant'].includes(m.role) ? m.role : 'user', content: m.content }));
+                        if (playground.messages.length === 0) playground.messages = [{ role: 'user', content: '' }];
+                        playground.params.temperature = (payload.temperature !== undefined && payload.temperature !== null) ? String(payload.temperature) : '';
+                        playground.params.maxTokens = (payload.max_tokens !== undefined && payload.max_tokens !== null) ? String(payload.max_tokens) : '';
+                    }
+                    playground.mode = target;
+                };
+
+                // Pretty-print a response body when it's JSON; pass SSE/plain text through.
+                const pgFormatBody = (text) => {
+                    const parsed = tryParseJSON(text);
+                    return parsed !== null ? JSON.stringify(parsed, null, 2) : text;
+                };
+
+                // Logs → Playground: retry a logged request through the local gateway.
                 const testResendRequest = (detail) => {
-                    playgroundModal.form.model = detail.lapi_alias;
-                    playgroundModal.form.body = detail.request_body;
-                    playgroundModal.form.stream = detail.request_body ? (JSON.parse(detail.request_body)?.stream || false) : false;
-                    playgroundModal.response = '';
-                    playgroundModal.status = 0;
-                    playgroundModal.sending = false;
-                    playgroundModal.show = true;
+                    playground.channel = 'gateway';
+                    playground.lapiAlias = detail.lapi_alias || playground.lapiAlias;
+                    playground.mode = 'raw';
+                    playground.rawBody = detail.request_body || playground.rawBody;
+                    try { playground.stream = !!(detail.request_body && JSON.parse(detail.request_body)?.stream); } catch (_) {}
+                    playground.response = '';
+                    playground.status = 0;
+                    playground.latency = 0;
+                    setTab('playground');
                 };
 
-                const sendPlaygroundRequest = async () => {
-                    playgroundModal.sending = true;
-                    playgroundModal.response = '正在向本地 API 网关中继端口提交测试 Payload...';
-                    playgroundModal.status = 0;
-                    
-                    const payload = tryParseJSON(playgroundModal.form.body);
-                    if (payload === null) {
-                        playgroundModal.response = 'JSON 报文格式错误，请检查大括号和键值引号。';
-                        playgroundModal.sending = false;
+                const pgSend = async () => {
+                    if (playground.sending) return;
+                    // Validate channel targets first.
+                    if (playground.channel === 'upstream' && (!playground.platformId || !playground.rapiId)) {
+                        showToast('无法发送', '请先选择平台和模型', 'error');
                         return;
                     }
-                    
-                    // Inject selected model and stream settings
-                    payload.model = playgroundModal.form.model;
-                    payload.stream = playgroundModal.form.stream;
+                    if (playground.channel === 'gateway' && !playground.lapiAlias) {
+                        showToast('无法发送', '请先选择本地接口', 'error');
+                        return;
+                    }
 
+                    const payload = pgBuildPayload();
+                    if (payload === null) {
+                        playground.response = 'JSON 报文格式错误，请检查大括号和键值引号。';
+                        return;
+                    }
+
+                    playground.sending = true;
+                    playground.status = 0;
+                    playground.latency = 0;
+                    playground.response = playground.channel === 'upstream'
+                        ? '正在用所选 Key 直测上游端点...'
+                        : '正在向本地 API 网关中继端口提交测试 Payload...';
+
+                    // Inject target model + stream flag per channel.
+                    let rapi = null;
+                    if (playground.channel === 'upstream') {
+                        rapi = rapis.value.find(rp => String(rp.id) === String(playground.rapiId));
+                        payload.model = rapi ? rapi.model : '';
+                    } else {
+                        payload.model = playground.lapiAlias;
+                    }
+                    payload.stream = !!playground.stream;
+
+                    const startedAt = performance.now();
                     try {
-                        const r = await fetch(`http://localhost:${stats.value.proxy_port || 13579}/v1/chat/completions`, {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json'
-                            },
-                            body: JSON.stringify(payload)
-                        });
-                        
-                        playgroundModal.status = r.status;
-                        playgroundModal.response = '';
-                        
-                        if (playgroundModal.form.stream && r.ok) {
-                            const reader = r.body.getReader();
-                            const decoder = new TextDecoder();
-                            while(true) {
-                                const { value, done } = await reader.read();
-                                if (done) break;
-                                playgroundModal.response += decoder.decode(value, { stream: true });
+                        if (playground.channel === 'upstream') {
+                            // Direct key-model test, bypassing the routing chain.
+                            const r = await fetch('/api/rapis/test', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    rapi_id: Number(playground.rapiId),
+                                    key_id: Number(playground.keyId) || 0,
+                                    body: JSON.stringify(payload),
+                                    clear_on_success: !!playground.clearOnSuccess
+                                })
+                            });
+                            const data = await r.json().catch(() => ({}));
+                            if (data.status !== undefined) {
+                                playground.status = data.status || r.status;
+                                playground.latency = data.latency_ms || 0;
+                                playground.response = pgFormatBody(data.body || '(空响应)');
+                                if (data.cleared) {
+                                    showToast('已恢复', 'Key 直测成功，失败标记已清除，已重新加入调度池', 'success');
+                                    refreshData();
+                                }
+                            } else {
+                                playground.status = r.status || 0;
+                                playground.response = data.error ? `错误: ${data.error}` : '请求失败';
                             }
                         } else {
-                            const text = await r.text();
-                            try {
-                                playgroundModal.response = JSON.stringify(JSON.parse(text), null, 2);
-                            } catch(e) {
-                                playgroundModal.response = text;
+                            // Client-style request through the local gateway proxy.
+                            const r = await fetch(`http://localhost:${stats.value.proxy_port || 13579}/v1/chat/completions`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(payload)
+                            });
+                            playground.status = r.status;
+                            playground.response = '';
+                            if (playground.stream && r.ok) {
+                                const reader = r.body.getReader();
+                                const decoder = new TextDecoder();
+                                while (true) {
+                                    const { value, done } = await reader.read();
+                                    if (done) break;
+                                    playground.response += decoder.decode(value, { stream: true });
+                                }
+                            } else {
+                                const text = await r.text();
+                                playground.response = pgFormatBody(text);
                             }
+                            playground.latency = Math.round(performance.now() - startedAt);
                         }
                     } catch (e) {
-                        playgroundModal.response = '中继端口连接失败，请确认控制台右下角的网关处于 Active 状态。' + e.message;
+                        playground.response = (playground.channel === 'upstream' ? '直测请求失败：' : '中继端口连接失败，请确认网关处于运行状态。') + e.message;
                     } finally {
-                        playgroundModal.sending = false;
+                        playground.sending = false;
                     }
                 };
 
@@ -6485,7 +6785,7 @@
                     lapiModal, openLapiModal, closeLapiModal, openLapiFromRapi, saveLapi, deleteLapi, toggleLapi,
                     
                     // Playground
-                    playgroundModal, openPlayground, closePlayground, testResendRequest, sendPlaygroundRequest,
+                    playground, pgKeys, pgRapis, pgSwitchMode, pgSend, testResendRequest,
                     removeToast
                 };
             }
