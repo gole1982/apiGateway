@@ -1,123 +1,134 @@
-# 中心 / 端配置同步（Git 模型 · 在线更新）设计
+# 中心 / 管理 / 代理 配置同步（Supabase 轮询模型）设计
 
-- 日期：2026-09-03
+- 日期：2026-09-03（2026-09-08 重定为简化 3 组件模型）
 - 状态：设计定稿（待批准后实现）
-- 变更：托管形态由早期"REST + 中心 PG"改定为 **Git 仓库为权威中心**；§5.3 metrics 定稿为**保留**；新增 §4 Bundle 契约与导入正确性。Aiven/Supabase/Worker 降为 §9 备选。
-- 范围：新增 `cmd/publish`（Go 发现回写成 PR）、`internal/bundle`（定型契约 + 校验 + apply）、`internal/db`（`sync_state` 表）、`internal/crypto`（age 信封）、`internal/service` + `dashboard.html`（端只读视图 + 手动更新）、`internal/fsm` + `internal/scheduler`（状态重置）、新仓库 + CI。
+- 变更：由"Git 仓库为权威中心 + PR 闸门"重定为 **Supabase 中心 + 单写者管理端直写 + 代理轮询版本号**。动机：Git/PR 模型有非零合并延迟，多端并发编辑会产生重名 / 孤儿 / 删除竞态；单写者 + 写穿透 + 版本轮询把并发控制与广播机制整体绕开。原 Realtime / RLS / age 信封 / 两套件打包降级为 §9 可选硬化项。
+- 范围：中心 Supabase（定义表 + 版本号 + `get_bundle` RPC）、`internal/bundle`（Pull / Validate / Apply + `sync_state`）、`internal/service` + `dashboard.html`（管理端直写 Supabase / 代理端只读 + 轮询）、`cmd/gateway`（启动拉取 + 定时轮询 + fail-open）。
 
 ## 1. 背景与目标
 
-1 套网关、3 台机器各跑一个实例，配置（平台 / key / 模型 / 路由）需三处重复录入。目标：**在线更新**——把"定义类配置"收敛到一个中心权威源，端启动时拉取 1 次 + 支持手动更新，之后端只做**拉取 + 流量转发**。
+1 套网关、3 台机器各跑一个实例，配置（平台 / key / 模型 / 路由）需三处重复录入。目标：**在线更新**——把"定义类配置"收敛到一个中心权威源，管理端实时直写中心，代理定时拉取更新后只做**流量转发**。
 
-明确**不采用**"整体迁到在线共享数据库"：热路径每请求同步 UPSERT `rapi_metrics`/`request_trends` + 异步大字段写 `request_logs`（[db.go:54](L54) `SetMaxOpenConns(1)`+全局 `db.mu` 串行化、[storage.go:117](L117)），换远程库会把 RTT 塞进关键路径，且被动健康态跨机串扰。
+明确**不采用**"整体迁到在线共享数据库 + 热路径直读"：热路径每请求同步 UPSERT `rapi_metrics`/`request_trends` + 异步大字段写 `request_logs`（[db.go:54](L54) `SetMaxOpenConns(1)` + 全局 `db.mu` 串行化、[storage.go:117](L117)），换远程库会把 RTT 塞进关键路径，且被动健康态跨机串扰。故**只有定义类配置进中心**，健康态 / 遥测留代理本地。
 
-中心承载最终选定 **Git**：写=合并（强闸门）、版本/回滚/审计内建、全量拉取天然匹配、零自建后端、永久免费。
+中心承载最终选定 **Supabase Postgres**：托管免费、自带 PostgREST 自动 REST、零自建后端；单写者约定下不需要 Realtime / RLS / Auth，中心最轻。
 
-## 2. 权限模型（中心权威 vs 端权威）
+## 2. 权威模型（中心权威 vs 代理权威）
 
 | 数据 | 归属 | 更新时的处理 |
 |------|------|--------------|
-| **定义类**：platform(name, base_url, supported_formats, format_endpoints, custom_headers, billing_address, login_account)、platform_keys(label, key_index, expires_at, is_free；token 见 §4 密文)、rapi(alias, model, vendor/series/model_name/version/suffix, notes, base_cost, high_cost, *_limit, time_period_rules, supported_formats, custom_headers, key_ids, source)、lapi、lapi_rapi_order、tools | **中心（git main）权威** | 全量覆盖到中心值 |
-| **启用/禁用**：`platform.enabled`、`rapi.enabled`、`lapi.enabled`、`platform_keys.enabled` | **中心权威（例外）** | 覆盖到中心值；端不再提供 enabled 开关 |
-| **健康/状态类**：`available`、`unavailable_reason`、`failure_type`、`failure_reason`、`failed_at`、`key_model_blocks`、调度器内存冷却 | **端权威** | 中心不下发；更新时**显式重置**（§5.3） |
-| **遥测**：`rapi_metrics`、`request_trends`、`request_logs`、`sessions`、`log_events`、analytics | **端本地** | 不同步、**不清零**（§5.3 定稿） |
-| **密钥根**：`~/.apiGateway.key`（AES-GCM 本地存储加密） | **端本地随机** | 不同步；age 私钥另存（§4） |
+| **定义类**：platform(name, base_url, supported_formats, format_endpoints, custom_headers, billing_address, login_account)、platform_keys(label, key_index, expires_at, is_free；token 见 §4 加密)、rapi(alias, model, vendor/series/model_name/version/suffix, notes, base_cost, high_cost, *_limit, time_period_rules, supported_formats, custom_headers, key_ids, source)、lapi、lapi_rapi_order、tools | **中心（Supabase）权威** | 管理端直写中心；代理全量覆盖到中心值 |
+| **启用/禁用**：`platform.enabled`、`rapi.enabled`、`lapi.enabled`、`platform_keys.enabled` | **中心权威** | 覆盖到中心值；代理端不再提供 enabled 开关 |
+| **健康/状态类**：`available`、`unavailable_reason`、`failure_type`、`failure_reason`、`failed_at`、`key_model_blocks`、调度器内存冷却 | **代理本地权威** | 中心不下发；代理拉新版本时**显式重置**（§5.3） |
+| **遥测**：`rapi_metrics`、`request_trends`、`request_logs`、`sessions`、`log_events`、analytics | **代理本地** | 不同步、不清零 |
+| **本地存储密钥根**：`~/.apiGateway.key`（AES-GCM 本地存储加密） | **代理本地随机** | 不同步；中心密钥另配（§4.3） |
 
-`enabled`（用户意图）与 `available`（系统观察）在现有 schema 本就是两列，天然对应"中心权威 / 端权威"的切分，无需新增列。
+`enabled`（用户意图）与 `available`（系统观察）在现有 schema 本就是两列，天然对应"中心权威 / 代理权威"的切分，无需新增列。
 
-## 3. 中心 = Git 仓库
+## 3. 三组件
 
-- 私有仓 `apigw-config`。`main` = 权威快照，开**分支保护**：禁止直接 push、必须 PR + 审查、必需状态检查（CI）通过。→ 满足"中心难以被改"：改它 = 你得把 PR 合进去。
-- 布局（推荐"多源文件 + CI 产物"）：
-  - `config/{platforms,rapis,lapis,tools}/*.json` —— 人编辑、diff 友好；
-  - `bundle/schema_version` —— 契约版本；
-  - **CI（GitHub Action）** 从源文件 `models` 结构体编译出单一 `dist/bundle.json` + 计算 `version=<commit-sha>` + 跑 §4 校验，打 Release 产物。端只拉这个**已校验产物**。
-- 免费栈：私有仓 + Actions（免费额度足够个人）+ fine-grained PAT(`contents:read`) + Releases。管理表单用 GitHub 原生 Web UI 即可；Cloudflare Pages 仅在你想要更友好表单时再配，**非必需**。
+### 3.1 中心（Supabase）
 
-## 4. Bundle 契约、密钥与导入正确性
+- Postgres 定义表（镜像现有 SQLite 定义表列子集，去 runtime 列 `available` / `unavailable_reason` / `failure_type` / `failure_reason` / `failed_at` / `key_model_blocks`）。
+- `config_meta(version BIGINT, updated_at)`，**每次定义表的增删改在事务 COMMIT 时把 version +1**（commit 级触发器，非逐行——避免代理在一个逻辑 CRUD 中间拉到半应用态）。
+- `get_version()` RPC：只返回当前 `version`（一个 BIGINT）。代理轮询只调这个，便宜。
+- `get_bundle(p_version BIGINT DEFAULT NULL)` RPC：返回 `{version, bundle:{platforms, platform_keys, rapis, lapis, lapi_rapi_order, tools}}`；`p_version` 等于当前 version 时返回空体（304 等价短路），代理只在 `get_version` 发现变了时才调这个拉全量。
+- 单写者约定下**不启用 Realtime / RLS / Auth**（中心最轻）；后续要多管理并发再议（§9）。
 
-### 4.1 契约：结构化，不是"随手文件"
+### 3.2 管理（可选部署，运维者本机）
 
-- Bundle 用**一份共享 Go `bundle` 结构体**（对齐 `internal/models`）双向 `json.Marshal/Unmarshal` 生成/解析，设 `SchemaVersion`；端解析 `DisallowUnknownFields` + `Validate()`。**类型漂移在编解码当场暴露**，SQLite 列类型（`enabled`=0/1、`*_formats`=JSON-as-TEXT、时间格式）由同一结构体保证一致——这正是消解"git 存非结构化 → 导入错"的关键。
-- **引用一律业务键**（`platform.name`、`platform_id+alias`、`lapi.alias`），不用自增 id；端 apply 时解析成本地 id。
+- 现有 dashboard（`internal/service` handler + `dashboard.html`）全功能：平台 / 密钥 / 模型 / 路由 CRUD、发现模型向导、格式自动检测。
+- **定义类读/写直走 Supabase PostgREST**（同步、写穿透、失败即报错不静默）——所有 CRUD 立即反映到中心。
+- 格式检测（`apiformat.DetectFormats`）与模型发现（拉上游 `/v1/models`）在管理端本地 Go 跑，结果写中心。
+- **localhost 绑定**，不对外暴露；单一管理在线（操作纪律，§10）。
 
-### 4.2 导入正确性三道闸（替代 Postgres 静止态约束）
+### 3.3 代理（默认部署，多数机器）
 
-1. **CI 合并前校验**：每个 `rapi` 的平台存在、每条 `lapi_rapi_order` 指向存在 rapi、`(platform, alias)` 不重、`key_ids` 不悬空、`SchemaVersion` 认识。不过不许合。
-2. **端应用前校验**：拉下来完整验一遍，**全过才进单事务**；任何一条失败整体 abort、保留 last-good（§5.4）。绝不做"半推半就"式写入。
+- `cmd/gateway`：启动 Pull 一次 → 定时轮询中心 version → 变了就全量重拉 `get_bundle` → 单事务 `Apply` 到本地 SQLite → 转发。
+- 中心 / 网络不可达 → 沿用本地 last_good 缓存继续转发（**fail-open**）。
+- 面板只读：隐藏新增 / 编辑 / enabled，保留本地健康 / 指标 / 日志展示 + "手动刷新"按钮 + `current_version`。
+
+## 4. Bundle 契约、token 加密与导入正确性
+
+### 4.1 契约：结构化
+
+- Bundle 用一份共享 Go `bundle` 结构体（对齐 `internal/models`）双向 `json.Marshal/Unmarshal`，设 `SchemaVersion`；代理解析 `DisallowUnknownFields` + `Validate()`。**类型漂移在编解码当场暴露**，SQLite 列类型（`enabled`=0/1、`*_formats`=JSON-as-TEXT、时间格式）由同一结构体保证一致。
+- **引用一律业务键**（`platform.name`、`platform_id+alias`、`lapi.alias`），不用自增 id；代理 apply 时解析成本地 id。
+
+### 4.2 导入正确性
+
+1. **代理应用前校验**：拉下来完整验一遍（每条 rapi 的平台存在、`lapi_rapi_order` 指向存在 rapi、`(platform, alias)` 不重、`key_ids` 不悬空、`SchemaVersion` 认识），全过才进单事务；任一失败整体 abort、保留 last_good（§5.4）。
+2. **中心侧约束**（替代 git CI 闸）：定义表 `UNIQUE(platform.name)`、`UNIQUE(platform_id, alias)`、`FK ON DELETE CASCADE`——管理端写入时由 Postgres 当场拦重名 / 孤儿。这是多端并发场景的根治点（即便单写者约定被偶然违反也兜得住重名与引用孤儿）。
 3. **golden-file 回归**：仓库存 `bundle.json` fixture + 期望 SQLite 结果，离线跑 `applyBundle()` 回归；因文件确定性，这比对活库测还稳。
 
-### 4.3 密钥：age 信封（非对称、无 CA）
+### 4.3 token 加密
 
-- 每台机器首启生成 `age`(X25519) 密钥对；私钥本机存，公钥登记进 `config/devices`（注册即身份）。
-- token 字段 `age:<recipient-epk>:<b64-ciphertext>`，**按全体已登记设备公钥**封装 → 未登记设备连解都解不开（读鉴权密码学强制）。中心持密文、无私钥，零知识。
-- 端 import：age 私钥解出明文 token → **立即用本机 `~/.apiGateway.key` 重新 AES-GCM 加密入库**（与本地录入同路）。非对称只在边界用一次，热路径零改动。
-- **红线**：git 里**只进 age 密文，永不进明文密钥**（历史近乎不可变）；开 GitHub Secret Scanning / Push Protection 兜底。
-- 无需 CA/RA：写=受保护 PR + 审查（GitHub 账号即信任根），读=只读令牌；3 台互信设备规模下 CA/CRL 属过度设计。
+- 中心库的 token 字段**只存密文**。简化方案：一个**中心 AES-256 密钥**（`[sync].center_key`，管理端与代理端各配一份）；管理端写入前用它加密，代理端拉取后用它解出明文 → **立即用本机 `~/.apiGateway.key` 重新 AES-GCM 加密入库**（与本地录入同路），热路径零改动。
+- 硬化可选（§9）：若不想中心密钥散落所有代理，改回 age 信封（按已注册设备公钥封装，未登记设备解不开），代价是多一套密钥分发。
 
-## 5. 端应用：全量更新 + 状态重置 + 版本兜底
+## 5. 代理应用：全量更新 + 状态重置 + 版本兜底
 
 ### 5.1 触发
 
-端启动主动拉 **1 次**（不轮询）+ 控制台"手动更新"。走 GitHub API/Release 取 `dist/bundle.json`（带 `If-None-Match`/sha 短路）。
+启动拉 1 次 + **定时轮询中心 version**（间隔 `[sync].poll_interval_sec`，默认 60s）+ 控制台"手动刷新"。version 不变短路、不拉全量。
 
 ### 5.2 应用语义：业务键 diff-upsert（非 delete+reinsert）
 
-"全部更新" = 每个同步字段覆盖成中心值、中心没有的行本地删除。**禁止** `DELETE FROM rapi` 再插——`rapi_metrics`/`lapi_rapi_order`/`token_cache` 对 rapi/lapi 是 `ON DELETE CASCADE`（[db.go:140-168](L140-L168)），盲删会清空统计、重排 id。按业务键 upsert 才能"全量覆盖定义+enabled"且"只重置健康态"。
+"全部更新" = 每个同步字段覆盖成中心值、中心没有的行本地删除。**禁止** `DELETE FROM rapi` 再插——`rapi_metrics`/`lapi_rapi_order`/`token_cache` 对 rapi/lapi 是 `ON DELETE CASCADE`（[db.go:140-168](L140-L168)），盲删会清空统计、重排 id。按业务键 upsert 才能"全量覆盖定义 + enabled"且"只重置健康态"。
 
 ### 5.3 状态重置（防 FSM 出错）—— metrics 定稿保留
 
-更新事务内**显式归零健康态**：`platform.available=1`、`rapi.available=1 & unavailable_reason=''`、`platform_keys.failure_type=0/reason=''/failed_at=NULL`、清 `key_model_blocks`、**重建 scheduler 快照**（`internal/scheduler/snapshot.go`），FSM(`internal/fsm/fsm.go`) 从干净态重收敛。与既有 `DisableExpiredKeys` 启动即洗一致。
+更新事务内**显式归零健康态**：`platform.available=1`、`rapi.available=1 & unavailable_reason=''`、`platform_keys.failure_type=0/reason=''/failed_at=NULL`、清 `key_model_blocks`、**重建 scheduler 快照**（`internal/scheduler/snapshot.go`），FSM（`internal/fsm/fsm.go`）从干净态重收敛。与既有 `DisableExpiredKeys` 启动即洗一致。
 **定稿**：`rapi_metrics`/`request_trends`/`request_logs` **保留不清零**（FSM 不消费它们，重置无收益还丢历史）。
 
 ### 5.4 版本兜底（fail-open）
 
-- 端新增表 `sync_state(id=1, current_sha, last_good_sha, last_synced_at, repo_ref)`；
-- §4.2 校验通过才单事务切换并写 `last_good_sha`；
-- 拉取失败 / GitHub 不可达 / bundle 异常（如空定义集，防误删一切）→ 沿用 last-good 继续服务，绝不降级/清空；"手动更新"失败显式报错、不动现有配置。
+- 代理新增表 `sync_state(id=1, current_version, last_good_version, last_synced_at, source_url)`；
+- §4.2 校验通过才单事务切换并写 `last_good_version`；
+- 拉取失败 / 中心不可达 / bundle 异常（如空定义集，防误删一切）→ 沿用 last_good 继续服务，绝不降级 / 清空；"手动刷新"失败显式报错、不动现有配置。
 
-## 6. 发现 / 新增流程（保住功能，又不给端写权限）
+## 6. 录入 / 发现流程（管理端）
 
-核心：**常驻端进程永不持有写/发 PR 的令牌**。改中心只经"你 + 受保护 PR"。
-
-- **手动新增/编辑**：GitHub Web UI（或 Pages 表单）→ 提 PR → 你合。
-- **模型自动发现 / 格式探测**（`apiformat.DetectFormats` 等，**全部复用 Go、零重写**）：作为**管理态一次性动作**运行——
-  - 落地 A（推荐）：`cmd/publish` 在本机用 Go 跑发现，要求操作者提供**短效作用域令牌**（仅此刻、跑完即回收），生成 age 密文改动 → **开 PR**。这是"你、认证过、一次性"，非 7×24 端能力。
-  - 落地 B（更保守）：发现结果导成 JSON 文件（token 已本机 age 封好）→ 你在 UI 上传导入。连回写令牌都不给机器。
-- 合并进 main → 下次端拉取即生效（三端统一，爆炸半径=三台，故保留 git 历史/revert + §5.4 双向兜底）。
+- 管理端是**唯一写入口**：dashboard 的所有 CRUD 实时直写 Supabase，中心 version 随即在 COMMIT 时 bump，下个轮询周期各代理自动拉到新配置。
+- 模型发现 / 格式探测（`apiformat.DetectFormats`、拉上游 `/v1/models`）作为**管理端本地动作**运行（复用 Go、零重写），结果写中心。
+- **单一管理在线约定**：若两台管理同时上线且并发写，靠 §4.2 的中心 UNIQUE/FK 约束兜底重名 / 引用孤儿，但**删除竞态不保证**（A 删 p1 与 B 在 p1 下加 key 仍可能交叉）——故默认靠操作纪律只开一台管理；需强制时加 advisory lock（§10）。
 
 ## 7. 改动清单
 
-**仓库 + CI（新增）**
-1. `apigw-config` 私有仓 + `config/*.json` 布局 + `main` 分支保护。
-2. Action：源→`dist/bundle.json` 编译 + `version=sha` + §4.2 校验 + 发 Release + secret scanning。
+**中心（新增 Supabase）**
+1. 定义表（镜像 SQLite 定义表列子集）+ `config_meta.version` + commit 级 bump 触发器 + `get_bundle(version)` RPC。
 
-**端（改造）**
-3. `internal/bundle`：契约结构体（对齐 `models`）+ `Validate()` + `applyBundle()`（§5.2 upsert + §5.3 重置 + 事务）。
-4. `internal/crypto`：age 密钥对生成/私钥落盘/信封加解 + `~/.apiGateway.key` 重加密入库。
-5. GitHub raw/Release 拉取客户端（sha 短路）+ `sync_state` 表 + fail-open（§5.4）；启动拉 1 次 + "手动更新"。
-6. dashboard：隐藏"新增/编辑/enabled"，定义只读 + 保留本地状态展示（available/failure）；暴露"手动更新"与 `current_sha`。
+**代理（改造 `cmd/gateway`）**
+2. `internal/bundle`：契约结构体（对齐 `models`）+ `Validate()` + `Apply()`（§5.2 upsert + §5.3 重置 + 事务）。
+3. Supabase RPC 拉取客户端（version 短路）+ `sync_state` 表 + fail-open；启动拉 1 次 + 定时轮询 + "手动刷新"。
+4. dashboard 代理态：隐藏"新增 / 编辑 / enabled"，定义只读 + 保留本地状态展示；暴露"手动刷新"与 `current_version`。
+5. token 解密 + 本地重加密入库（§4.3）。
 
-**发布（新增）**
-7. `cmd/publish`：Go 发现（复用 `DetectFormats`）+ age 封装 + 以短效令牌开 PR（或导出文件）。
+**管理（改造 `internal/service`）**
+6. dashboard 定义类读 / 写改走 PostgREST（`Store` 接口 + `supabaseStore` 实现）；runtime 读（指标 / 日志）仍走本地 SQLite。
+7. token 写入前用中心密钥加密。
+8. localhost 绑定 + 单一在线约定。
 
 ## 8. 分步实施
 
-1. 契约定稿：`bundle` 结构体 + `SchemaVersion` + 校验清单 + golden fixture（先冻结格式）。
-2. 仓库 + CI：布局、分支保护、编译产物、校验闸。
-3. 端 applyBundle：upsert + 状态重置 + 事务 + fail-open + `sync_state`；带 fixture 回归。
-4. age 信封 + 设备注册 + `cmd/publish` 开 PR。
-5. dashboard 只读态 + "手动更新"按钮。
-6. 联调 3 机：启动拉取、手动更新、断网/GitHub 不可达兜底、FSM 重收敛回归、误改 revert 演练。
+0. 本设计文档过审（当前阶段）。
+1. 中心：Supabase 项目 + 定义表 schema + `config_meta.version` + commit 级 bump 触发器 + `get_bundle` RPC。
+2. `internal/bundle`：结构体 + Validate + Apply（upsert + 状态重置 + 事务）+ `sync_state` + fail-open + fixture 回归。
+3. 代理：`cmd/gateway` 启动 Pull + 定时轮询 version + 变更全量重拉 Apply + fail-open + 只读面板。
+4. 管理：dashboard CRUD 改 PostgREST 直写 + `Store` 接口 + 检测 / 发现本地跑写中心 + localhost。
+5. `proxy.cfg` 增 `[sync]` / `[management]`；E2E：管理 CRUD → version bump → 代理下轮拉到新配置；中心挂 → 代理 fail-open。
 
-## 9. 备选（若将来不用 Git）
+## 9. 备选 / 硬化
 
-- **Aiven 仅当 PG**：Aiven 无前端/计算托管；需 Pages+一个 Cloudflare Worker(JS) 做读写 REST；发现无法复用 Go（Worker 是 TS，须重写 `DetectFormats`）。
-- **Supabase**：Postgres + 自动 REST(PostgREST)+Auth+RLS，能替 Aiven 且免写 CRUD 后端；仍不跑 Go，发现要么 Edge Function 重写、要么 Go 端回写。
-两者都比 Git 多一套鉴权/RLS 布线且丢"合并即写闸门"，故当前不选。
+- **中心供应商**：Supabase 免费档首选（零运维）；若想更可控可自托管小服务（定义表 + version + bundle HTTP），但免费档够用。
+- **多管理并发**：当前单写者约定。若将来要多管理并发，启用 Supabase Realtime（`postgres_changes` 广播）+ RLS（按身份行级隔离）+ age 信封密钥——即本轮简化前的方案，作为硬化升级路径。
+- **token 加密**：当前中心 AES 密钥（简）；硬化改 age 信封。
 
 ## 10. 风险
 
-- `applyBundle()` 是正确性集中点（任何拉取方案都躲不开）→ 靠 §4.2 三道闸 + 事务化全有或全无 + fixture 回归收敛。
-- 编辑颗粒变粗（PR 往返）、非实时——与"人驱动、启动+手动"节奏匹配，可接受。
-- 令牌误配风险：发 PR/写令牌只出现在管理态/一次性动作，常驻端仅 `contents:read`。
+- **单管理在线靠操作纪律**：两台管理并发写时，中心 UNIQUE/FK 兜重名 / 引用孤儿，但删除竞态不保证。需强制时加 advisory lock（几行，不破坏设计）。
+- **"及时更新" = 轮询间隔延迟**：配置类 60s 够；唯一会吃延迟的场景是"作废被泄露的 key 要立刻生效"——那种才需要 push，目前轮询是正确取舍。
+- **版本号 bump 粒度**：必须 commit 级（非逐行），否则代理可能拉到半应用态；或靠 MVCC 快照读 + 下轮自愈。
+- **代理本地刷新原子性**：单事务 swap + 失败保留 last_good + fail-open，绝不半刷新。
+- `Apply()` 是正确性集中点（任何拉取方案都躲不开）→ 靠 §4.2 校验 + 事务化全有或全无 + fixture 回归收敛。
+- 中心 / 网络短时不可达 → fail-open 兜底，不中断转发；Supabase 免费档 7 天不活跃暂停，活跃使用不触发，暂停期代理继续用 last_good 转发。
