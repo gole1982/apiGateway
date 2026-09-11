@@ -38,11 +38,11 @@ func (db *DB) GetSyncState() (SyncState, error) {
 		return SyncState{}, fmt.Errorf("sync_state ddl: %w", err)
 	}
 	var (
-		st          SyncState
-		lastSynced  sql.NullTime
-		currentV    sql.NullInt64
-		lastGoodV   sql.NullInt64
-		source      sql.NullString
+		st         SyncState
+		lastSynced sql.NullTime
+		currentV   sql.NullInt64
+		lastGoodV  sql.NullInt64
+		source     sql.NullString
 	)
 	err := db.conn.QueryRow(`SELECT current_version, last_good_version, last_synced_at, source_url FROM sync_state WHERE id = 1`).
 		Scan(&currentV, &lastGoodV, &lastSynced, &source)
@@ -296,7 +296,7 @@ func (db *DB) ApplyBundle(env *bundle.Envelope, centerKey []byte, sourceURL stri
 				return fmt.Errorf("update rapi (%s,%s): %w", r.PlatformName, r.Alias, err)
 			}
 		case errors.Is(err, sql.ErrNoRows):
-				if _, err = tx.Exec(`INSERT INTO rapi
+			if _, err = tx.Exec(`INSERT INTO rapi
 						(alias, model, platform_id, enabled, available, unavailable_reason,
 						 base_cost, high_cost,
 						 rpm_limit, rph_limit, rpd_limit, tpm_limit, tph_limit, tpd_limit,
@@ -311,14 +311,14 @@ func (db *DB) ApplyBundle(env *bundle.Envelope, centerKey []byte, sourceURL stri
 					        ?,?,?,?,?,
 					        ?,?,
 					        ?,?)`,
-					r.Alias, r.Model, pid, b2i(r.Enabled),
-					r.BaseCost, r.HighCost,
-					r.RPMLimit, r.RPHLimit, r.RPDLimit, r.TPMLimit, r.TPHLimit, r.TPDLimit,
-					r.TimePeriodRules, r.SupportedFormats, r.CustomHeaders, localKeyIDs, r.Source,
-					r.Series, r.ModelName, r.Version, r.Vendor, r.Suffix, r.Notes, r.SortOrder,
-					now, now); err != nil {
-					return fmt.Errorf("insert rapi (%s,%s): %w", r.PlatformName, r.Alias, err)
-				}
+				r.Alias, r.Model, pid, b2i(r.Enabled),
+				r.BaseCost, r.HighCost,
+				r.RPMLimit, r.RPHLimit, r.RPDLimit, r.TPMLimit, r.TPHLimit, r.TPDLimit,
+				r.TimePeriodRules, r.SupportedFormats, r.CustomHeaders, localKeyIDs, r.Source,
+				r.Series, r.ModelName, r.Version, r.Vendor, r.Suffix, r.Notes, r.SortOrder,
+				now, now); err != nil {
+				return fmt.Errorf("insert rapi (%s,%s): %w", r.PlatformName, r.Alias, err)
+			}
 		default:
 			return fmt.Errorf("lookup rapi (%s,%s): %w", r.PlatformName, r.Alias, err)
 		}

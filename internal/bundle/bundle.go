@@ -34,9 +34,9 @@ type Envelope struct {
 type Bundle struct {
 	Platforms     []Platform      `json:"platforms"`
 	PlatformKeys  []PlatformKey   `json:"platform_keys"`
-	RAPIs         []RAPI           `json:"rapis"`
-	LAPIs         []LAPI           `json:"lapis"`
-	LAPIRapiOrder []LAPIRapiOrder  `json:"lapi_rapi_order"`
+	RAPIs         []RAPI          `json:"rapis"`
+	LAPIs         []LAPI          `json:"lapis"`
+	LAPIRapiOrder []LAPIRapiOrder `json:"lapi_rapi_order"`
 }
 
 // Platform —— 平台定义（业务键 Name）。token/login_password 为 center_key 密文。
@@ -85,10 +85,10 @@ type RAPI struct {
 	TPMLimit         int    `json:"tpm_limit"`
 	TPHLimit         int    `json:"tph_limit"`
 	TPDLimit         int    `json:"tpd_limit"`
-	TimePeriodRules  string `json:"time_period_rules"`  // JSON array as TEXT
-	SupportedFormats string `json:"supported_formats"`  // JSON array as TEXT（继承平台）
-	CustomHeaders    string `json:"custom_headers"`     // JSON array as TEXT
-	KeyIDs           string `json:"key_ids"`            // key_index CSV（平台内业务键）
+	TimePeriodRules  string `json:"time_period_rules"` // JSON array as TEXT
+	SupportedFormats string `json:"supported_formats"` // JSON array as TEXT（继承平台）
+	CustomHeaders    string `json:"custom_headers"`    // JSON array as TEXT
+	KeyIDs           string `json:"key_ids"`           // key_index CSV（平台内业务键）
 	Source           string `json:"source"`            // auto_discover | manual
 	Vendor           string `json:"vendor"`
 	Series           string `json:"series"`
@@ -101,14 +101,14 @@ type RAPI struct {
 
 // LAPI —— 客户端模型接口定义（业务键 Alias）。
 type LAPI struct {
-	Alias      string `json:"alias"`
-	Notes      string `json:"notes"`
-	Enabled    bool   `json:"enabled"`
-	Vendor     string `json:"vendor"`
-	Series     string `json:"series"`
-	ModelName  string `json:"model_name"`
-	Version    string `json:"version"`
-	Suffix     string `json:"suffix"`
+	Alias     string `json:"alias"`
+	Notes     string `json:"notes"`
+	Enabled   bool   `json:"enabled"`
+	Vendor    string `json:"vendor"`
+	Series    string `json:"series"`
+	ModelName string `json:"model_name"`
+	Version   string `json:"version"`
+	Suffix    string `json:"suffix"`
 }
 
 // LAPIRapiOrder —— 路由链顺序（业务键三元组）。
@@ -159,7 +159,10 @@ func Validate(env *Envelope) error {
 	}
 
 	// 密钥：(platform_name, key_index) 指向存在平台 + 去重
-	type pkKey struct{ plat string; idx int }
+	type pkKey struct {
+		plat string
+		idx  int
+	}
 	pkSeen := make(map[pkKey]struct{}, len(b.PlatformKeys))
 	pkByPlatform := make(map[string]map[int]struct{})
 	for _, k := range b.PlatformKeys {

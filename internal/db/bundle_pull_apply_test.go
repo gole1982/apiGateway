@@ -22,7 +22,7 @@ func TestSyncPullApplyE2E(t *testing.T) {
 	const remoteVersion int64 = 2
 	envelopeJSON, err := json.Marshal(map[string]any{
 		"schema_version": bundle.SchemaVersion,
-		"version":         remoteVersion,
+		"version":        remoteVersion,
 		"bundle": map[string]any{
 			"platforms": []map[string]any{{
 				"name": "openai", "base_url": "https://api.openai.com",
