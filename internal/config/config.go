@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/ini.v1"
 )
@@ -53,6 +54,29 @@ type Config struct {
 	LogLevel    string
 	LogFile     bool
 	LogFilePath string
+
+	// Sync（代理端读路径，对应 [sync] 段）。配置了 source_url 才启用中心同步；
+	// 否则网关以纯本地模式运行。设计：docs/superpowers/specs/2026-09-03-center-edge-config-sync-design.md
+	Sync Sync
+}
+
+// Sync 描述代理端从中心 Supabase 拉取定义快照的参数。
+//
+//   - SourceURL / VersionURL：Supabase PostgREST 的 get_bundle / get_version RPC 全 URL
+//   - AnonKey：Supabase anon 公钥（只读，可放代理端）
+//   - CenterKey：32 字节 hex，token 边界解密用（管理端写入中心时用同一把加密）
+//   - PollIntervalSec：代理轮询中心版本号的间隔（默认 60s）
+type Sync struct {
+	SourceURL       string
+	VersionURL      string
+	AnonKey         string
+	CenterKey       string
+	PollIntervalSec int
+}
+
+// Enabled 表示是否启用中心同步（配了 source_url 即启用）。
+func (s Sync) Enabled() bool {
+	return strings.TrimSpace(s.SourceURL) != ""
 }
 
 func Load() (*Config, error) {
@@ -80,6 +104,7 @@ func Load() (*Config, error) {
 			LogLevel:           "info",
 			LogFile:            false,
 			LogFilePath:        "logs/gateway.log",
+			Sync:               Sync{PollIntervalSec: 60},
 		}, nil
 	}
 
@@ -99,5 +124,12 @@ func Load() (*Config, error) {
 		LogLevel:           cfg.Section("log").Key("level").MustString("info"),
 		LogFile:            cfg.Section("log").Key("file").MustBool(false),
 		LogFilePath:        cfg.Section("log").Key("file_path").MustString("logs/gateway.log"),
+		Sync: Sync{
+			SourceURL:       cfg.Section("sync").Key("source_url").MustString(""),
+			VersionURL:      cfg.Section("sync").Key("version_url").MustString(""),
+			AnonKey:         cfg.Section("sync").Key("anon_key").MustString(""),
+			CenterKey:       cfg.Section("sync").Key("center_key").MustString(""),
+			PollIntervalSec: cfg.Section("sync").Key("poll_interval_sec").MustInt(60),
+		},
 	}, nil
 }

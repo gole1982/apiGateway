@@ -37,20 +37,55 @@ func Init() error {
 	return nil
 }
 
-// Encrypt encrypts plaintext using AES-256-GCM and returns a hex-encoded ciphertext
-// in the format "enc:<nonce_hex><ciphertext_hex>".
+// Encrypt encrypts plaintext using AES-256-GCM with the local active key and returns a
+// hex-encoded ciphertext in the format "enc:<nonce_hex><ciphertext_hex>".
 // An empty plaintext is returned unchanged (no empty-string ciphertext).
 func Encrypt(plaintext string) (string, error) {
-	if plaintext == "" {
-		return "", nil
-	}
 	mu.RLock()
 	key := activeKey
 	mu.RUnlock()
+	return encryptWithKey(plaintext, key)
+}
+
+// Decrypt decrypts a value produced by Encrypt (local key). Values that do not carry the
+// "enc:" prefix are returned as-is (transparent plaintext pass-through for legacy rows).
+func Decrypt(ciphertext string) (string, error) {
+	mu.RLock()
+	key := activeKey
+	mu.RUnlock()
+	return decryptWithKey(ciphertext, key)
+}
+
+// EncryptWithKey / DecryptWithKey 用显式 key 加解密，供中心库密文 ↔ 本地密文的
+// 边界转换：管理端写入中心前用 center_key 加密；代理 Apply 拉到中心密文后用
+// center_key 解出明文，再用本地 active key 重新加密入库。格式与 Encrypt/Decrypt 一致。
+func EncryptWithKey(plaintext string, key []byte) (string, error) {
+	return encryptWithKey(plaintext, key)
+}
+
+func DecryptWithKey(ciphertext string, key []byte) (string, error) {
+	return decryptWithKey(ciphertext, key)
+}
+
+// ParseKey 把 hex 编码的 32 字节密钥文本解析为原始 key（center_key 配置用）。
+func ParseKey(hexKey string) ([]byte, error) {
+	key, err := hex.DecodeString(strings.TrimSpace(hexKey))
+	if err != nil {
+		return nil, fmt.Errorf("crypto: parse key: %w", err)
+	}
+	if len(key) != 32 {
+		return nil, fmt.Errorf("crypto: key must be 32 bytes, got %d", len(key))
+	}
+	return key, nil
+}
+
+func encryptWithKey(plaintext string, key []byte) (string, error) {
+	if plaintext == "" {
+		return "", nil
+	}
 	if len(key) == 0 {
 		return "", errors.New("crypto: key not initialised")
 	}
-
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return "", err
@@ -59,19 +94,15 @@ func Encrypt(plaintext string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-
 	nonce := make([]byte, gcm.NonceSize())
 	if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
 		return "", err
 	}
-
 	sealed := gcm.Seal(nonce, nonce, []byte(plaintext), nil)
 	return "enc:" + hex.EncodeToString(sealed), nil
 }
 
-// Decrypt decrypts a value produced by Encrypt. Values that do not carry the "enc:" prefix
-// are returned as-is (transparent plaintext pass-through for legacy / migration rows).
-func Decrypt(ciphertext string) (string, error) {
+func decryptWithKey(ciphertext string, key []byte) (string, error) {
 	if ciphertext == "" {
 		return "", nil
 	}
@@ -79,19 +110,13 @@ func Decrypt(ciphertext string) (string, error) {
 		// Plaintext legacy value — return unchanged.
 		return ciphertext, nil
 	}
-
-	mu.RLock()
-	key := activeKey
-	mu.RUnlock()
 	if len(key) == 0 {
 		return "", errors.New("crypto: key not initialised")
 	}
-
 	data, err := hex.DecodeString(strings.TrimPrefix(ciphertext, "enc:"))
 	if err != nil {
 		return "", fmt.Errorf("crypto: hex decode: %w", err)
 	}
-
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return "", err
@@ -100,7 +125,6 @@ func Decrypt(ciphertext string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-
 	ns := gcm.NonceSize()
 	if len(data) < ns {
 		return "", errors.New("crypto: ciphertext too short")

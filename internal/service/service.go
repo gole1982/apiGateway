@@ -346,6 +346,10 @@ func (s *Service) Run() error {
 		}
 	}()
 
+	// 中心配置同步（代理端读路径）：配了 [sync] source_url 才启用，
+	// 启动拉 1 次 + 定时轮询版本；失败沿用本地 last_good（fail-open）。
+	startSyncLoop(s.stopCh, cfg.Sync)
+
 	// Startup health recovery: probe every RAPI persisted as unavailable and
 	// restore the ones that respond. Runs async so it never blocks serving.
 	if cfg.RetryOnStartup {
@@ -414,6 +418,10 @@ func createWebHandler() http.Handler {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Write([]byte(dashboardHTML))
 	})
+
+	// 中心同步状态 + 手动刷新（设计 §5.1）。只读，定义类 CRUD 在代理端按需只读化。
+	mux.HandleFunc("/api/sync/state", handleSyncState)
+	mux.HandleFunc("/api/sync/refresh", handleSyncRefresh)
 
 	// RAPI endpoints
 	mux.HandleFunc("/api/rapis", func(w http.ResponseWriter, r *http.Request) {
@@ -2345,7 +2353,8 @@ func createWebHandler() http.Handler {
 		w.Write([]byte(`{"success":true}`))
 	})
 
-	return mux
+	// 启用中心同步(代理角色)时拦截定义类写操作，只放行本地健康/探测动作。
+	return withProxyReadOnlyGuard(mux)
 }
 
 //go:embed dashboard.html
