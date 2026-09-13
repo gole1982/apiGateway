@@ -26,6 +26,7 @@ import (
 	"gateway/internal/notify"
 	"gateway/internal/scheduler"
 	"gateway/internal/store"
+	"gateway/internal/supabase"
 )
 
 // ============ Security / Input Validation ============
@@ -350,9 +351,40 @@ func (s *Service) Run() error {
 		}
 	}()
 
-	// 中心配置同步（代理端读路径）：配了 [sync] source_url 才启用，
-	// 启动拉 1 次 + 定时轮询版本；失败沿用本地 last_good（fail-open）。
-	startSyncLoop(s.stopCh, cfg.Sync)
+	// 中心配置同步（读路径）+ 管理模式（写路径）。
+	// 转发机配 [sync]（只读拉取）；管理机配 [management]（定义类 CRUD 直写中心，
+	// 写成功后立即拉回刷新本地镜像；拉取配置由 [management] 派生）。
+	syncCfg := cfg.Sync
+	if cfg.Management.Configured() {
+		var mgmtMu sync.Mutex
+		sup, err := supabase.New(supabase.Config{
+			URL:        cfg.Management.SupabaseURL,
+			ServiceKey: cfg.Management.ServiceKey,
+			CenterKey:  cfg.Management.CenterKey,
+		}, func() {
+			mgmtMu.Lock()
+			defer mgmtMu.Unlock()
+			_ = syncOnce() // 写后立即拉回，管理机本地镜像即时一致
+		})
+		if err != nil {
+			logger.DefaultConsole().Error("service", "[MGMT] invalid [management] config, falling back to local store",
+				"error", err.Error())
+		} else {
+			store.Use(sup)
+			manageMode = true
+			base := strings.TrimSuffix(strings.TrimSpace(cfg.Management.SupabaseURL), "/")
+			syncCfg = config.Sync{
+				SourceURL:       base + "/rest/v1/rpc/get_bundle",
+				VersionURL:      base + "/rest/v1/rpc/get_version",
+				AnonKey:         cfg.Management.ServiceKey,
+				CenterKey:       cfg.Management.CenterKey,
+				PollIntervalSec: cfg.Sync.PollIntervalSec,
+			}
+			logger.DefaultConsole().Info("service", "[MGMT] management mode: definitions write through to center",
+				"center", base)
+		}
+	}
+	startSyncLoop(s.stopCh, syncCfg)
 
 	// Startup health recovery: probe every RAPI persisted as unavailable and
 	// restore the ones that respond. Runs async so it never blocks serving.

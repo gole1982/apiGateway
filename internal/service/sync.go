@@ -25,6 +25,7 @@ var (
 	syncCenterKey  []byte
 	syncSourceURL  string
 	syncConfigured bool
+	manageMode     bool // 管理模式：定义类写直写中心，只读守卫放行
 )
 
 // startSyncLoop 初始化并启动中心同步。cfg.Sync 未配置（无 source_url）时直接返回，
@@ -169,10 +170,11 @@ func handleSyncRefresh(w http.ResponseWriter, r *http.Request) {
 
 // withProxyReadOnlyGuard 在启用了中心同步（代理角色）时拦截定义类写操作。
 // 只放行本地健康/探测类变更；定义类 CRUD 由管理端负责。设计 §3.3 / §6。
+// 管理模式（manageMode）定义类写放行——那正是管理端的职责。
 // 未配置同步（独立模式）时全放行，无回归。
 func withProxyReadOnlyGuard(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !syncConfigured || !isMutating(r.Method) || proxyMutationAllowed(r.URL.Path, r.Method) {
+		if !syncConfigured || manageMode || !isMutating(r.Method) || proxyMutationAllowed(r.URL.Path, r.Method) {
 			h.ServeHTTP(w, r)
 			return
 		}

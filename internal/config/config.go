@@ -58,6 +58,27 @@ type Config struct {
 	// Sync（代理端读路径，对应 [sync] 段）。配置了 source_url 才启用中心同步；
 	// 否则网关以纯本地模式运行。设计：docs/superpowers/specs/2026-09-03-center-edge-config-sync-design.md
 	Sync Sync
+
+	// Management（管理端写路径，对应 [management] 段）。配置了 supabase_url 即
+	// 管理模式：dashboard 定义类 CRUD 经 PostgREST 直写中心，本地仅作运行时镜像。
+	// 勿与 [sync] 混用同一台机器两种角色：管理机配 [management]，转发机配 [sync]。
+	Management Management
+}
+
+// Management 描述管理端直写中心的参数。
+//
+//   - SupabaseURL：项目根 URL（https://xxx.supabase.co）
+//   - ServiceKey：service_role / sb_secret_… 私钥（读写全表；只放管理机）
+//   - CenterKey：32 字节 hex，token 边界加解密（与各代理 [sync].center_key 一致）
+type Management struct {
+	SupabaseURL string
+	ServiceKey  string
+	CenterKey   string
+}
+
+// Configured 表示是否启用管理模式。
+func (m Management) Configured() bool {
+	return strings.TrimSpace(m.SupabaseURL) != ""
 }
 
 // Sync 描述代理端从中心 Supabase 拉取定义快照的参数。
@@ -105,6 +126,7 @@ func Load() (*Config, error) {
 			LogFile:            false,
 			LogFilePath:        "logs/gateway.log",
 			Sync:               Sync{PollIntervalSec: 60},
+			Management:         Management{},
 		}, nil
 	}
 
@@ -130,6 +152,11 @@ func Load() (*Config, error) {
 			AnonKey:         cfg.Section("sync").Key("anon_key").MustString(""),
 			CenterKey:       cfg.Section("sync").Key("center_key").MustString(""),
 			PollIntervalSec: cfg.Section("sync").Key("poll_interval_sec").MustInt(60),
+		},
+		Management: Management{
+			SupabaseURL: cfg.Section("management").Key("supabase_url").MustString(""),
+			ServiceKey:  cfg.Section("management").Key("service_key").MustString(""),
+			CenterKey:   cfg.Section("management").Key("center_key").MustString(""),
 		},
 	}, nil
 }
