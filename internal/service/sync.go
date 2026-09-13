@@ -168,6 +168,57 @@ func handleSyncRefresh(w http.ResponseWriter, r *http.Request) {
 	handleSyncState(w, r) // 成功后返回最新状态
 }
 
+// handleSyncCenter GET /api/sync/center —— 仪表盘的中心状态卡：连通性 + 各表
+// 统计 + 是否同步。一次 get_bundle 全量拉取（几十 KB）同时拿到连通性、中心版本、
+// 五张定义表行数；in_sync = 中心版本 == 本地 last_good 版本。
+// p_version=-1 永不相等 → 中心总是返回全量（不走短路）。
+func handleSyncCenter(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if !syncConfigured {
+		_ = json.NewEncoder(w).Encode(map[string]any{"enabled": false})
+		return
+	}
+	out := map[string]any{"enabled": true}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	env, err := syncClient.PullBundle(ctx, -1)
+	if err != nil {
+		out["connected"] = false
+		out["error"] = err.Error()
+		_ = json.NewEncoder(w).Encode(out)
+		return
+	}
+	out["connected"] = true
+	out["tables"] = map[string]int{
+		"platform":        len(env.Bundle.Platforms),
+		"platform_keys":   len(env.Bundle.PlatformKeys),
+		"rapi":            len(env.Bundle.RAPIs),
+		"lapi":            len(env.Bundle.LAPIs),
+		"lapi_rapi_order": len(env.Bundle.LAPIRapiOrder),
+	}
+
+	st, err := db.Get().GetSyncState()
+	if err != nil {
+		out["error"] = "local sync_state: " + err.Error()
+		_ = json.NewEncoder(w).Encode(out)
+		return
+	}
+	out["center_version"] = env.Version
+	out["local_version"] = st.LastGoodVersion
+	out["in_sync"] = env.Version == st.LastGoodVersion
+	if !st.LastSyncedAt.IsZero() {
+		out["last_synced_at"] = st.LastSyncedAt.Format(time.RFC3339)
+	}
+	_ = json.NewEncoder(w).Encode(out)
+}
+
 // withProxyReadOnlyGuard 在启用了中心同步（代理角色）时拦截定义类写操作。
 // 只放行本地健康/探测类变更；定义类 CRUD 由管理端负责。设计 §3.3 / §6。
 // 管理模式（manageMode）定义类写放行——那正是管理端的职责。

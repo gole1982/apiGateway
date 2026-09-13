@@ -458,6 +458,8 @@ func createWebHandler() http.Handler {
 	// 中心同步状态 + 手动刷新（设计 §5.1）。只读，定义类 CRUD 在代理端按需只读化。
 	mux.HandleFunc("/api/sync/state", handleSyncState)
 	mux.HandleFunc("/api/sync/refresh", handleSyncRefresh)
+	// 中心连通性 + 各表统计 + 是否同步（仪表盘状态卡）。
+	mux.HandleFunc("/api/sync/center", handleSyncCenter)
 
 	// RAPI endpoints
 	mux.HandleFunc("/api/rapis", func(w http.ResponseWriter, r *http.Request) {

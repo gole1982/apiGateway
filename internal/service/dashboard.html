@@ -1508,6 +1508,38 @@
                         </template>
                     </div>
                 </div>
+                <div class="unread-wrap" v-if="syncCenter.enabled">
+                    <button class="topbar-icon" @click="toggleSyncPanel" title="中心（Supabase）同步状态">
+                        <span :style="{ color: syncDotColor, fontSize: '15px' }">☁</span>
+                        <span v-if="!syncCenter.connected || !syncCenter.in_sync" class="unread-dot" style="background:#e5484d;"></span>
+                    </button>
+                    <div v-if="syncPanelOpen" class="unread-panel" style="width:320px;">
+                        <div class="unread-panel-header">
+                            <span>中心同步（Supabase）</span>
+                            <button class="btn btn-secondary btn-sm" @click="syncNow">立即同步</button>
+                        </div>
+                        <template v-if="syncCenter.connected">
+                            <div style="display:flex;justify-content:space-between;padding:10px 14px 4px;">
+                                <span>连通性</span>
+                                <span style="color:#46a758;">● 已连通</span>
+                            </div>
+                            <div style="display:flex;justify-content:space-between;padding:4px 14px 10px;">
+                                <span>同步状态</span>
+                                <span :style="{ color: syncCenter.in_sync ? '#46a758' : '#f5a524' }">{{ syncCenter.in_sync ? '✓ 已同步' : '⚠ 待同步（本地 v' + syncCenter.local_version + ' / 中心 v' + syncCenter.center_version + '）' }}</span>
+                            </div>
+                            <div class="unread-menu-title" style="padding:0 14px 6px;">中心各表统计</div>
+                            <div style="padding:0 14px 12px;">
+                                <div style="display:flex;justify-content:space-between;padding:3px 0;"><span>平台（platform）</span><span>{{ syncCenter.tables?.platform }}</span></div>
+                                <div style="display:flex;justify-content:space-between;padding:3px 0;"><span>密钥（platform_keys）</span><span>{{ syncCenter.tables?.platform_keys }}</span></div>
+                                <div style="display:flex;justify-content:space-between;padding:3px 0;"><span>上游模型（rapi）</span><span>{{ syncCenter.tables?.rapi }}</span></div>
+                                <div style="display:flex;justify-content:space-between;padding:3px 0;"><span>客户端模型（lapi）</span><span>{{ syncCenter.tables?.lapi }}</span></div>
+                                <div style="display:flex;justify-content:space-between;padding:3px 0;"><span>路由链（lapi_rapi_order）</span><span>{{ syncCenter.tables?.lapi_rapi_order }}</span></div>
+                            </div>
+                            <div v-if="syncCenter.last_synced_at" class="unread-menu-title" style="padding:0 14px 10px;">上次同步：{{ new Date(syncCenter.last_synced_at).toLocaleString() }}</div>
+                        </template>
+                        <div v-else style="padding:16px 14px;color:#e5484d;">✕ 中心离线：{{ syncCenter.error }}</div>
+                    </div>
+                </div>
                 <button class="btn btn-primary btn-sm" @click="openAddWizard">＋ 新增</button>
                 <a class="topbar-icon" href="https://github.com/gole1982/apiGateway" target="_blank" rel="noopener noreferrer" title="GitHub 项目主页"
                    style="display:inline-flex;align-items:center;justify-content:center;text-decoration:none;color:inherit;">
@@ -6659,6 +6691,33 @@
                 };
 
                 // INITIAL MOUNT
+                // ── 中心（Supabase）同步状态卡：连通性 + 各表统计 + 是否同步 ──
+                const syncCenter = ref({ enabled: false, connected: false, in_sync: false, center_version: 0, local_version: 0, tables: {}, error: '', last_synced_at: null });
+                const syncPanelOpen = ref(false);
+                const fetchSyncCenter = async () => {
+                    try {
+                        const r = await fetch('/api/sync/center');
+                        syncCenter.value = await r.json();
+                    } catch (e) {
+                        syncCenter.value = { ...syncCenter.value, connected: false, error: String(e) };
+                    }
+                };
+                const toggleSyncPanel = () => {
+                    syncPanelOpen.value = !syncPanelOpen.value;
+                    if (syncPanelOpen.value) fetchSyncCenter();
+                };
+                const syncNow = async () => {
+                    try { await fetch('/api/sync/refresh', { method: 'POST' }); } catch (e) { /* 面板会显示离线 */ }
+                    await fetchSyncCenter();
+                    refreshData();
+                };
+                const syncDotColor = computed(() => {
+                    const s = syncCenter.value;
+                    if (!s.enabled) return '#666';
+                    if (!s.connected) return '#e5484d';
+                    return s.in_sync ? '#46a758' : '#f5a524';
+                });
+
                 onMounted(() => {
                     loadStats();
                     loadDashboard();
@@ -6669,7 +6728,9 @@
                     loadKeys();
                     loadUnread();
                     setupSSE();
+                    fetchSyncCenter();
 
+                    setInterval(fetchSyncCenter, 30000);
                     setInterval(loadStats, 10000);
                     setInterval(loadDashboard, 30000);
                     setInterval(loadInsights, 30000);
@@ -6685,6 +6746,12 @@
                     getTabSubtitle,
                     gatewayLive,
                     stats,
+                    syncCenter,
+                    syncPanelOpen,
+                    toggleSyncPanel,
+                    syncNow,
+                    fetchSyncCenter,
+                    syncDotColor,
                     platforms,
                     rapis,
                     lapis,
