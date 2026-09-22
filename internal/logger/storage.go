@@ -54,7 +54,14 @@ func (s *LogStorage) InitTables() error {
 			retry_count INTEGER DEFAULT 0,
 			fallback_used BOOLEAN DEFAULT FALSE,
 			status TEXT DEFAULT 'pending',
-			completed_at DATETIME
+			completed_at DATETIME,
+			input_tokens INTEGER DEFAULT 0,
+			output_tokens INTEGER DEFAULT 0,
+			cached_tokens INTEGER DEFAULT 0,
+			ttft_ms INTEGER DEFAULT 0,
+			rest_latency_ms INTEGER DEFAULT 0,
+			selected_key_id INTEGER DEFAULT 0,
+			selected_platform_id INTEGER DEFAULT 0
 		);
 
 		CREATE TABLE IF NOT EXISTS log_events (
@@ -82,6 +89,14 @@ func (s *LogStorage) InitTables() error {
 	for _, col := range []string{
 		"ALTER TABLE request_logs ADD COLUMN req_max_tokens INTEGER DEFAULT 0",
 		"ALTER TABLE request_logs ADD COLUMN finish_reason TEXT",
+		// 2026-09 指标埋点：token 明细 / TTFT / 剩余延迟 / 实际使用的 key 与平台。
+		"ALTER TABLE request_logs ADD COLUMN input_tokens INTEGER DEFAULT 0",
+		"ALTER TABLE request_logs ADD COLUMN output_tokens INTEGER DEFAULT 0",
+		"ALTER TABLE request_logs ADD COLUMN cached_tokens INTEGER DEFAULT 0",
+		"ALTER TABLE request_logs ADD COLUMN ttft_ms INTEGER DEFAULT 0",
+		"ALTER TABLE request_logs ADD COLUMN rest_latency_ms INTEGER DEFAULT 0",
+		"ALTER TABLE request_logs ADD COLUMN selected_key_id INTEGER DEFAULT 0",
+		"ALTER TABLE request_logs ADD COLUMN selected_platform_id INTEGER DEFAULT 0",
 	} {
 		s.db.Conn().Exec(col) // ignore "duplicate column" errors
 	}
@@ -120,8 +135,9 @@ func (s *LogStorage) SaveRequestLog(log *RequestLog) error {
 			request_headers, request_body, req_max_tokens, lapi_alias, matched_rapis, selected_rapi,
 			upstream_url, upstream_headers, upstream_body, response_status,
 			response_headers, response_body, latency_ms, tokens_used, finish_reason, error_message,
-			retry_count, fallback_used, status, completed_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			retry_count, fallback_used, status, completed_at,
+			input_tokens, output_tokens, cached_tokens, ttft_ms, rest_latency_ms, selected_key_id, selected_platform_id
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			session_id      = CASE WHEN excluded.session_id      != '' THEN excluded.session_id      ELSE request_logs.session_id      END,
 			client_ip       = CASE WHEN excluded.client_ip       != '' THEN excluded.client_ip       ELSE request_logs.client_ip       END,
@@ -146,13 +162,22 @@ func (s *LogStorage) SaveRequestLog(log *RequestLog) error {
 			retry_count     = CASE WHEN excluded.retry_count      > 0  THEN excluded.retry_count      ELSE request_logs.retry_count      END,
 			fallback_used   = CASE WHEN excluded.fallback_used         THEN excluded.fallback_used    ELSE request_logs.fallback_used    END,
 			status          = CASE WHEN excluded.status NOT IN ('', 'pending') THEN excluded.status   ELSE request_logs.status          END,
-			completed_at    = CASE WHEN excluded.status NOT IN ('', 'pending') THEN excluded.completed_at ELSE request_logs.completed_at END
+			completed_at    = CASE WHEN excluded.status NOT IN ('', 'pending') THEN excluded.completed_at ELSE request_logs.completed_at END,
+			input_tokens        = CASE WHEN excluded.input_tokens        > 0 THEN excluded.input_tokens        ELSE request_logs.input_tokens        END,
+			output_tokens       = CASE WHEN excluded.output_tokens       > 0 THEN excluded.output_tokens       ELSE request_logs.output_tokens       END,
+			cached_tokens       = CASE WHEN excluded.cached_tokens       > 0 THEN excluded.cached_tokens       ELSE request_logs.cached_tokens       END,
+			ttft_ms             = CASE WHEN excluded.ttft_ms             > 0 THEN excluded.ttft_ms             ELSE request_logs.ttft_ms             END,
+			rest_latency_ms     = CASE WHEN excluded.rest_latency_ms     > 0 THEN excluded.rest_latency_ms     ELSE request_logs.rest_latency_ms     END,
+			selected_key_id     = CASE WHEN excluded.selected_key_id     > 0 THEN excluded.selected_key_id     ELSE request_logs.selected_key_id     END,
+			selected_platform_id= CASE WHEN excluded.selected_platform_id > 0 THEN excluded.selected_platform_id ELSE request_logs.selected_platform_id END
 	`,
 		log.ID, log.SessionID, log.Timestamp, log.ClientIP, log.RequestMethod, log.RequestPath,
 		log.RequestHeaders, log.RequestBody, log.ReqMaxTokens, log.LapiAlias, log.MatchedRAPIs, log.SelectedRAPI,
 		log.UpstreamURL, log.UpstreamHeaders, log.UpstreamBody, log.ResponseStatus,
 		log.ResponseHeaders, log.ResponseBody, log.LatencyMS, log.TokensUsed, log.FinishReason, log.ErrorMessage,
 		log.RetryCount, log.FallbackUsed, log.Status, log.CompletedAt,
+		log.InputTokens, log.OutputTokens, log.CachedTokens, log.TTFTMS, log.RestLatencyMS,
+		log.SelectedKeyID, log.SelectedPlatformID,
 	)
 	return err
 }
@@ -237,12 +262,39 @@ type RequestLogFilter struct {
 	Offset       int
 }
 
+// requestLogCols is the canonical request_logs SELECT column list (insert
+// order of SaveRequestLog). Keep scanRequestLog in sync with it.
+const requestLogCols = `id, session_id, timestamp, client_ip, request_method, request_path,
+	request_headers, request_body, req_max_tokens, lapi_alias, matched_rapis, selected_rapi,
+	upstream_url, upstream_headers, upstream_body, response_status,
+	response_headers, response_body, latency_ms, tokens_used, finish_reason, error_message,
+	retry_count, fallback_used, status, completed_at,
+	input_tokens, output_tokens, cached_tokens, ttft_ms, rest_latency_ms, selected_key_id, selected_platform_id`
+
+// scanRequestLog scans one request_logs row (requestLogCols order) into a RequestLog.
+func scanRequestLog(rows *sql.Rows) (*RequestLog, error) {
+	var log RequestLog
+	var completedAt sql.NullTime
+	err := rows.Scan(
+		&log.ID, &log.SessionID, &log.Timestamp, &log.ClientIP, &log.RequestMethod, &log.RequestPath,
+		&log.RequestHeaders, &log.RequestBody, &log.ReqMaxTokens, &log.LapiAlias, &log.MatchedRAPIs, &log.SelectedRAPI,
+		&log.UpstreamURL, &log.UpstreamHeaders, &log.UpstreamBody, &log.ResponseStatus,
+		&log.ResponseHeaders, &log.ResponseBody, &log.LatencyMS, &log.TokensUsed, &log.FinishReason, &log.ErrorMessage,
+		&log.RetryCount, &log.FallbackUsed, &log.Status, &completedAt,
+		&log.InputTokens, &log.OutputTokens, &log.CachedTokens, &log.TTFTMS, &log.RestLatencyMS,
+		&log.SelectedKeyID, &log.SelectedPlatformID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if completedAt.Valid {
+		log.CompletedAt = completedAt.Time
+	}
+	return &log, nil
+}
+
 func (s *LogStorage) GetRequestLogs(filter RequestLogFilter) ([]RequestLog, error) {
-	query := `SELECT id, session_id, timestamp, client_ip, request_method, request_path,
-		request_headers, request_body, req_max_tokens, lapi_alias, matched_rapis, selected_rapi,
-		upstream_url, upstream_headers, upstream_body, response_status,
-		response_headers, response_body, latency_ms, tokens_used, finish_reason, error_message,
-		retry_count, fallback_used, status, completed_at FROM request_logs WHERE 1=1`
+	query := `SELECT ` + requestLogCols + ` FROM request_logs WHERE 1=1`
 	args := []interface{}{}
 
 	if filter.SessionID != "" {
@@ -285,22 +337,11 @@ func (s *LogStorage) GetRequestLogs(filter RequestLogFilter) ([]RequestLog, erro
 
 	logs := make([]RequestLog, 0)
 	for rows.Next() {
-		var log RequestLog
-		var completedAt sql.NullTime
-		err := rows.Scan(
-			&log.ID, &log.SessionID, &log.Timestamp, &log.ClientIP, &log.RequestMethod, &log.RequestPath,
-			&log.RequestHeaders, &log.RequestBody, &log.ReqMaxTokens, &log.LapiAlias, &log.MatchedRAPIs, &log.SelectedRAPI,
-			&log.UpstreamURL, &log.UpstreamHeaders, &log.UpstreamBody, &log.ResponseStatus,
-			&log.ResponseHeaders, &log.ResponseBody, &log.LatencyMS, &log.TokensUsed, &log.FinishReason, &log.ErrorMessage,
-			&log.RetryCount, &log.FallbackUsed, &log.Status, &completedAt,
-		)
+		lg, err := scanRequestLog(rows)
 		if err != nil {
 			return nil, err
 		}
-		if completedAt.Valid {
-			log.CompletedAt = completedAt.Time
-		}
-		logs = append(logs, log)
+		logs = append(logs, *lg)
 	}
 	return logs, nil
 }
@@ -310,11 +351,7 @@ func (s *LogStorage) GetRequestDetail(requestID string) (*RequestLog, error) {
 	var completedAt sql.NullTime
 
 	err := s.db.Conn().QueryRow(`
-		SELECT id, session_id, timestamp, client_ip, request_method, request_path,
-			request_headers, request_body, req_max_tokens, lapi_alias, matched_rapis, selected_rapi,
-			upstream_url, upstream_headers, upstream_body, response_status,
-			response_headers, response_body, latency_ms, tokens_used, finish_reason, error_message,
-			retry_count, fallback_used, status, completed_at
+		SELECT `+requestLogCols+`
 		FROM request_logs WHERE id = ?
 	`, requestID).Scan(
 		&log.ID, &log.SessionID, &log.Timestamp, &log.ClientIP, &log.RequestMethod, &log.RequestPath,
@@ -322,6 +359,8 @@ func (s *LogStorage) GetRequestDetail(requestID string) (*RequestLog, error) {
 		&log.UpstreamURL, &log.UpstreamHeaders, &log.UpstreamBody, &log.ResponseStatus,
 		&log.ResponseHeaders, &log.ResponseBody, &log.LatencyMS, &log.TokensUsed, &log.FinishReason, &log.ErrorMessage,
 		&log.RetryCount, &log.FallbackUsed, &log.Status, &completedAt,
+		&log.InputTokens, &log.OutputTokens, &log.CachedTokens, &log.TTFTMS, &log.RestLatencyMS,
+		&log.SelectedKeyID, &log.SelectedPlatformID,
 	)
 	if err != nil {
 		return nil, err

@@ -68,9 +68,10 @@ CREATE TABLE IF NOT EXISTS rapi (
     time_period_rules TEXT NOT NULL DEFAULT '',          -- JSON array as TEXT
     supported_formats TEXT NOT NULL DEFAULT '["openai"]', -- JSON array as TEXT（继承平台）
     custom_headers    TEXT NOT NULL DEFAULT '',          -- JSON array as TEXT
-    -- key_ids 现状是 platform_keys.id 的 CSV（本地自增 id，跨实例不可移植）。
-    -- TODO（Phase 2/4）：bundle 传输改用 (platform_name, key_index) 业务键引用；
-    -- get_bundle 解析、Apply 还原本地 id。当前列保留 TEXT，存中心侧 id CSV。
+    -- key_ids 历史列为 platform_keys.id 的 CSV（本地自增 id，跨实例不可移植）；
+    -- 实际 bundle 传输已按 (platform_name, key_index) 业务键换算。
+    -- 2026-09-23 自然键身份设计定稿后：本列由 endpoint_credential 绑定表
+    -- （token_hash 引用）取代，见 docs/superpowers/specs/2026-09-23-natural-key-identity-design.md。
     key_ids           TEXT NOT NULL DEFAULT '',
     source            TEXT NOT NULL DEFAULT 'manual',  -- auto_discover | manual
     vendor            TEXT NOT NULL DEFAULT '',

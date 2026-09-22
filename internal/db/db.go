@@ -26,6 +26,9 @@ func Init() error {
 	if err := crypto.Init(); err != nil {
 		return fmt.Errorf("crypto init: %w", err)
 	}
+	// 报告主密钥来源：操作员据此确认 APIGATEWAY_KEY 是否生效（env vs 密钥文件），
+	// 避免"以为用了环境变量、实际在用旧文件"导致的密文不可解。
+	slog.Info("[DB] crypto master key loaded", "component", "db", "source", crypto.KeySource())
 
 	exePath, err := getExecutableDir()
 	if err != nil {
@@ -181,6 +184,26 @@ func Init() error {
 			UNIQUE(minute_bucket, lapi_id)
 		);
 		CREATE INDEX IF NOT EXISTS idx_trends_minute ON request_trends(minute_bucket);
+
+		-- 中心配置（Supabase）：URL + 加密后的 API key。proxy.cfg [management]
+		-- 仍作无头启动回退；本表优先。key 用本机密钥 AES 加密（crypto.Encrypt）。
+		CREATE TABLE IF NOT EXISTS settings (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL DEFAULT '',
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+
+		-- 系统/中心互联日志：syncOnce 成败、管理端直写成败、池冷却事件等。
+		-- 与 request_logs 解耦（不依赖请求 id），日志页"系统/中心"区块展示。
+		CREATE TABLE IF NOT EXISTS system_logs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			level TEXT NOT NULL DEFAULT 'info',
+			category TEXT NOT NULL DEFAULT '',
+			message TEXT NOT NULL DEFAULT '',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE INDEX IF NOT EXISTS idx_system_logs_created ON system_logs(created_at);
+		CREATE INDEX IF NOT EXISTS idx_system_logs_category ON system_logs(category);
 	`)
 	if err != nil {
 		return err
@@ -278,6 +301,12 @@ func Init() error {
 	// 预置默认平台（首次启动自动种入，按 name UNIQUE 幂等）
 	if err := instance.seedDefaultPlatforms(); err != nil {
 		return fmt.Errorf("seedDefaultPlatforms: %w", err)
+	}
+
+	// One-time fix: deduct the 5xx double-count from historical fail_other
+	// (see migrateFailOtherDedup). Runs once, guarded by a settings flag.
+	if err := instance.migrateFailOtherDedup(); err != nil {
+		slog.Warn("[WARN] fail_other dedup migration failed", "component", "db", "error", err.Error())
 	}
 
 	return nil
@@ -2267,8 +2296,11 @@ func (db *DB) RecordRequest(rapiID, lapiID int64, statusCode int, latencyMs int,
 	if statusCode >= 500 && statusCode <= 599 {
 		fail500 = 1
 	}
+	// failOther = 4xx other than 401/429; 5xx goes to fail500 only. The old
+	// range 400..599 (minus 2xx/401/429) double-counted every 5xx into both
+	// fail500 and failOther, inflating insights errRate (which sums all four).
 	failOther := 0
-	if statusCode != 200 && statusCode != 201 && statusCode != 202 && statusCode != 204 && statusCode != 401 && statusCode != 429 && statusCode >= 400 && statusCode <= 599 {
+	if statusCode >= 400 && statusCode <= 499 && statusCode != 401 && statusCode != 429 {
 		failOther = 1
 	}
 
@@ -2288,6 +2320,31 @@ func (db *DB) RecordRequest(rapiID, lapiID int64, statusCode int, latencyMs int,
 	`, rapiID, lapiID, success, fail401, fail429, fail500, failOther, latencyMs, tokensUsed, now,
 		success, fail401, fail429, fail500, failOther, latencyMs, tokensUsed, now)
 
+	return err
+}
+
+// migrateFailOtherDedup corrects historical fail_other inflation from the
+// pre-fix RecordRequest, which double-counted every 5xx into both fail500
+// and fail_other. The inflation equals the 5xx count exactly (fail_500), so
+// true_fail_other = stored_fail_other − stored_fail_500. Guarded by a
+// settings flag so it runs once: after the fix, new 5xx no longer touch
+// fail_other, and re-running would over-subtract.
+func (db *DB) migrateFailOtherDedup() error {
+	const flag = "migrations.fail_other_dedup"
+	if done, _ := db.GetSetting(flag); done != "" {
+		return nil
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if _, err := db.conn.Exec(`UPDATE rapi_metrics SET fail_other = fail_other - fail_500 WHERE fail_other > fail_500`); err != nil {
+		return err
+	}
+	if _, err := db.conn.Exec(`UPDATE rapi_metrics SET fail_other = 0 WHERE fail_other < 0`); err != nil {
+		return err
+	}
+	_, err := db.conn.Exec(`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+		flag, "1", time.Now())
 	return err
 }
 

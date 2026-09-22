@@ -111,6 +111,9 @@ func validatePlatformInput(p *models.Platform) error {
 }
 
 // recordUnread appends an in-memory unread event routed to a UI menu.
+// recordUnread 记一条未读。**仅用于系统事件与用户操作的连带效应**（冷却/
+// 失败/恢复/级联影响）；用户自己在面板上做的增删改不记未读——操作者刚做完
+// 的事不需要再提醒他看一遍。
 func recordUnread(menu, kind string, entityID int64, title, detail string) {
 	if notifySvc != nil {
 		notifySvc.RecordUnread(menu, kind, title, detail, entityID)
@@ -207,6 +210,8 @@ func (s *Service) Run() error {
 	// 定义类持久层接缝：默认绑定本地 SQLite；管理模式（[management] 配置）
 	// 在后面换成 supabase Store 直写中心。
 	store.Init(db.Get())
+	// 冻结启动时本地定义表行数，供仪表盘「启动以来变化量」对比。
+	captureStartupSnapshot()
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -364,14 +369,14 @@ func (s *Service) Run() error {
 		}, func() {
 			mgmtMu.Lock()
 			defer mgmtMu.Unlock()
-			_ = syncOnce() // 写后立即拉回，管理机本地镜像即时一致
+			_ = syncOnce(true) // 写后立即拉回（强制 apply），管理机本地镜像即时一致
 		})
 		if err != nil {
 			logger.DefaultConsole().Error("service", "[MGMT] invalid [management] config, falling back to local store",
 				"error", err.Error())
 		} else {
 			store.Use(sup)
-			manageMode = true
+			manageMode.Store(true)
 			base := strings.TrimSuffix(strings.TrimSpace(cfg.Management.SupabaseURL), "/")
 			syncCfg = config.Sync{
 				SourceURL:       base + "/rest/v1/rpc/get_bundle",
@@ -382,6 +387,59 @@ func (s *Service) Run() error {
 			}
 			logger.DefaultConsole().Info("service", "[MGMT] management mode: definitions write through to center",
 				"center", base)
+			// 面板 sb-config 也存了一份（settings 表）。若与 proxy.cfg 不一致，
+			// 启动以 proxy.cfg 为准，但 sb-config 页显示的是 settings 值 → 面板
+			// 与实际生效连接不符。记系统日志让操作员能发现配置漂移。
+			if sbURL, _, ok := loadSavedSBConfig(); ok {
+				if normalizeSBURL(sbURL) != normalizeSBURL(cfg.Management.SupabaseURL) {
+					msg := "[MGMT] 中心配置不一致：proxy.cfg [management] 生效（" + base +
+						"），面板「中心配置」页显示的是另一份（" + normalizeSBURL(sbURL) + "）。以 proxy.cfg 为准。"
+					logger.DefaultConsole().Warn("service", msg)
+					_ = db.Get().InsertSystemLog("warn", "center", msg)
+				}
+			}
+		}
+	}
+	// 回退：操作员若在仪表盘「中心配置」页录入了 Supabase URL+key（存 settings
+	// 表）而非编辑 proxy.cfg [management]，则据此激活管理模式，使运行时 store、
+	// 同步循环与仪表盘 sync-center 卡都与 sb-config 页一致（否则卡显示未连接）。
+	// center_key 同样从 settings（sb_center_key）读，proxy.cfg 仅作兜底。
+	if !manageMode.Load() {
+		if sbURL, sbKey, ok := loadSavedSBConfig(); ok {
+			centerKeyHex := effectiveCenterKey("")
+			var mgmtMu sync.Mutex
+			sup, err := supabase.New(supabase.Config{
+				URL:        sbURL,
+				ServiceKey: sbKey,
+				CenterKey:  centerKeyHex,
+			}, func() {
+				mgmtMu.Lock()
+				defer mgmtMu.Unlock()
+				_ = syncOnce(true) // 写后立即拉回，本地镜像即时一致
+			})
+			if err != nil {
+				logger.DefaultConsole().Error("service", "[MGMT] saved sb-config invalid, falling back to local store",
+					"error", err.Error())
+				_ = db.Get().InsertSystemLog("warn", "center",
+					"管理模式启动激活失败（回退本地）: "+err.Error()+"——请在中心配置页检查后重新保存")
+			} else {
+				store.Use(sup)
+				manageMode.Store(true)
+				base := strings.TrimSuffix(strings.TrimSpace(sbURL), "/")
+				syncCfg = config.Sync{
+					SourceURL:       base + "/rest/v1/rpc/get_bundle",
+					VersionURL:      base + "/rest/v1/rpc/get_version",
+					AnonKey:         sbKey,
+					CenterKey:       centerKeyHex,
+					PollIntervalSec: cfg.Sync.PollIntervalSec,
+				}
+				logger.DefaultConsole().Info("service", "[MGMT] management mode from saved sb-config",
+					"center", base)
+				msg := "[MGMT] 管理模式由面板「中心配置」页（settings 表）激活：" + base +
+					"。如需固定/迁移请写入 proxy.cfg [management]（启动优先读 cfg）。"
+				logger.DefaultConsole().Info("service", msg)
+				_ = db.Get().InsertSystemLog("info", "center", msg)
+			}
 		}
 	}
 	startSyncLoop(s.stopCh, syncCfg)
@@ -458,8 +516,13 @@ func createWebHandler() http.Handler {
 	// 中心同步状态 + 手动刷新（设计 §5.1）。只读，定义类 CRUD 在代理端按需只读化。
 	mux.HandleFunc("/api/sync/state", handleSyncState)
 	mux.HandleFunc("/api/sync/refresh", handleSyncRefresh)
+	mux.HandleFunc("/api/sync/pull-mode", handleSyncPullMode)
+	// 排障：管理端无法上传/管理模式未激活的具体原因。
+	mux.HandleFunc("/api/sync/diagnostics", handleSyncDiagnostics)
 	// 中心连通性 + 各表统计 + 是否同步（仪表盘状态卡）。
 	mux.HandleFunc("/api/sync/center", handleSyncCenter)
+	// 本地→中心 整体覆盖推送（管理模式专用，破坏性，前端二次确认）。
+	mux.HandleFunc("/api/sync/push", handleSyncPush)
 
 	// RAPI endpoints
 	mux.HandleFunc("/api/rapis", func(w http.ResponseWriter, r *http.Request) {
@@ -500,7 +563,6 @@ func createWebHandler() http.Handler {
 			}
 			logger.DefaultConsole().Info("service", "[API] CreateRAPI success",
 				"id", rapi.ID, "alias", rapi.Alias, "model", rapi.Model, "platform_id", rapi.PlatformID)
-			recordUnread(notify.MenuModels, "create", rapi.ID, "新增模型 "+rapi.Alias, rapi.Model)
 			// Auto-map: if model identity matches a LAPI, add to its routing chain
 			autoMapRAPItoLAPI(&rapi)
 			w.Write([]byte(`{"success":true}`))
@@ -530,7 +592,6 @@ func createWebHandler() http.Handler {
 				writeJSONError(w, 500, err)
 				return
 			}
-			recordUnread(notify.MenuModels, "update", rapi.ID, "修改模型 "+rapi.Alias, rapi.Model)
 			if wasUnavailable {
 				rep := proxyGateway.RecoverRAPIs(r.Context(), []int64{rapi.ID}, 1, 8)
 				if len(rep.Recovered) > 0 {
@@ -577,7 +638,6 @@ func createWebHandler() http.Handler {
 				}
 				proxyGateway.InvalidateRAPI(rapiID)
 			}
-			recordUnread(notify.MenuModels, "delete", rapiID, "删除模型 "+rapiInfo.Alias, "")
 			w.Write([]byte(`{"success":true}`))
 		}
 	})
@@ -1088,7 +1148,6 @@ func createWebHandler() http.Handler {
 				writeJSONError(w, 500, err)
 				return
 			}
-			recordUnread(notify.MenuPlatforms, "create", p.ID, "新增平台 "+p.Name, "")
 			// Never echo the plaintext login password back to the client.
 			p.LoginPassword = ""
 			data, _ := json.Marshal(p)
@@ -1108,7 +1167,6 @@ func createWebHandler() http.Handler {
 				writeJSONError(w, 500, err)
 				return
 			}
-			recordUnread(notify.MenuPlatforms, "update", p.ID, "修改平台 "+p.Name, "")
 			w.Write([]byte(`{"success":true}`))
 
 		case http.MethodDelete:
@@ -1146,7 +1204,6 @@ func createWebHandler() http.Handler {
 					return
 				}
 			}
-			recordUnread(notify.MenuPlatforms, "delete", pID, "删除平台 "+platform.Name, "")
 			w.Write([]byte(`{"success":true}`))
 		}
 	})
@@ -1440,7 +1497,6 @@ func createWebHandler() http.Handler {
 				logger.DefaultConsole().Error("service", "[BATCH] create RAPI failed",
 					"model", modelName, "error", err.Error())
 			} else {
-				recordUnread(notify.MenuModels, "create", rapi.ID, "新增模型 "+rapi.Alias, rapi.Model)
 				autoMapRAPItoLAPI(&rapi)
 				created = append(created, map[string]interface{}{
 					"id":     rapi.ID,
@@ -1514,7 +1570,6 @@ func createWebHandler() http.Handler {
 				writeJSONError(w, 500, err)
 				return
 			}
-			recordUnread(notify.MenuKeys, "create", k.ID, fmt.Sprintf("新增密钥 #%d（%s）", k.KeyIndex, platformName(platformID)), k.Label)
 			// A usable key was added: automatically re-probe any models of this
 			// platform that were marked unavailable because all their keys were
 			// dead, and restore the ones that actually respond with the new key.
@@ -1564,7 +1619,6 @@ func createWebHandler() http.Handler {
 					writeJSONError(w, 500, err)
 					return
 				}
-				recordUnread(notify.MenuKeys, "update", kid, fmt.Sprintf("修改密钥（%s）", platformName(platformID)), k.Label)
 				w.Write([]byte(`{"success":true}`))
 				return
 			}
@@ -1613,7 +1667,6 @@ func createWebHandler() http.Handler {
 				writeJSONError(w, 500, err)
 				return
 			}
-			recordUnread(notify.MenuKeys, "update", platformID, fmt.Sprintf("更新密钥列表（%s）", platformName(platformID)), "")
 			// Mirrors POST: a non-empty key list restores the platform.
 			hasNonEmpty := false
 			for _, k := range keys {
@@ -1653,7 +1706,16 @@ func createWebHandler() http.Handler {
 			}
 			// Drop the in-memory scheduler entity (cooldown / recovery scan).
 			proxyGateway.RemoveKey(kid)
-			recordUnread(notify.MenuKeys, "delete", kid, fmt.Sprintf("删除密钥（%s）", platformName(platformID)), "")
+			// 连带效应未读（用户操作本身不记，但删 key 导致模型失去绑定的
+			// 隐性后果需要浮出）：有多少模型被摘掉了这把 key。
+			if len(removedFrom) > 0 {
+				detail := strings.Join(removedFrom, "、")
+				if len([]rune(detail)) > 120 {
+					detail = string([]rune(detail)[:120]) + "…"
+				}
+				recordUnread(notify.MenuModels, "cascade", 0,
+					fmt.Sprintf("删除密钥连带：%d 个模型失去密钥绑定", len(removedFrom)), detail)
+			}
 			data, _ := json.Marshal(map[string]interface{}{
 				"success":      true,
 				"removed_from": removedFrom,
@@ -1734,7 +1796,6 @@ func createWebHandler() http.Handler {
 			}
 			logger.DefaultConsole().Info("service", "[API] CreateLAPI success",
 				"id", lapi.ID, "alias", lapi.Alias)
-			recordUnread(notify.MenuInterfaces, "create", lapi.ID, "新增接口 "+lapi.Alias, "")
 			data, _ := json.Marshal(lapi)
 			w.Write(data)
 
@@ -1750,7 +1811,6 @@ func createWebHandler() http.Handler {
 				writeJSONError(w, 500, err)
 				return
 			}
-			recordUnread(notify.MenuInterfaces, "update", lapi.ID, "修改接口 "+lapi.Alias, "")
 			w.Write([]byte(`{"success":true}`))
 
 		case http.MethodDelete:
@@ -1773,7 +1833,6 @@ func createWebHandler() http.Handler {
 				writeJSONError(w, 500, err)
 				return
 			}
-			recordUnread(notify.MenuInterfaces, "delete", lapiID, "删除接口 "+lapiInfo.Alias, "")
 			w.Write([]byte(`{"success":true}`))
 		}
 	})
@@ -1873,117 +1932,16 @@ func createWebHandler() http.Handler {
 		w.Write(data)
 	})
 
-	// Dashboard aggregated health endpoint
-	mux.HandleFunc("/api/dashboard", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-
-		rapis, _ := store.A().GetRAPIs()
-		lapis, _ := store.A().GetLAPIs()
-		platforms, _ := store.A().GetPlatforms()
-		rapiStats, _ := db.Get().GetRAPIStats()
-
-		// Build stat lookup by rapi_id
-		statByID := make(map[int64]db.RAPIStat)
-		for _, s := range rapiStats {
-			statByID[s.RapiID] = s
-		}
-
-		// Aggregate totals
-		totalReq := 0
-		totalSuccess := 0
-		totalLatencyMs := int64(0)
-		totalFail429 := 0
-		totalFail401 := 0
-		totalFail500 := 0
-		for _, s := range rapiStats {
-			totalReq += s.TotalRequests
-			totalSuccess += s.SuccessRequests
-			totalLatencyMs += int64(s.AvgLatencyMs * float64(s.TotalRequests))
-			totalFail429 += s.Fail429
-			totalFail401 += s.Fail401
-			totalFail500 += s.Fail500
-		}
-		var overallSuccessRate float64
-		var avgLatencyMs float64
-		if totalReq > 0 {
-			overallSuccessRate = float64(totalSuccess) / float64(totalReq) * 100
-			avgLatencyMs = float64(totalLatencyMs) / float64(totalReq)
-		}
-
-		// Disabled platforms
-		type platformSummary struct {
-			ID      int64  `json:"id"`
-			Name    string `json:"name"`
-			Enabled bool   `json:"enabled"`
-		}
-		platSummaries := make([]platformSummary, 0, len(platforms))
-		for _, p := range platforms {
-			platSummaries = append(platSummaries, platformSummary{
-				ID: p.ID, Name: p.Name, Enabled: p.Enabled,
-			})
-		}
-
-		// Per-model health rows (only models with any activity or issues)
-		type modelHealth struct {
-			ID            int64   `json:"id"`
-			Alias         string  `json:"alias"`
-			PlatformName  string  `json:"platform_name"`
-			Enabled       bool    `json:"enabled"`
-			Available     bool    `json:"available"`
-			UnavailReason string  `json:"unavail_reason,omitempty"`
-			TotalReq      int     `json:"total_req"`
-			SuccessRate   float64 `json:"success_rate"`
-			AvgLatencyMs  float64 `json:"avg_latency_ms"`
-			Fail429       int     `json:"fail_429"`
-			Fail401       int     `json:"fail_401"`
-			Fail500       int     `json:"fail_500"`
-			LastUsed      string  `json:"last_used"`
-		}
-		// Build platform name lookup
-		platName := make(map[int64]string)
-		for _, p := range platforms {
-			platName[p.ID] = p.Name
-		}
-		models := make([]modelHealth, 0, len(rapis))
-		for _, ra := range rapis {
-			s := statByID[ra.ID]
-			models = append(models, modelHealth{
-				ID:            ra.ID,
-				Alias:         ra.Alias,
-				PlatformName:  platName[ra.PlatformID],
-				Enabled:       ra.Enabled,
-				Available:     ra.Available,
-				UnavailReason: ra.UnavailableReason,
-				TotalReq:      s.TotalRequests,
-				SuccessRate:   s.SuccessRate,
-				AvgLatencyMs:  s.AvgLatencyMs,
-				Fail429:       s.Fail429,
-				Fail401:       s.Fail401,
-				Fail500:       s.Fail500,
-				LastUsed:      s.LastUsed,
-			})
-		}
-
-		resp := map[string]interface{}{
-			"total_requests":       totalReq,
-			"total_success":        totalSuccess,
-			"overall_success_rate": overallSuccessRate,
-			"avg_latency_ms":       avgLatencyMs,
-			"fail_429":             totalFail429,
-			"fail_401":             totalFail401,
-			"fail_500":             totalFail500,
-			"rapi_count":           len(rapis),
-			"lapi_count":           len(lapis),
-			"platform_count":       len(platforms),
-			"platforms":            platSummaries,
-			"models":               models,
-		}
-		data, _ := json.Marshal(resp)
-		w.Write(data)
-	})
-
 	// Insights endpoint — three-layer analysis: health, efficiency, capacity
 	mux.HandleFunc("/api/insights", handleInsights)
+
+	// 仪表盘单屏指标：4 维度 × 10 指标 TOP3 × 今日/本月 + 待处理 + 近期错误。
+	mux.HandleFunc("/api/dashboard/metrics", handleDashboardMetrics)
+
+	// 中心配置（Supabase）：URL + API key 加密保存 + 角色自动探测。
+	mux.HandleFunc("/api/sb-config", handleSBConfig)
+	// 系统/中心互联日志（syncOnce 成败、直写成败、池冷却等）。
+	mux.HandleFunc("/api/logs/system", handleSystemLogs)
 
 	// Analytics: 24h hourly distribution for traffic chart
 	mux.HandleFunc("/api/analytics/hourly", func(w http.ResponseWriter, r *http.Request) {
@@ -2379,20 +2337,25 @@ func createWebHandler() http.Handler {
 		var req struct {
 			Menu string `json:"menu"`
 			All  bool   `json:"all"`
+			ID   int64  `json:"id"` // 单条已读（点击条目/逐条关闭）
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		if notifySvc != nil {
-			if req.All || req.Menu == "" {
+			switch {
+			case req.ID != 0:
+				notifySvc.MarkItemRead(req.ID)
+			case req.All || req.Menu == "":
 				notifySvc.MarkAllRead()
-			} else {
+			default:
 				notifySvc.MarkMenuRead(req.Menu)
 			}
 		}
 		w.Write([]byte(`{"success":true}`))
 	})
 
-	// 启用中心同步(代理角色)时拦截定义类写操作，只放行本地健康/探测动作。
-	return withProxyReadOnlyGuard(mux)
+	// 代理可本地写（应急改本地 SQLite，不推中心，无害）；管理端直写中心由 store.Use(sup) 保证。
+	// 历史的只读守卫已移除——代理写本地 db.DB 不影响中心权威。
+	return mux
 }
 
 //go:embed dashboard.html

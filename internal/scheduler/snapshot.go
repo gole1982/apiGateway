@@ -98,7 +98,7 @@ func (m *Manager) Snapshot() Snapshot {
 			cs.HourReq = c.hour.reqs
 			cs.HourTok = c.hour.toks
 		}
-		dayStart := now.Truncate(24 * time.Hour)
+		dayStart := dayStartOf(now)
 		if c.day.start == dayStart {
 			cs.DayReq = c.day.reqs
 			cs.DayTok = c.day.toks

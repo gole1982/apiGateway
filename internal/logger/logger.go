@@ -139,17 +139,47 @@ func (l *Logger) RecordRoutingDecision(requestID, lapiAlias string, matchedRAPIs
 	l.RecordEvent(event)
 }
 
-func (l *Logger) RecordUpstreamSent(requestID, selectedRAPI, upstreamURL string, headers map[string]string, body string, retryCount int) {
+func (l *Logger) RecordUpstreamSent(requestID, selectedRAPI, upstreamURL string, headers map[string]string, body string, retryCount int, selectedKeyID int64, selectedPlatformID int64) {
 	event := LogEvent{
 		RequestID: requestID,
 		EventType: UPSTREAM_SENT,
 		Timestamp: time.Now(),
 		Data: map[string]interface{}{
-			"selected_rapi":    selectedRAPI,
-			"upstream_url":     upstreamURL,
-			"upstream_headers": headers,
-			"upstream_body":    truncateBody(body, l.config.MaxBodySizeKB),
-			"retry_count":      retryCount,
+			"selected_rapi":        selectedRAPI,
+			"upstream_url":         upstreamURL,
+			"upstream_headers":     headers,
+			"upstream_body":        truncateBody(body, l.config.MaxBodySizeKB),
+			"retry_count":          retryCount,
+			"selected_key_id":      selectedKeyID,
+			"selected_platform_id": selectedPlatformID,
+		},
+	}
+	l.RecordEvent(event)
+}
+
+// UsageDetail carries the per-request token breakdown parsed from the upstream
+// response (three-protocol). Zero fields mean "not reported by upstream".
+type UsageDetail struct {
+	Input  int
+	Output int
+	Cached int
+}
+
+func (l *Logger) RecordUpstreamResponseDetail(requestID string, statusCode int, headers map[string]string, body string, latencyMS, ttftMS, tokensUsed, inputTokens, outputTokens, cachedTokens int) {
+	event := LogEvent{
+		RequestID: requestID,
+		EventType: UPSTREAM_RESPONSE,
+		Timestamp: time.Now(),
+		Data: map[string]interface{}{
+			"response_status":  statusCode,
+			"response_headers": headers,
+			"response_body":    truncateBody(body, l.config.MaxBodySizeKB),
+			"latency_ms":       latencyMS,
+			"ttft_ms":          ttftMS,
+			"tokens_used":      tokensUsed,
+			"input_tokens":     inputTokens,
+			"output_tokens":    outputTokens,
+			"cached_tokens":    cachedTokens,
 		},
 	}
 	l.RecordEvent(event)
@@ -200,34 +230,49 @@ func (l *Logger) RecordError(requestID, message, stage string) {
 
 func (w *LogWorker) run() {
 	defer w.logger.wg.Done()
-	// A panic anywhere in the worker (DB write failure, malformed payload parsing,
-	// a nil deref in extractMaxTokens/extractFinishReason, etc.) would otherwise kill
-	// the entire logging pipeline: the deferred wg.Done() runs, Stop() returns, but
-	// subsequent RecordEvent calls would pile up forever (and, post Fix 8, panic on
-	// the closed channel). Catching the panic keeps the worker alive-ish — we log it
-	// and let the loop continue so at least future events have a chance to be recorded.
-	defer func() {
-		if r := recover(); r != nil {
-			DefaultConsole().Error("logger", "[logger] worker panic recovered", "panic", fmt.Sprint(r))
-		}
-	}()
-
 	w.batch = make([]LogEvent, 0, w.logger.config.BatchSize)
 	w.resetTimer()
 
+	// Per-iteration recover (not function-level). A panic in addToBatch /
+	// flushBatch / persistBatch (bad event payload, DB write, type assertion in
+	// updateRequestLog) used to unwind to a function-level recover, which then
+	// returned — the worker goroutine exited. The eventQueue then filled to
+	// capacity and RecordEvent silently dropped every subsequent event, so
+	// request_logs froze while rapi_metrics (a separate direct write) kept
+	// climbing and the dashboard showed empty metrics forever. Catching per
+	// iteration keeps the worker alive until Stop(); a bad batch is discarded
+	// and the loop continues with the next event.
 	for {
-		select {
-		case event, ok := <-w.logger.eventQueue:
-			if !ok {
-				// Queue closed: drain is complete; flush and exit.
-				w.flushBatch()
-				return
-			}
-			w.addToBatch(event)
+		exiting := false
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					DefaultConsole().Error("logger", "[logger] worker iteration panic recovered", "panic", fmt.Sprint(r))
+					// A panic may leave a half-built batch; reset it and the timer so
+					// the next iteration starts clean (a bad event is dropped, not retried).
+					w.batchMu.Lock()
+					w.batch = make([]LogEvent, 0, w.logger.config.BatchSize)
+					w.batchMu.Unlock()
+					w.resetTimer()
+				}
+			}()
+			select {
+			case event, ok := <-w.logger.eventQueue:
+				if !ok {
+					// Queue closed: drain is complete; flush and exit.
+					w.flushBatch()
+					exiting = true
+					return
+				}
+				w.addToBatch(event)
 
-		case <-w.timer.C:
-			w.flushBatch()
-			w.resetTimer()
+			case <-w.timer.C:
+				w.flushBatch()
+				w.resetTimer()
+			}
+		}()
+		if exiting {
+			return
 		}
 	}
 }
@@ -335,6 +380,13 @@ func (w *LogWorker) updateRequestLog(log *RequestLog, event LogEvent) {
 		log.UpstreamHeaders = getString(event.Data, "upstream_headers")
 		log.UpstreamBody = getString(event.Data, "upstream_body")
 		log.RetryCount = getInt(event.Data, "retry_count")
+		// 每请求实际使用的 key / 平台（指标 4 维度埋点）。
+		if v := getInt(event.Data, "selected_key_id"); v > 0 {
+			log.SelectedKeyID = int64(v)
+		}
+		if v := getInt(event.Data, "selected_platform_id"); v > 0 {
+			log.SelectedPlatformID = int64(v)
+		}
 
 	case UPSTREAM_RESPONSE:
 		log.ResponseStatus = getInt(event.Data, "response_status")
@@ -343,6 +395,19 @@ func (w *LogWorker) updateRequestLog(log *RequestLog, event LogEvent) {
 		log.LatencyMS = getInt(event.Data, "latency_ms")
 		log.TokensUsed = getInt(event.Data, "tokens_used")
 		log.FinishReason = extractFinishReason(log.ResponseBody)
+		// token 明细 / TTFT / 剩余延迟（>0 才覆盖，事件乱序或缺失时保留旧值）。
+		if v := getInt(event.Data, "ttft_ms"); v > 0 {
+			log.TTFTMS = v
+		}
+		if v := getInt(event.Data, "input_tokens"); v > 0 {
+			log.InputTokens = v
+		}
+		if v := getInt(event.Data, "output_tokens"); v > 0 {
+			log.OutputTokens = v
+		}
+		if v := getInt(event.Data, "cached_tokens"); v > 0 {
+			log.CachedTokens = v
+		}
 
 	case CLIENT_RESPONSE:
 		log.ResponseStatus = getInt(event.Data, "response_status")

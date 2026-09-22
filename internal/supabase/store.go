@@ -33,7 +33,7 @@ import (
 type Config struct {
 	URL        string // https://xxx.supabase.co
 	ServiceKey string // service_role / sb_secret_… （读写全表；勿放代理端）
-	CenterKey  string // 32 字节 hex，token 边界加解密
+	CenterKey  string // 可选：32 字节 hex，token 写中心前加密；留空 = 中心存明文
 }
 
 // Store 实现 store.Store。
@@ -47,10 +47,17 @@ type Store struct {
 
 // New 构造中心 Store。onChanged 在每次成功写后被调用（service 层用它触发
 // syncOnce 立即刷新本地镜像；可为 nil）。
+// CenterKey 可选（2026-09 起）：留空 = 中心库 token 存明文（中心访问安全由
+// Supabase RLS/API key 负责）；填 32 字节 hex = 写中心前加密、读出时解密
+// （兼容旧的 GitHub 分发威胁模型，多代理共享中心时仍建议使用）。
 func New(cfg Config, onChanged func()) (*Store, error) {
-	ck, err := crypto.ParseKey(cfg.CenterKey)
-	if err != nil {
-		return nil, fmt.Errorf("supabase store: %w", err)
+	var ck []byte
+	if strings.TrimSpace(cfg.CenterKey) != "" {
+		k, err := crypto.ParseKey(cfg.CenterKey)
+		if err != nil {
+			return nil, fmt.Errorf("supabase store: %w", err)
+		}
+		ck = k
 	}
 	u := strings.TrimSuffix(strings.TrimSpace(cfg.URL), "/")
 	if u == "" || strings.TrimSpace(cfg.ServiceKey) == "" {
@@ -196,6 +203,10 @@ func (s *Store) GetPlatforms() ([]models.Platform, error) {
 	for i := range rows {
 		rows[i].Token = s.dec(rows[i].Token)
 		rows[i].LoginPassword = s.dec(rows[i].LoginPassword)
+		// 中心无健康态列（available 是代理本地 runtime 状态，schema 有意不建）：
+		// 缺省置 true，否则零值 false 会让面板把所有启用平台误显为「失效」；
+		// 真实健康态由面板展示层另读本地镜像（同 rapiToWithPlatform 的取舍）。
+		rows[i].Available = true
 	}
 	return rows, nil
 }
@@ -211,13 +222,15 @@ func (s *Store) GetPlatformByID(id int64) (*models.Platform, error) {
 	}
 	rows[0].Token = s.dec(rows[0].Token)
 	rows[0].LoginPassword = s.dec(rows[0].LoginPassword)
+	// 同 GetPlatforms：中心无 available 列，缺省 true 防误判「失效」。
+	rows[0].Available = true
 	return &rows[0], nil
 }
 
 func platRow(p *models.Platform) map[string]any {
 	return map[string]any{
 		"name": p.Name, "base_url": p.BaseURL,
-		"token": p.Token, // 调用方已 enc
+		"token":            p.Token, // 调用方已 enc
 		"last_token_fetch": timePtr(p.LastTokenFetch),
 		"enabled":          p.Enabled, "notes": p.Notes,
 		"supported_formats": p.SupportedFormats, "format_endpoints": p.FormatEndpoints,
@@ -872,6 +885,192 @@ func (s *Store) SetLAPIRAPIOrder(lapiID int64, rapiIDs []int64) error {
 	}
 	s.changed()
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// 本地 → 中心 整体覆盖推送（破坏性，管理模式专用）
+// ---------------------------------------------------------------------------
+
+// LocalSnapshot 是待推送的本地 SQLite 定义快照（由 service 层从 db.Get() 读取，
+// token 已被本地解出为明文）。ReplaceAll 用它整体覆盖中心 5 张定义表。
+type LocalSnapshot struct {
+	Platforms []models.Platform
+	Keys      []models.PlatformKey
+	RAPIs     []models.RAPIWithPlatform
+	LAPIs     []models.LAPI
+	Orders    []db.LAPIRAPIOrder
+}
+
+// ReplaceAll 用本地定义整体覆盖中心 5 张定义表。流程：
+//  1. DELETE 全表（子→父：order→rapi→keys→lapi→platform，id=gte.0 全删）；
+//  2. INSERT platform（父，不传 id），读回服务端 id 建 old→new 映射；
+//  3. INSERT platform_keys（remap platform_id），建 old key id→new + old key id→key_index；
+//  4. INSERT rapi（remap platform_id；key_ids 本地 key-id CSV → 中心 key-index CSV）；
+//  5. INSERT lapi，建 old→new 映射；
+//  6. INSERT lapi_rapi_order（remap lapi_id / rapi_id）。
+//
+// 不传 id（中心自增）避免序列错位（PostgREST 无法 setval）；token 走 s.enc 边界。
+// 非原子：中途失败留部分状态，重跑幂等（全删全插）。返回新中心各表行数。
+func (s *Store) ReplaceAll(local LocalSnapshot) (map[string]int, error) {
+	// 1) DELETE 全表，子→父。
+	for _, t := range []string{tblOrder, tblRAPI, tblKeys, tblLAPI, tblPlatform} {
+		if err := s.call(http.MethodDelete, t, "id=gte.0", nil, nil); err != nil {
+			return nil, fmt.Errorf("delete %s: %w", t, err)
+		}
+	}
+
+	// 2) platform（父）。
+	platMap := map[int64]int64{} // old id → new id
+	for i := range local.Platforms {
+		p := local.Platforms[i]
+		row := platRow(&p)
+		row["token"] = s.enc(p.Token)
+		row["login_password"] = s.enc(p.LoginPassword)
+		var out []map[string]any
+		if err := s.call(http.MethodPost, tblPlatform, "", row, &out); err != nil {
+			return nil, fmt.Errorf("insert platform %q: %w", p.Name, err)
+		}
+		platMap[p.ID] = f64ToID(out, "id")
+	}
+
+	// 3) platform_keys：remap platform_id；记 old key id→key_index（供 rapi 换算）。
+	keyMap := map[int64]int64{}               // old key id → new id
+	keyIdxByPlat := map[int64]map[int64]int{} // old platform id → (old key id → key_index)
+	for i := range local.Keys {
+		k := local.Keys[i]
+		row := keyRow(&k)
+		if np, ok := platMap[k.PlatformID]; ok {
+			row["platform_id"] = np
+		}
+		row["token"] = s.enc(k.Token)
+		var out []map[string]any
+		if err := s.call(http.MethodPost, tblKeys, "", row, &out); err != nil {
+			return nil, fmt.Errorf("insert key platform=%d idx=%d: %w", k.PlatformID, k.KeyIndex, err)
+		}
+		keyMap[k.ID] = f64ToID(out, "id")
+		if keyIdxByPlat[k.PlatformID] == nil {
+			keyIdxByPlat[k.PlatformID] = map[int64]int{}
+		}
+		keyIdxByPlat[k.PlatformID][k.ID] = k.KeyIndex
+	}
+
+	// 4) rapi：remap platform_id；key_ids 本地 key-id CSV → 中心 key-index CSV。
+	rapiMap := map[int64]int64{} // old id → new id
+	for i := range local.RAPIs {
+		wp := local.RAPIs[i]
+		r := rapiCore(wp)
+		row := rapiRow(&r)
+		if np, ok := platMap[wp.PlatformID]; ok {
+			row["platform_id"] = np
+		}
+		mapped := remapKeyIDsToIdx(wp.KeyIDs, keyIdxByPlat[wp.PlatformID])
+		// key_ids 原本非空、换算后为空 = 该平台 key 未成功 remap（如 platform
+		// INSERT 失败）→ 模型会变成"无 key 绑定"。这是数据错误而非悬空清理，
+		// 显式报错而不是静默写空串。
+		if strings.TrimSpace(wp.KeyIDs) != "" && mapped == "" {
+			return nil, fmt.Errorf("insert rapi %q: key_ids %q 无法映射为中心 key_index（平台 %d 的 key 未成功重映射）",
+				wp.Alias, wp.KeyIDs, wp.PlatformID)
+		}
+		row["key_ids"] = mapped
+		var out []map[string]any
+		if err := s.call(http.MethodPost, tblRAPI, "", row, &out); err != nil {
+			return nil, fmt.Errorf("insert rapi %q: %w", wp.Alias, err)
+		}
+		rapiMap[wp.ID] = f64ToID(out, "id")
+	}
+
+	// 5) lapi。
+	lapiMap := map[int64]int64{} // old id → new id
+	for i := range local.LAPIs {
+		l := local.LAPIs[i]
+		var out []map[string]any
+		if err := s.call(http.MethodPost, tblLAPI, "", lapiRow(&l), &out); err != nil {
+			return nil, fmt.Errorf("insert lapi %q: %w", l.Alias, err)
+		}
+		lapiMap[l.ID] = f64ToID(out, "id")
+	}
+
+	// 6) lapi_rapi_order：remap lapi_id / rapi_id；悬空引用丢弃。
+	for _, o := range local.Orders {
+		nl, okL := lapiMap[o.LapiID]
+		nr, okR := rapiMap[o.RAPIID]
+		if !okL || !okR {
+			continue
+		}
+		row := map[string]any{"lapi_id": nl, "rapi_id": nr, "order_index": o.Order}
+		if err := s.call(http.MethodPost, tblOrder, "", row, nil); err != nil {
+			return nil, fmt.Errorf("insert order lapi=%d rapi=%d: %w", o.LapiID, o.RAPIID, err)
+		}
+	}
+
+	s.changed()
+
+	// 7) 读回中心各表行数（定义表小，select=id 全取后计数即可）。
+	counts := map[string]int{}
+	for _, pair := range []struct{ tbl, key string }{
+		{tblPlatform, "platform"}, {tblKeys, "platform_keys"},
+		{tblRAPI, "rapi"}, {tblLAPI, "lapi"}, {tblOrder, "lapi_rapi_order"},
+	} {
+		if rows, err := s.callList(pair.tbl, "select=id"); err == nil {
+			counts[pair.key] = len(rows)
+		}
+	}
+	return counts, nil
+}
+
+// DumpAll 读出中心 5 张定义表的全部行（select=*）。token/login_password
+// 保持中心存储形态（center_key 密文），不会把明文引入备份。用于 push 覆盖前
+// 自动备份中心快照（service 层存 settings.center_backup_latest）。
+func (s *Store) DumpAll() (map[string][]map[string]any, error) {
+	out := map[string][]map[string]any{}
+	for _, t := range []string{tblPlatform, tblKeys, tblRAPI, tblLAPI, tblOrder} {
+		rows, err := s.callList(t, "select=*")
+		if err != nil {
+			return nil, fmt.Errorf("dump %s: %w", t, err)
+		}
+		out[t] = rows
+	}
+	return out, nil
+}
+
+// rapiCore 从 RAPIWithPlatform 取出 rapiRow 需要的字段构造 models.RAPI。
+func rapiCore(wp models.RAPIWithPlatform) models.RAPI {
+	return models.RAPI{
+		ID: wp.ID, Alias: wp.Alias, Model: wp.Model, Notes: wp.Notes,
+		Vendor: wp.Vendor, Series: wp.Series, ModelName: wp.ModelName,
+		Version: wp.Version, Suffix: wp.Suffix, PlatformID: wp.PlatformID,
+		Enabled: wp.Enabled, BaseCost: wp.BaseCost, HighCost: wp.HighCost,
+		RPMLimit: wp.RPMLimit, RPHLimit: wp.RPHLimit, RPDLimit: wp.RPDLimit,
+		TPMLimit: wp.TPMLimit, TPHLimit: wp.TPHLimit, TPDLimit: wp.TPDLimit,
+		SupportedFormats: wp.SupportedFormats, TimePeriodRules: wp.TimePeriodRules,
+		CustomHeaders: wp.CustomHeaders, KeyIDs: wp.KeyIDs, Source: wp.Source,
+	}
+}
+
+// remapKeyIDsToIdx 把本地 rapi.key_ids（key id CSV）按 oldIDToIdx 换算为中心
+// key_index CSV。悬空 id（查不到 key_index）丢弃，与 centerinit 行为一致。
+func remapKeyIDsToIdx(csv string, oldIDToIdx map[int64]int) string {
+	csv = strings.TrimSpace(csv)
+	if csv == "" {
+		return ""
+	}
+	var out []string
+	for _, p := range strings.Split(csv, ",") {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		id, err := strconv.ParseInt(p, 10, 64)
+		if err != nil {
+			continue
+		}
+		idx, ok := oldIDToIdx[id]
+		if !ok {
+			continue
+		}
+		out = append(out, strconv.Itoa(idx))
+	}
+	return strings.Join(out, ",")
 }
 
 // ---------------------------------------------------------------------------

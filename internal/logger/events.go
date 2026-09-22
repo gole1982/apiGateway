@@ -66,6 +66,19 @@ type RequestLog struct {
 	ResponseBody    string `json:"response_body"`
 	LatencyMS       int    `json:"latency_ms"`
 	TokensUsed      int    `json:"tokens_used"`
+	// Token 明细（三协议 usage 解析；0 = 上游未上报，面板显示 "—"）。
+	// CachedTokens 是缓存命中部分（prompt 里被 cache 命中的输入 token）。
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+	CachedTokens int `json:"cached_tokens"`
+	// TTFTMS 首 token 延迟（流式=首帧写出时刻-发起；非流式=总延迟）；
+	// RestLatencyMS 除首 token 外的剩余延迟（总延迟-TTFT）。
+	TTFTMS        int `json:"ttft_ms"`
+	RestLatencyMS int `json:"rest_latency_ms"`
+	// SelectedKeyID / SelectedPlatformID：本请求最终选用的 key 与平台
+	// （冗余平台列，免 JOIN）。0 = 未记录（legacy 或未选出）。
+	SelectedKeyID      int64 `json:"selected_key_id"`
+	SelectedPlatformID int64 `json:"selected_platform_id"`
 	// Extracted from upstream response (last non-null finish_reason in SSE stream).
 	FinishReason string `json:"finish_reason"`
 

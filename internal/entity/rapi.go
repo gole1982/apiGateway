@@ -148,6 +148,20 @@ func (r *RAPI) State() State {
 	return r.machine.State()
 }
 
+// AlignCooldownTo 对齐池标准冷却：把 RAPI 的冷却结束时刻直接设为 at。
+// 仅对 Cooling 状态生效；Invalidated 不靠定时器恢复，PlatformFailed/Healthy
+// 不属于软池路径。由 scheduler.MarkPoolExhausted 在软池事件后调用。
+func (r *RAPI) AlignCooldownTo(at time.Time) {
+	if at.IsZero() {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.machine.State() == StateCooling {
+		r.machine.SetTimer(at)
+	}
+}
+
 // WakeAt returns the scheduled cooldown expiry (zero when none).
 func (r *RAPI) WakeAt() time.Time {
 	r.mu.Lock()
@@ -250,7 +264,18 @@ func (r *RAPI) onPlatformFailure(ctx *fsm.Context) {
 
 func (r *RAPI) onAllKeysSoft(ctx *fsm.Context) {
 	p := ctx.Payload.(AllKeysPayload)
-	// Session-style short cooldown so the snapshot shows the failure.
+	// 池标准冷却：软池（全部 key 冷却中）时把 RAPI 的冷却对齐到池内最早
+	// 的 key 恢复时刻（第一个进入 429 的 key），而不是默认短冷却 —— 否则
+	// RAPI 冷却先到期、PickAvailable 又选中它、key 仍冷却、再标记，形成
+	// 空转循环（表现为请求一直等待当前 key 冷却而不用链上下一节点）。
+	if !p.PoolRecoverAt.IsZero() {
+		now := time.Now()
+		r.lastFailure = now
+		r.reason = p.Reason
+		ctx.Machine.SetTimer(p.PoolRecoverAt)
+		return
+	}
+	// 无池时间信息（如能力黑名单池）退回短会话冷却。
 	r.onSessionFailure(&fsm.Context{Machine: ctx.Machine, Payload: SessionFailurePayload{Reason: p.Reason}})
 }
 

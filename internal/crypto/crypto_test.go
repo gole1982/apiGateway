@@ -105,6 +105,7 @@ func TestEncryptNonDeterministic(t *testing.T) {
 }
 
 func TestLoadOrGenerateKey(t *testing.T) {
+	t.Setenv(envKeyName, "") // 确保走文件路径，不受外部环境影响
 	dir := t.TempDir()
 	path := filepath.Join(dir, keyFile)
 
@@ -137,5 +138,86 @@ func TestLoadOrGenerateKey(t *testing.T) {
 		if info.Mode().Perm() != 0600 {
 			t.Errorf("key file permissions = %o, want 0600", info.Mode().Perm())
 		}
+	}
+}
+
+func hexOf(b []byte) string {
+	const hx = "0123456789abcdef"
+	out := make([]byte, len(b)*2)
+	for i, v := range b {
+		out[i*2] = hx[v>>4]
+		out[i*2+1] = hx[v&0xf]
+	}
+	return string(out)
+}
+
+// 环境变量优先于密钥文件：即使文件存在且内容不同，也必须用环境变量的值。
+func TestLoadOrGenerateKeyEnvPriority(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir) // Windows 上 UserHomeDir 读 USERPROFILE
+
+	fileKey := make([]byte, 32)
+	for i := range fileKey {
+		fileKey[i] = byte(i)
+	}
+	if err := os.WriteFile(filepath.Join(dir, keyFile), []byte(hexOf(fileKey)), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	envKey := make([]byte, 32)
+	for i := range envKey {
+		envKey[i] = byte(0xff - i)
+	}
+	t.Setenv(envKeyName, hexOf(envKey))
+
+	got, source, err := loadOrGenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source != "env:"+envKeyName {
+		t.Errorf("source = %q, want env:%s", source, envKeyName)
+	}
+	if len(got) != 32 || got[0] != envKey[0] || got[31] != envKey[31] {
+		t.Error("env key not used in preference to key file")
+	}
+}
+
+// 环境变量非法（非 64 位 hex）必须报错，而不是悄悄回退文件（防止操作员以为
+// env 生效、实际在用另一把 key → 历史密文解不开且无任何提示）。
+func TestLoadOrGenerateKeyInvalidEnv(t *testing.T) {
+	t.Setenv(envKeyName, "not-hex")
+	if _, _, err := loadOrGenerateKey(); err == nil {
+		t.Fatal("invalid env key should error, not fall back to file")
+	}
+	t.Setenv(envKeyName, hexOf([]byte("too-short")))
+	if _, _, err := loadOrGenerateKey(); err == nil {
+		t.Fatal("short env key should error, not fall back to file")
+	}
+}
+
+// 未设置环境变量时回退文件，来源应报告文件路径。
+func TestLoadOrGenerateKeyFileFallback(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+	t.Setenv(envKeyName, "")
+
+	fileKey := make([]byte, 32)
+	for i := range fileKey {
+		fileKey[i] = byte(i * 3)
+	}
+	if err := os.WriteFile(filepath.Join(dir, keyFile), []byte(hexOf(fileKey)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, source, err := loadOrGenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source != filepath.Join(dir, keyFile) {
+		t.Errorf("source = %q, want key file path", source)
+	}
+	if len(got) != 32 || got[1] != fileKey[1] {
+		t.Error("file key not loaded")
 	}
 }

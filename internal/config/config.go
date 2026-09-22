@@ -68,8 +68,10 @@ type Config struct {
 // Management 描述管理端直写中心的参数。
 //
 //   - SupabaseURL：项目根 URL（https://xxx.supabase.co）
-//   - ServiceKey：service_role / sb_secret_… 私钥（读写全表；只放管理机）
-//   - CenterKey：32 字节 hex，token 边界加解密（与各代理 [sync].center_key 一致）
+//   - ServiceKey：Supabase secret key（sb_secret_…，旧称 service_role）——
+//     绕过 RLS、读写全表；只放管理机，绝不外泄。管理端角色由此判定。
+//   - CenterKey：可选，32 字节 hex，token 写中心前加密；留空 = 中心存明文
+//     （访问安全由 Supabase 负责）。填了则与各代理 [sync].center_key 一致
 type Management struct {
 	SupabaseURL string
 	ServiceKey  string
@@ -84,7 +86,8 @@ func (m Management) Configured() bool {
 // Sync 描述代理端从中心 Supabase 拉取定义快照的参数。
 //
 //   - SourceURL / VersionURL：Supabase PostgREST 的 get_bundle / get_version RPC 全 URL
-//   - AnonKey：Supabase anon 公钥（只读，可放代理端）
+//   - AnonKey：Supabase publishable key（sb_publishable_…，旧称 anon）——
+//     受 RLS 约束、只读；可放代理端。代理端角色由此判定。
 //   - CenterKey：32 字节 hex，token 边界解密用（管理端写入中心时用同一把加密）
 //   - PollIntervalSec：代理轮询中心版本号的间隔（默认 60s）
 type Sync struct {

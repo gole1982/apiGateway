@@ -462,11 +462,17 @@ type keyRef struct {
 	idx  int
 }
 
-// reencrypt 把中心密文（center_key AES-GCM）解出明文，再用本地 active key 加密。
-// 空串原样返回；中心存了无 enc: 前缀的明文（容忍路径）时视作明文重新本地加密。
+// reencrypt 把中心值转存为本地密文。空串原样返回；中心存了无 enc: 前缀的明文
+// （容忍路径，含 center_key 留空的"中心明文"模式）时视作明文重新本地加密。
+// centerKey 为空而中心值却带 enc: 前缀（历史加密残留）：无法解密，给出明确指引
+// 而不是返回 "key not initialised" 这种误导性错误。
 func reencrypt(centerCiphertext string, centerKey []byte) (string, error) {
 	if centerCiphertext == "" {
 		return "", nil
+	}
+	if len(centerKey) == 0 && strings.HasPrefix(centerCiphertext, "enc:") {
+		return "", errors.New("中心存储为密文但本地未配置 center_key，无法解密；" +
+			"请在中心配置页填入当时的 center_key，或用「本地到中心」整体覆盖推送把中心改写为明文")
 	}
 	plain, err := crypto.DecryptWithKey(centerCiphertext, centerKey)
 	if err != nil {

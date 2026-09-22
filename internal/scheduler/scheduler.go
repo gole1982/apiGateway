@@ -97,7 +97,11 @@ type Manager struct {
 	platforms map[int64]*entity.Platform
 	queues    map[int64]*waitQueue
 	counters  map[int64]*rapiCounters
-	stop      chan struct{}
+	// keyCursors 是平台级 Key 轮询游标：每个平台维护一个计数器，
+	// PickAvailableKey 按它旋转 key 列表，实现同平台多 key 的一般轮询
+	// （round-robin，均匀分摊配额，不再偏向免费/临期 key）。
+	keyCursors map[int64]*uint64
+	stop       chan struct{}
 }
 
 // timeBucket tracks request/token counts within a fixed time window.
@@ -112,6 +116,14 @@ type rapiCounters struct {
 	minute timeBucket
 	hour   timeBucket
 	day    timeBucket
+}
+
+// dayStartOf returns the local-midnight boundary of t (process local timezone),
+// so the "day" counter resets at local midnight — matching the
+// /api/dashboard/metrics "today" window. Replaces now.Truncate(24h), which
+// snapped to UTC midnight and diverged from local-day metrics for non-UTC users.
+func dayStartOf(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
 }
 
 type waitQueue struct {
@@ -144,13 +156,14 @@ func NewManager(cfg Config, store ...entity.Store) *Manager {
 			BillingCooldown:    cfg.BillingCooldown,
 			ExponentialBackoff: cfg.ExponentialBackoff,
 		},
-		store:     st,
-		rapis:     make(map[int64]*entity.RAPI),
-		keys:      make(map[int64]*entity.Key),
-		platforms: make(map[int64]*entity.Platform),
-		queues:    make(map[int64]*waitQueue),
-		counters:  make(map[int64]*rapiCounters),
-		stop:      make(chan struct{}),
+		store:      st,
+		rapis:      make(map[int64]*entity.RAPI),
+		keys:       make(map[int64]*entity.Key),
+		platforms:  make(map[int64]*entity.Platform),
+		queues:     make(map[int64]*waitQueue),
+		counters:   make(map[int64]*rapiCounters),
+		keyCursors: make(map[int64]*uint64),
+		stop:       make(chan struct{}),
 	}
 	m.cond = sync.NewCond(&m.mu)
 	go m.recoveryLoop()
@@ -252,48 +265,83 @@ func (m *Manager) MarkAllKeysUnavailable(rapiID int64, hard bool, reason string)
 	return first
 }
 
-// PickAvailableKey returns the best available PlatformKey from the provided slice.
+// MarkPoolExhausted 处理软池（全部 key 冷却中）的池标准冷却：
+//  1. 取 poolRecoverAt（池内最早恢复时刻，由调用方从 PickAvailableKey 的
+//     返回值取 min 得出）作为池标准；
+//  2. 把池内所有 Cooling key 的恢复时刻对齐到该时刻（同时恢复，最大化
+//     恢复瞬间的可用容量）；
+//  3. RAPI 冷却也对齐到该时刻 —— 冷却期间 PickAvailable 跳过本 RAPI
+//     直接走链上下一节点，消除"RAPI 短冷却到期→key 仍冷却→再标记"的
+//     空转循环。
 //
-// Selection order (ascending priority — first match wins):
-//  1. IsFree desc        — within one platform, free keys are tried before paid keys
-//     so free quota is consumed first.
-//  2. ExpiresAt asc      — among keys of the same free/paid tier, the key whose
-//     ExpiresAt is nearest is tried first (so its remaining quota
-//     is used before it lapses). Keys with no ExpiresAt (never
-//     expires) sort last within their tier.
-//  3. KeyIndex asc       — stable tiebreaker preserving operator-configured order.
+// 返回池标准恢复时刻（零值表示无可用信息）。
+func (m *Manager) MarkPoolExhausted(rapiID int64, keyIDs []int64, poolRecoverAt time.Time, reason string) time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if poolRecoverAt.IsZero() {
+		return time.Time{}
+	}
+	for _, kid := range keyIDs {
+		if ke, ok := m.keys[kid]; ok {
+			ke.AlignCooldownTo(poolRecoverAt)
+		}
+	}
+	m.rapiEntityLocked(rapiID).OnAllKeysUnavailable(false, reason)
+	// 直接在实体上对齐 RAPI 冷却（OnAllKeysUnavailable 软池分支拿不到池时间）。
+	if r, ok := m.rapis[rapiID]; ok {
+		// RAPI.OnAllKeysUnavailable 已置短冷却；这里覆盖为池标准时刻。
+		r.AlignCooldownTo(poolRecoverAt)
+	}
+	m.cond.Broadcast()
+	return poolRecoverAt
+}
+
+// PickAvailableKey returns the next available PlatformKey from the provided
+// slice using per-platform round-robin.
 //
-// Each key entity is synced with its fresh DB row (enabled / failure_type /
-// expires_at) before evaluation; dead keys (disabled, permanently failed, or
-// expired) are skipped. Returns (key, retryAt, nil) on success or
-// (zero, retryAt, ErrAllKeysUnavailable) when all keys are unavailable/cooling.
+// 选择算法（同平台多 key 一般轮询）：
+//  1. 按 KeyIndex 稳定排序（操作者配置的顺序即轮询顺序）；
+//  2. 按平台级游标（keyCursors[platform_id]）旋转切片，使每次调用从
+//     上一次选中 key 的下一位开始扫描 —— 均匀分摊各 key 的配额，
+//     不再偏向免费/临期 key；
+//  3. 依次评估实体可挑性（冷却中的 key 跳过，记录最早恢复时间），
+//     返回第一个可用的 key。
+//
+// 每个 key 实体先与其最新 DB 行同步（enabled / failure_type / expires_at）
+// 再评估；死 key（禁用/永久失效/过期）跳过。返回 (key, retryAt, nil) 或
+// (zero, retryAt, ErrAllKeysUnavailable)。
 func (m *Manager) PickAvailableKey(keys []models.PlatformKey) (models.PlatformKey, time.Time, error) {
 	now := time.Now()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	// Sort a copy so the caller's slice (often loaded from DB and attached to a
-	// RAPI snapshot) is not mutated across requests.
+	// RAPI snapshot) is not mutated across requests. KeyIndex asc keeps the
+	// operator-configured order as the canonical rotation order.
 	sorted := make([]models.PlatformKey, len(keys))
 	copy(sorted, keys)
 	sort.SliceStable(sorted, func(i, j int) bool {
-		ki, kj := sorted[i], sorted[j]
-		// 1. Free keys first.
-		if ki.IsFree != kj.IsFree {
-			return ki.IsFree
-		}
-		// 2. Among the same tier, nearer ExpiresAt first (nil = never = last).
-		ti := keyExpiryRank(ki.ExpiresAt)
-		tj := keyExpiryRank(kj.ExpiresAt)
-		if ti.Before(tj) {
-			return true
-		}
-		if ti.After(tj) {
-			return false
-		}
-		// 3. Stable tiebreaker by operator-configured key index.
-		return ki.KeyIndex < kj.KeyIndex
+		return sorted[i].KeyIndex < sorted[j].KeyIndex
 	})
+
+	// Rotate by the platform cursor so consecutive picks start one past the
+	// key used last time (round-robin). The cursor lives under m.mu.
+	if len(sorted) > 0 {
+		pid := sorted[0].PlatformID
+		cur := m.keyCursors[pid]
+		if cur == nil {
+			cur = new(uint64)
+			m.keyCursors[pid] = cur
+		}
+		rot := int(*cur % uint64(len(sorted)))
+		*cur++
+		if rot > 0 {
+			rotated := make([]models.PlatformKey, len(sorted))
+			copy(rotated, sorted[rot:])
+			copy(rotated[len(sorted)-rot:], sorted[:rot])
+			sorted = rotated
+		}
+	}
 
 	var nextAvail time.Time
 	for _, k := range sorted {
@@ -309,16 +357,6 @@ func (m *Manager) PickAvailableKey(keys []models.PlatformKey) (models.PlatformKe
 		return k, time.Time{}, nil
 	}
 	return models.PlatformKey{}, nextAvail, ErrAllKeysUnavailable
-}
-
-// keyExpiryRank maps a key's ExpiresAt to a sort key so that nearer deadlines come
-// first and "never expires" (nil/zero) sorts last. Returns the far-future sentinel
-// for nil/zero so it compares greater than any real deadline.
-func keyExpiryRank(t *time.Time) time.Time {
-	if t == nil || t.IsZero() {
-		return time.Unix(1<<62, 0) // far future — sorts after all real deadlines
-	}
-	return *t
 }
 
 // MarkKeyFailure puts a PlatformKey into session cooldown WITHOUT persisting
@@ -448,8 +486,8 @@ func (m *Manager) RecordRequest(rapiID int64, tokens int) {
 	c.hour.reqs++
 	c.hour.toks += tokens
 
-	// Day bucket (24h rolling)
-	dayStart := now.Truncate(24 * time.Hour)
+	// Day bucket (local midnight)
+	dayStart := dayStartOf(now)
 	if c.day.start != dayStart {
 		c.day = timeBucket{start: dayStart}
 	}
@@ -666,7 +704,7 @@ func thresholdExceeded(c *rapiCounters, rapi models.RAPIWithPlatform, now time.T
 	// Ensure buckets are current before checking
 	minuteStart := now.Truncate(time.Minute)
 	hourStart := now.Truncate(time.Hour)
-	dayStart := now.Truncate(24 * time.Hour)
+	dayStart := dayStartOf(now)
 
 	minReqs := c.minute.reqs
 	minToks := c.minute.toks
