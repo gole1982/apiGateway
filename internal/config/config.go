@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/ini.v1"
 )
@@ -53,6 +54,53 @@ type Config struct {
 	LogLevel    string
 	LogFile     bool
 	LogFilePath string
+
+	// Sync（代理端读路径，对应 [sync] 段）。配置了 source_url 才启用中心同步；
+	// 否则网关以纯本地模式运行。设计：docs/superpowers/specs/2026-09-03-center-edge-config-sync-design.md
+	Sync Sync
+
+	// Management（管理端写路径，对应 [management] 段）。配置了 supabase_url 即
+	// 管理模式：dashboard 定义类 CRUD 经 PostgREST 直写中心，本地仅作运行时镜像。
+	// 勿与 [sync] 混用同一台机器两种角色：管理机配 [management]，转发机配 [sync]。
+	Management Management
+}
+
+// Management 描述管理端直写中心的参数。
+//
+//   - SupabaseURL：项目根 URL（https://xxx.supabase.co）
+//   - ServiceKey：Supabase secret key（sb_secret_…，旧称 service_role）——
+//     绕过 RLS、读写全表；只放管理机，绝不外泄。管理端角色由此判定。
+//   - CenterKey：可选，32 字节 hex，token 写中心前加密；留空 = 中心存明文
+//     （访问安全由 Supabase 负责）。填了则与各代理 [sync].center_key 一致
+type Management struct {
+	SupabaseURL string
+	ServiceKey  string
+	CenterKey   string
+}
+
+// Configured 表示是否启用管理模式。
+func (m Management) Configured() bool {
+	return strings.TrimSpace(m.SupabaseURL) != ""
+}
+
+// Sync 描述代理端从中心 Supabase 拉取定义快照的参数。
+//
+//   - SourceURL / VersionURL：Supabase PostgREST 的 get_bundle / get_version RPC 全 URL
+//   - AnonKey：Supabase publishable key（sb_publishable_…，旧称 anon）——
+//     受 RLS 约束、只读；可放代理端。代理端角色由此判定。
+//   - CenterKey：32 字节 hex，token 边界解密用（管理端写入中心时用同一把加密）
+//   - PollIntervalSec：代理轮询中心版本号的间隔（默认 60s）
+type Sync struct {
+	SourceURL       string
+	VersionURL      string
+	AnonKey         string
+	CenterKey       string
+	PollIntervalSec int
+}
+
+// Enabled 表示是否启用中心同步（配了 source_url 即启用）。
+func (s Sync) Enabled() bool {
+	return strings.TrimSpace(s.SourceURL) != ""
 }
 
 func Load() (*Config, error) {
@@ -80,6 +128,8 @@ func Load() (*Config, error) {
 			LogLevel:           "info",
 			LogFile:            false,
 			LogFilePath:        "logs/gateway.log",
+			Sync:               Sync{PollIntervalSec: 60},
+			Management:         Management{},
 		}, nil
 	}
 
@@ -99,5 +149,17 @@ func Load() (*Config, error) {
 		LogLevel:           cfg.Section("log").Key("level").MustString("info"),
 		LogFile:            cfg.Section("log").Key("file").MustBool(false),
 		LogFilePath:        cfg.Section("log").Key("file_path").MustString("logs/gateway.log"),
+		Sync: Sync{
+			SourceURL:       cfg.Section("sync").Key("source_url").MustString(""),
+			VersionURL:      cfg.Section("sync").Key("version_url").MustString(""),
+			AnonKey:         cfg.Section("sync").Key("anon_key").MustString(""),
+			CenterKey:       cfg.Section("sync").Key("center_key").MustString(""),
+			PollIntervalSec: cfg.Section("sync").Key("poll_interval_sec").MustInt(60),
+		},
+		Management: Management{
+			SupabaseURL: cfg.Section("management").Key("supabase_url").MustString(""),
+			ServiceKey:  cfg.Section("management").Key("service_key").MustString(""),
+			CenterKey:   cfg.Section("management").Key("center_key").MustString(""),
+		},
 	}, nil
 }

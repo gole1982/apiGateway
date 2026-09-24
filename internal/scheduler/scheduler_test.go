@@ -430,87 +430,86 @@ func TestPickAvailableKeyAllPermanentFails(t *testing.T) {
 	}
 }
 
-func TestPickAvailableKeyPrefersFree(t *testing.T) {
+// 轮询策略（2026-09 评审决策）：同平台多 key 一般轮询，不再偏向免费/临期
+// key —— 旧 IsFree/ExpiresAt 优先测试已随之移除。
+func TestPickAvailableKeyRoundRobin(t *testing.T) {
 	m := NewManager(testConfig())
 	defer m.Close()
 
-	// A paid key with the lower (preferred by the old logic) key_index should
-	// still yield to a free key with a higher key_index.
 	keys := []models.PlatformKey{
-		{ID: 1, KeyIndex: 0, Enabled: true, IsFree: false}, // paid, first
-		{ID: 2, KeyIndex: 1, Enabled: true, IsFree: true},  // free
+		{ID: 1, PlatformID: 10, KeyIndex: 0, Enabled: true, IsFree: false},
+		{ID: 2, PlatformID: 10, KeyIndex: 1, Enabled: true, IsFree: true},
+		{ID: 3, PlatformID: 10, KeyIndex: 2, Enabled: true, IsFree: true},
 	}
 
-	got, _, err := m.PickAvailableKey(keys)
-	if err != nil {
-		t.Fatalf("PickAvailableKey: %v", err)
-	}
-	if got.ID != 2 {
-		t.Fatalf("selected key %d, want 2 (free preferred over paid with lower index)", got.ID)
+	// 连续选择应按 KeyIndex 轮转：1 → 2 → 3 → 1 …，与免费/付费无关。
+	want := []int64{1, 2, 3, 1, 2, 3}
+	for i, w := range want {
+		got, _, err := m.PickAvailableKey(keys)
+		if err != nil {
+			t.Fatalf("pick %d: %v", i, err)
+		}
+		if got.ID != w {
+			t.Fatalf("pick %d = key %d, want %d (round-robin)", i, got.ID, w)
+		}
 	}
 }
 
-func TestPickAvailableKeyFreeEarliestExpiry(t *testing.T) {
+func TestPickAvailableKeyRoundRobinPerPlatform(t *testing.T) {
 	m := NewManager(testConfig())
 	defer m.Close()
 
-	// Two free keys: the one that expires sooner should be picked first so its
-	// remaining quota is consumed before it lapses.
-	soon := time.Now().Add(1 * time.Hour)
-	later := time.Now().Add(24 * time.Hour)
-	keys := []models.PlatformKey{
-		{ID: 1, KeyIndex: 0, Enabled: true, IsFree: true, ExpiresAt: &later},
-		{ID: 2, KeyIndex: 1, Enabled: true, IsFree: true, ExpiresAt: &soon},
+	pa := []models.PlatformKey{
+		{ID: 1, PlatformID: 10, KeyIndex: 0, Enabled: true},
+		{ID: 2, PlatformID: 10, KeyIndex: 1, Enabled: true},
+	}
+	pb := []models.PlatformKey{
+		{ID: 3, PlatformID: 20, KeyIndex: 0, Enabled: true},
+		{ID: 4, PlatformID: 20, KeyIndex: 1, Enabled: true},
 	}
 
-	got, _, err := m.PickAvailableKey(keys)
-	if err != nil {
-		t.Fatalf("PickAvailableKey: %v", err)
+	// 平台 A 轮转不应影响平台 B 的游标：B 第一次仍取自己的 #3。
+	if _, _, err := m.PickAvailableKey(pa); err != nil {
+		t.Fatal(err)
 	}
-	if got.ID != 2 {
-		t.Fatalf("selected key %d, want 2 (nearer ExpiresAt preferred among free keys)", got.ID)
+	if _, _, err := m.PickAvailableKey(pa); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := m.PickAvailableKey(pb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != 3 {
+		t.Fatalf("selected key %d, want 3 (per-platform cursor independent)", got.ID)
 	}
 }
 
-func TestPickAvailableKeyPaidEarliestExpiry(t *testing.T) {
+func TestPickAvailableKeyRoundRobinSkipsCooling(t *testing.T) {
 	m := NewManager(testConfig())
 	defer m.Close()
 
-	// Same tier-priority should apply to paid keys: nearer expiry first.
-	soon := time.Now().Add(1 * time.Hour)
-	later := time.Now().Add(24 * time.Hour)
 	keys := []models.PlatformKey{
-		{ID: 1, KeyIndex: 0, Enabled: true, IsFree: false, ExpiresAt: &later},
-		{ID: 2, KeyIndex: 1, Enabled: true, IsFree: false, ExpiresAt: &soon},
+		{ID: 1, PlatformID: 10, KeyIndex: 0, Enabled: true},
+		{ID: 2, PlatformID: 10, KeyIndex: 1, Enabled: true},
 	}
 
+	// 轮到 key 1 时它已冷却 → 跳过取 key 2；下一次轮到 key 2 但它冷却 → 回到 key 1。
+	m.MarkKeyTemporaryFailure(1, time.Now().Add(time.Minute), "429")
 	got, _, err := m.PickAvailableKey(keys)
 	if err != nil {
-		t.Fatalf("PickAvailableKey: %v", err)
+		t.Fatal(err)
 	}
 	if got.ID != 2 {
-		t.Fatalf("selected key %d, want 2 (nearer ExpiresAt preferred among paid keys)", got.ID)
-	}
-}
-
-func TestPickAvailableKeyNeverExpiresSortsLastInTier(t *testing.T) {
-	m := NewManager(testConfig())
-	defer m.Close()
-
-	// Within the free tier, a key with no ExpiresAt (never expires) should be
-	// deferred in favour of one that does expire.
-	soon := time.Now().Add(1 * time.Hour)
-	keys := []models.PlatformKey{
-		{ID: 1, KeyIndex: 0, Enabled: true, IsFree: true}, // never
-		{ID: 2, KeyIndex: 1, Enabled: true, IsFree: true, ExpiresAt: &soon},
+		t.Fatalf("selected key %d, want 2 (cooling key skipped in rotation)", got.ID)
 	}
 
-	got, _, err := m.PickAvailableKey(keys)
-	if err != nil {
-		t.Fatalf("PickAvailableKey: %v", err)
+	m.MarkKeyTemporaryFailure(2, time.Now().Add(time.Minute), "429")
+	_, next, err := m.PickAvailableKey(keys)
+	if !errors.Is(err, ErrAllKeysUnavailable) {
+		t.Fatalf("err = %v, want ErrAllKeysUnavailable", err)
 	}
-	if got.ID != 2 {
-		t.Fatalf("selected key %d, want 2 (key with deadline preferred over never-expires)", got.ID)
+	if next.IsZero() {
+		t.Fatal("nextAvail should carry the earliest key recoverAt")
 	}
 }
 
@@ -549,6 +548,69 @@ func TestPickAvailableKeyAllExpired(t *testing.T) {
 	_, _, err := m.PickAvailableKey(keys)
 	if !errors.Is(err, ErrAllKeysUnavailable) {
 		t.Fatalf("err = %v, want ErrAllKeysUnavailable for all-expired keys", err)
+	}
+}
+
+// 池标准冷却（2026-09 评审决策）：全池 key 进入 429 后，以第一个进入 429 的
+// key 的恢复时刻为标准对齐整池与 RAPI；RAPI 冷却期间 PickAvailable 直接选
+// 链上下一节点，不再 10s 空转循环。
+func TestMarkPoolExhaustedAlignsKeysAndRAPI(t *testing.T) {
+	m := NewManager(testConfig())
+	defer m.Close()
+
+	// key 1 先 429（恢复较早），key 2 后 429（恢复较晚）→ 池标准 = key 1 的时刻。
+	firstRecover := time.Now().Add(2 * time.Minute)
+	laterRecover := time.Now().Add(5 * time.Minute)
+	m.MarkKeyTemporaryFailure(1, firstRecover, "429")
+	m.MarkKeyTemporaryFailure(2, laterRecover, "429")
+
+	rapiID := int64(101)
+	got := m.MarkPoolExhausted(rapiID, []int64{1, 2}, firstRecover, "key pool exhausted")
+	if !got.Equal(firstRecover) {
+		t.Fatalf("MarkPoolExhausted returned %v, want %v", got, firstRecover)
+	}
+
+	// 两个 key 的恢复时刻都应对齐到池标准，RAPI 冷却也 = 池标准。
+	// （经 Snapshot() 读取，与 insights 面板同一路径。）
+	snap := m.Snapshot()
+	keyAt := func(id int64) KeySnapshot {
+		for _, ks := range snap.Keys {
+			if ks.ID == id {
+				return ks
+			}
+		}
+		t.Fatalf("key %d missing from snapshot", id)
+		return KeySnapshot{}
+	}
+	for _, kid := range []int64{1, 2} {
+		if got := keyAt(kid); !got.RecoverAt.Equal(firstRecover) {
+			t.Fatalf("key %d RecoverAt = %v, want aligned to %v", kid, got.RecoverAt, firstRecover)
+		}
+	}
+	rapiSnap := func(id int64) RAPISnapshot {
+		for _, rs := range snap.RAPIs {
+			if rs.ID == id {
+				return rs
+			}
+		}
+		t.Fatalf("rapi %d missing from snapshot", id)
+		return RAPISnapshot{}
+	}(rapiID)
+	if !rapiSnap.RecoverAt.Equal(firstRecover) {
+		t.Fatalf("RAPI RecoverAt = %v, want %v (pool-standard cooldown)", rapiSnap.RecoverAt, firstRecover)
+	}
+
+	// 全池冷却期间 PickAvailable 应跳过该 RAPI —— 表现为调用方走链上下一节点。
+	rapis := []models.RAPIWithPlatform{
+		{ID: rapiID, Alias: "cooling", Enabled: true, Available: true},
+		{ID: 202, Alias: "next-node", Enabled: true, Available: true},
+	}
+	picked, _, err := m.PickAvailable(1, rapis, "")
+	if err != nil {
+		t.Fatalf("PickAvailable: %v", err)
+	}
+	if picked.ID != 202 {
+		t.Fatalf("picked rapi %d, want 202 (pool-cooled rapi skipped → next chain node)", picked.ID)
 	}
 }
 

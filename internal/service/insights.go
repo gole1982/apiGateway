@@ -10,6 +10,7 @@ import (
 	"gateway/internal/db"
 	"gateway/internal/models"
 	"gateway/internal/scheduler"
+	"gateway/internal/store"
 )
 
 // ============ Insight Response Types ============
@@ -97,10 +98,10 @@ type rapiCfg struct {
 func generateInsights() InsightResponse {
 	snap := proxyGateway.Scheduler().Snapshot()
 	rapiStats, _ := db.Get().GetRAPIStats()
-	rapis, _ := db.Get().GetRAPIs()
-	lapis, _ := db.Get().GetLAPIs()
-	platforms, _ := db.Get().GetPlatforms()
-	allKeys, _ := db.Get().GetAllPlatformKeys()
+	rapis, _ := store.A().GetRAPIs()
+	lapis, _ := store.A().GetLAPIs()
+	platforms, _ := store.A().GetPlatforms()
+	allKeys, _ := store.A().GetAllPlatformKeys()
 	orders, _ := db.Get().GetAllLAPIRAPIOrders()
 	fallbackStats, _ := db.Get().GetFallbackStats(24)
 	hourlyDist, _ := db.Get().GetHourlyDistribution(7)

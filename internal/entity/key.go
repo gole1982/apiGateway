@@ -224,6 +224,21 @@ func (k *Key) Snapshot() KeySnapshot {
 	}
 }
 
+// AlignCooldownTo 对齐池标准冷却：把该 key 的冷却结束时刻设为 at（池内最早
+// 恢复的 key 的恢复时刻）。仅对 Cooling 状态生效 —— 其他状态（Healthy 会被
+// 后续失败拉长、PermanentFailed/Disabled/Expired 不靠定时器恢复）不处理。
+// 池内所有 key 对齐后同时恢复，最大化恢复时刻的可用容量。
+func (k *Key) AlignCooldownTo(at time.Time) {
+	if at.IsZero() {
+		return
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.machine.State() == StateCooling {
+		k.machine.SetTimer(at)
+	}
+}
+
 // --- transition effects (run under k.mu, outside the machine lock) ---
 
 func (k *Key) onSessionFailure(ctx *fsm.Context) {

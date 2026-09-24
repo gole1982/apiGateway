@@ -40,16 +40,18 @@ const (
 )
 
 // UnreadItem is one in-memory unread event, routed to a UI menu. Not persisted:
-// unread state is intentionally transient (lost on restart) to keep maintenance
-// cost low, as agreed.
+// unread state is intentionally transient (lost on restart) — 重启后需要处理的
+// 事项由仪表盘「待处理」重新推导，未读只承担"本次运行内的注意力引导"。
 type UnreadItem struct {
 	ID        int64     `json:"id"`
 	Menu      string    `json:"menu"`
-	Kind      string    `json:"kind"` // create | update | delete | failure
+	Kind      string    `json:"kind"` // create | update | delete | failure | cooling | cascade
 	EntityID  int64     `json:"entity_id,omitempty"`
 	Title     string    `json:"title"`
 	Detail    string    `json:"detail,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	Count     int       `json:"count"`            // 同状态合并次数（1 = 首次）
+	FirstAt   time.Time `json:"first_at"`         // 该状态首次出现时刻
+	CreatedAt time.Time `json:"created_at"`       // 最近一次出现时刻
 }
 
 // maxUnreadItems caps the in-memory feed so a runaway stream of events can not
@@ -113,12 +115,32 @@ func (s *NotificationService) PublishAsync(level, title, message string) {
 
 // RecordUnread appends an in-memory unread event routed to a menu, without
 // broadcasting a toast (used for entity create/update/delete events).
+//
+// 同状态合并（最大痛点）：同一 (menu, kind, entityID) 的事件不再重复堆叠——
+// 命中既有条目时将其删除并按新 seq 重新入队，Count+1、Detail/CreatedAt 取最新、
+// FirstAt 保留首次时刻。新 seq 保证"已读后又复发"的事件重新浮出水面（例如
+// 某 key 冷却恢复后再次 429）。
 func (s *NotificationService) RecordUnread(menu, kind, title, detail string, entityID int64) {
 	if menu == "" {
 		menu = MenuPlatforms
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := time.Now()
+	count := 1
+	firstAt := now
+	// 合并同状态：找出同 (menu,kind,entityID) 的旧条目，继承其计数与首现时刻。
+	for i, it := range s.unread {
+		if it.Menu == menu && it.Kind == kind && it.EntityID == entityID {
+			count = it.Count + 1
+			firstAt = it.FirstAt
+			if firstAt.IsZero() {
+				firstAt = it.CreatedAt
+			}
+			s.unread = append(s.unread[:i], s.unread[i+1:]...)
+			break
+		}
+	}
 	s.seq++
 	s.unread = append(s.unread, UnreadItem{
 		ID:        s.seq,
@@ -127,10 +149,25 @@ func (s *NotificationService) RecordUnread(menu, kind, title, detail string, ent
 		EntityID:  entityID,
 		Title:     title,
 		Detail:    detail,
-		CreatedAt: time.Now(),
+		Count:     count,
+		FirstAt:   firstAt,
+		CreatedAt: now,
 	})
 	if len(s.unread) > maxUnreadItems {
 		s.unread = s.unread[len(s.unread)-maxUnreadItems:]
+	}
+}
+
+// MarkItemRead 标记单条已读（从 feed 移除）。合并语义下条目复发会换新 ID，
+// 直接删除是安全的。
+func (s *NotificationService) MarkItemRead(id int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, it := range s.unread {
+		if it.ID == id {
+			s.unread = append(s.unread[:i], s.unread[i+1:]...)
+			return
+		}
 	}
 }
 

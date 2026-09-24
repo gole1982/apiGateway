@@ -212,10 +212,14 @@ type SessionFailurePayload struct {
 }
 
 // AllKeysPayload distinguishes the soft (all cooling) vs hard (all dead) forms
-// of the RAPI-level all-keys-unavailable event.
+// of the RAPI-level all-keys-unavailable event. PoolRecoverAt is the pool
+// standard cooldown: the earliest recoverAt among the pool's cooling keys
+// (第一个进入 429 的 key 的恢复时刻)。软池事件用它对齐 RAPI 冷却，使
+// RAPI 与全部 key 在同一时刻恢复，冷却期间 PickAvailable 直接走下一节点。
 type AllKeysPayload struct {
-	Hard   bool
-	Reason string
+	Hard         bool
+	Reason       string
+	PoolRecoverAt time.Time
 }
 
 // KeyRowUsable reports whether a DB row is usable by its persisted facts alone

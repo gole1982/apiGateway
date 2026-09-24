@@ -230,3 +230,47 @@ func TestAllKeysHardDead(t *testing.T) {
 		})
 	}
 }
+
+func TestExtractUsageDetail(t *testing.T) {
+	tests := []struct {
+		name           string
+		body           string
+		wantIn, wantOut, wantCached int
+	}{
+		{
+			name: "openai plain json",
+			body: `{"id":"x","usage":{"prompt_tokens":100,"completion_tokens":40,"prompt_tokens_details":{"cached_tokens":60}}}`,
+			wantIn: 100, wantOut: 40, wantCached: 60,
+		},
+		{
+			name: "anthropic plain json",
+			body: `{"usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":8,"cache_creation_input_tokens":2}}`,
+			wantIn: 10, wantOut: 5, wantCached: 10,
+		},
+		{
+			name: "gemini usageMetadata",
+			body: `{"candidates":[],"usageMetadata":{"promptTokenCount":500,"candidatesTokenCount":120,"cachedContentTokenCount":300}}`,
+			wantIn: 500, wantOut: 120, wantCached: 300,
+		},
+		{
+			name: "sse stream last usage frame wins",
+			body: "data: {\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}\n\ndata: {\"usage\":{\"prompt_tokens\":200,\"completion_tokens\":90,\"prompt_tokens_details\":{\"cached_tokens\":150}}}\n\ndata: [DONE]\n\n",
+			wantIn: 200, wantOut: 90, wantCached: 150,
+		},
+		{
+			name: "empty body",
+			body: "",
+			wantIn: 0, wantOut: 0, wantCached: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			in, out, cached := extractUsageDetail(tt.body)
+			if in != tt.wantIn || out != tt.wantOut || cached != tt.wantCached {
+				t.Errorf("extractUsageDetail(%s) = (%d,%d,%d), want (%d,%d,%d)",
+					tt.name, in, out, cached, tt.wantIn, tt.wantOut, tt.wantCached)
+			}
+		})
+	}
+}

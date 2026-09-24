@@ -231,7 +231,7 @@
         aside {
             background: rgba(8, 10, 24, 0.85);
             border-right: 1px solid var(--border-glow);
-            padding: 30px 20px;
+            padding: 14px 16px;
             display: flex;
             flex-direction: column;
             justify-content: space-between;
@@ -247,7 +247,7 @@
             display: flex;
             align-items: center;
             gap: 12px;
-            margin-bottom: 40px;
+            margin-bottom: 14px;
         }
         .brand-logo {
             width: 38px;
@@ -277,20 +277,20 @@
             list-style: none;
             display: flex;
             flex-direction: column;
-            gap: 8px;
+            gap: 5px;
             flex-grow: 1;
         }
         .nav-item button {
             width: 100%;
             display: flex;
             align-items: center;
-            gap: 14px;
-            padding: 12px 16px;
+            gap: 12px;
+            padding: 9px 14px;
             background: transparent;
             border: 1px solid transparent;
             border-radius: 10px;
             color: var(--text-secondary);
-            font-size: 0.95rem;
+            font-size: 0.9rem;
             font-weight: 500;
             cursor: pointer;
             transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
@@ -316,10 +316,16 @@
         .nav-item button:hover svg {
             transform: scale(1.05);
         }
+        /* 可折叠父节点 + 子菜单 */
+        .nav-item.parent button .nav-chev { margin-left: auto; transition: transform 0.2s ease; opacity: 0.7; }
+        .nav-item.parent button.open .nav-chev { transform: rotate(90deg); }
+        .nav-sub { list-style: none; display: flex; flex-direction: column; gap: 3px; padding: 2px 0 4px 16px; }
+        .nav-sub button { padding: 6px 12px; font-size: 0.82rem; font-weight: 500; gap: 9px; }
+        .nav-sub button svg { width: 16px; height: 16px; }
 
         .sidebar-footer {
-            margin-top: 40px;
-            padding-top: 20px;
+            margin-top: 12px;
+            padding-top: 12px;
             border-top: 1px solid rgba(255, 255, 255, 0.05);
             display: flex;
             flex-direction: column;
@@ -1446,6 +1452,19 @@
             border-radius: 8px; font-size: 0.8rem; color: var(--color-success);
             background: rgba(52,211,153,0.06); border: 1px solid rgba(52,211,153,0.18);
         }
+
+        /* 仪表盘指标矩阵 */
+        .metrics-matrix { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+        .metrics-matrix th { padding: 6px 8px; text-align: center; font-size: 0.74rem; color: var(--text-muted); border-bottom: 1px solid rgba(255,255,255,0.08); font-weight: 600; }
+        .metrics-matrix td { padding: 4px 8px; border-bottom: 1px solid rgba(255,255,255,0.04); vertical-align: top; }
+        .metrics-matrix .mm-label { font-weight: 600; color: var(--text-secondary); white-space: nowrap; }
+        .metrics-matrix .mm-cell { min-width: 140px; }
+        .metrics-matrix .mm-entry { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
+        .metrics-matrix .mm-entry.first .mm-name { color: var(--color-primary); font-weight: 600; }
+        .metrics-matrix .mm-rank { width: 16px; height: 16px; border-radius: 50%; background: rgba(255,255,255,0.08); color: var(--text-muted); font-size: 0.68rem; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+        .metrics-matrix .mm-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); font-family: var(--font-mono); font-size: 0.78rem; }
+        .metrics-matrix .mm-val { font-family: var(--font-mono); font-weight: 600; font-size: 0.78rem; flex-shrink: 0; }
+        .metrics-matrix .mm-empty { color: var(--text-muted); font-size: 0.78rem; text-align: center; padding: 6px 0; }
     </style>
 </head>
 <body>
@@ -1482,7 +1501,7 @@
                 </div>
             </div>
             <div class="topbar-actions">
-                <div class="unread-wrap">
+                <div class="unread-wrap" @click.stop>
                     <button class="topbar-icon" @click="unreadPanelOpen = !unreadPanelOpen" title="未读信息">
                         🔔
                         <span v-if="totalUnread > 0" class="unread-dot">{{ totalUnread > 99 ? '99+' : totalUnread }}</span>
@@ -1497,15 +1516,58 @@
                             <div class="unread-menu-group">
                                 <div class="unread-menu-title">
                                     <span>{{ searchMenuLabel(menu) }}</span>
-                                    <span>{{ items.length }}</span>
+                                    <span style="display:flex;align-items:center;gap:8px;">
+                                        <span>{{ items.length }}</span>
+                                        <button class="btn btn-secondary btn-sm" style="padding:0 6px;font-size:0.68rem;line-height:1.5;"
+                                                @click.stop="markMenuRead(menu)" title="该组全部已读">已读</button>
+                                    </span>
                                 </div>
                                 <div v-for="it in items" :key="it.id" class="unread-item" @click="openUnreadItem(it)">
                                     <span class="unread-item-dot" :style="{ background: unreadDotColor(it.kind) }"></span>
-                                    <span class="unread-item-title" :title="it.title">{{ it.title }}</span>
-                                    <span class="unread-item-time">{{ unreadTime(it.created_at) }}</span>
+                                    <span style="flex:1;min-width:0;">
+                                        <span class="unread-item-title" :title="it.title" :style="{ color: unreadTitleColor(it.kind) }">
+                                            {{ it.title }}<span v-if="it.count > 1" style="color:var(--text-muted);font-size:0.72rem;"> ×{{ it.count }}</span>
+                                        </span>
+                                        <span v-if="it.detail" class="u-muted-sm" style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" :title="it.detail">{{ it.detail }}</span>
+                                    </span>
+                                    <span class="unread-item-time" :title="unreadFullTime(it)">{{ unreadRelTime(it.created_at) }}</span>
+                                    <button class="btn btn-secondary btn-sm" style="padding:0 5px;font-size:0.68rem;line-height:1.4;flex-shrink:0;"
+                                            @click.stop="markItemRead(it.id)" title="标记已读">✕</button>
                                 </div>
                             </div>
                         </template>
+                    </div>
+                </div>
+                <div class="unread-wrap" v-if="syncCenter.enabled" @click.stop>
+                    <button class="topbar-icon" @click="toggleSyncPanel" title="中心（Supabase）同步状态">
+                        <span :style="{ color: syncDotColor, fontSize: '15px' }">☁</span>
+                        <span v-if="!syncCenter.connected || !syncCenter.in_sync" class="unread-dot" style="background:#e5484d;"></span>
+                    </button>
+                    <div v-if="syncPanelOpen" class="unread-panel" style="width:320px;">
+                        <div class="unread-panel-header">
+                            <span>中心同步（Supabase）</span>
+                            <button class="btn btn-secondary btn-sm" @click="syncNow">立即同步</button>
+                        </div>
+                        <template v-if="syncCenter.connected">
+                            <div style="display:flex;justify-content:space-between;padding:10px 14px 4px;">
+                                <span>连通性</span>
+                                <span style="color:#46a758;">● 已连通</span>
+                            </div>
+                            <div style="display:flex;justify-content:space-between;padding:4px 14px 10px;">
+                                <span>同步状态</span>
+                                <span :style="{ color: syncCenter.in_sync ? '#46a758' : '#f5a524' }">{{ syncCenter.in_sync ? '✓ 已同步' : '⚠ 待同步（本地 v' + syncCenter.local_version + ' / 中心 v' + syncCenter.center_version + '）' }}</span>
+                            </div>
+                            <div class="unread-menu-title" style="padding:0 14px 6px;">中心各表统计</div>
+                            <div style="padding:0 14px 12px;">
+                                <div style="display:flex;justify-content:space-between;padding:3px 0;"><span>平台（platform）</span><span>{{ syncCenter.tables?.platform }}</span></div>
+                                <div style="display:flex;justify-content:space-between;padding:3px 0;"><span>密钥（platform_keys）</span><span>{{ syncCenter.tables?.platform_keys }}</span></div>
+                                <div style="display:flex;justify-content:space-between;padding:3px 0;"><span>上游模型（rapi）</span><span>{{ syncCenter.tables?.rapi }}</span></div>
+                                <div style="display:flex;justify-content:space-between;padding:3px 0;"><span>客户端模型（lapi）</span><span>{{ syncCenter.tables?.lapi }}</span></div>
+                                <div style="display:flex;justify-content:space-between;padding:3px 0;"><span>路由链（lapi_rapi_order）</span><span>{{ syncCenter.tables?.lapi_rapi_order }}</span></div>
+                            </div>
+                            <div v-if="syncCenter.last_synced_at" class="unread-menu-title" style="padding:0 14px 10px;">上次同步：{{ new Date(syncCenter.last_synced_at).toLocaleString() }}</div>
+                        </template>
+                        <div v-else style="padding:16px 14px;color:#e5484d;">✕ 中心离线：{{ syncCenter.error }}</div>
                     </div>
                 </div>
                 <button class="btn btn-primary btn-sm" @click="openAddWizard">＋ 新增</button>
@@ -1531,44 +1593,59 @@
                         </button>
                     </li>
                     <li class="nav-item">
-                        <button :class="{ active: activeTab === 'platforms' }" @click="setTab('platforms')">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 10h16M4 14h16M4 18h16M4 6h16"/></svg>
-                            平台管理
-                            <span v-if="unreadCounts.platforms" class="nav-badge">{{ unreadCounts.platforms }}</span>
+                        <button :class="{ active: activeTab === 'sbconfig' }" @click="setTab('sbconfig')">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>
+                            中心配置
                         </button>
                     </li>
-                    <li class="nav-item">
-                        <button :class="{ active: activeTab === 'keys' }" @click="setTab('keys')">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="7.5" cy="15.5" r="5.5"/><path d="M21 2l-9.6 9.6"/><path d="M15.5 7.5l3 3L22 7l-3-3"/></svg>
-                            密钥管理
-                            <span v-if="unreadCounts.keys" class="nav-badge">{{ unreadCounts.keys }}</span>
+                    <li class="nav-item parent">
+                        <button :class="{ open: localNavOpen, active: isLocalTabActive }" @click="localNavOpen = !localNavOpen">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="8" cy="6" r="1.4" fill="currentColor"/><circle cx="8" cy="12" r="1.4" fill="currentColor"/><circle cx="8" cy="18" r="1.4" fill="currentColor"/></svg>
+                            本地配置
+                            <svg class="nav-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
                         </button>
-                    </li>
-                    <li class="nav-item">
-                        <button :class="{ active: activeTab === 'rapis' }" @click="setTab('rapis')">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
-                            模型管理
-                            <span v-if="unreadCounts.models" class="nav-badge">{{ unreadCounts.models }}</span>
-                        </button>
-                    </li>
-                    <li class="nav-item">
-                        <button :class="{ active: activeTab === 'lapis' }" @click="setTab('lapis')">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
-                            接口管理
-                            <span v-if="unreadCounts.interfaces" class="nav-badge">{{ unreadCounts.interfaces }}</span>
-                        </button>
-                    </li>
-                    <li class="nav-item">
-                        <button :class="{ active: activeTab === 'logs' }" @click="setTab('logs')">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
-                            日志监控
-                        </button>
-                    </li>
-                    <li class="nav-item">
-                        <button :class="{ active: activeTab === 'playground' }" @click="setTab('playground')">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/><line x1="5" y1="3" x2="5" y2="21"/></svg>
-                            Playground
-                        </button>
+                        <ul v-show="localNavOpen" class="nav-sub">
+                            <li>
+                                <button :class="{ active: activeTab === 'platforms' }" @click="setTab('platforms')">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 10h16M4 14h16M4 18h16M4 6h16"/></svg>
+                                    平台管理
+                                    <span v-if="unreadCounts.platforms" class="nav-badge">{{ unreadCounts.platforms }}</span>
+                                </button>
+                            </li>
+                            <li>
+                                <button :class="{ active: activeTab === 'keys' }" @click="setTab('keys')">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="7.5" cy="15.5" r="5.5"/><path d="M21 2l-9.6 9.6"/><path d="M15.5 7.5l3 3L22 7l-3-3"/></svg>
+                                    密钥管理
+                                    <span v-if="unreadCounts.keys" class="nav-badge">{{ unreadCounts.keys }}</span>
+                                </button>
+                            </li>
+                            <li>
+                                <button :class="{ active: activeTab === 'rapis' }" @click="setTab('rapis')">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+                                    模型管理
+                                    <span v-if="unreadCounts.models" class="nav-badge">{{ unreadCounts.models }}</span>
+                                </button>
+                            </li>
+                            <li>
+                                <button :class="{ active: activeTab === 'lapis' }" @click="setTab('lapis')">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+                                    接口管理
+                                    <span v-if="unreadCounts.interfaces" class="nav-badge">{{ unreadCounts.interfaces }}</span>
+                                </button>
+                            </li>
+                            <li>
+                                <button :class="{ active: activeTab === 'logs' }" @click="setTab('logs')">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                                    日志监控
+                                </button>
+                            </li>
+                            <li>
+                                <button :class="{ active: activeTab === 'playground' }" @click="setTab('playground')">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/><line x1="5" y1="3" x2="5" y2="21"/></svg>
+                                    Playground
+                                </button>
+                            </li>
+                        </ul>
                     </li>
                 </ul>
             </div>
@@ -1589,471 +1666,140 @@
         <main>
 
             <!-- TABS CONTENT -->
-            <!-- 1. DASHBOARD OVERVIEW -->
+            <!-- 1. DASHBOARD OVERVIEW（单屏指标矩阵：今日/本月 × 4 维度 × 10 指标 TOP3 + 待处理 + 近期错误） -->
             <div v-if="activeTab === 'dashboard'" class="tab-pane">
 
-                <!-- ============ LAYER 0: KPI STRIP — 用户最关心的核心指标 ============ -->
-                <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:16px;">
-                    <div class="glass-card kpi-card" @click="setTab('logs')" title="查看请求日志">
-                        <div class="kpi-label">总请求数</div>
-                        <div class="kpi-value">{{ fmtNum(dashHealth.total_requests) }}</div>
-                        <div class="kpi-sub">{{ dashHealth.lapi_count }} 接口 · {{ dashHealth.rapi_count }} 模型 · {{ dashHealth.platform_count }} 平台</div>
-                    </div>
-                    <div class="glass-card kpi-card" @click="setTab('logs')" title="查看请求日志">
-                        <div class="kpi-label">整体成功率</div>
-                        <div class="kpi-value" :style="{ color: dashSuccessColor }">{{ dashSuccessText }}</div>
-                        <div class="kpi-sub">{{ fmtNum(dashHealth.total_success) }} 成功</div>
-                    </div>
-                    <div class="glass-card kpi-card">
-                        <div class="kpi-label">平均延迟</div>
-                        <div class="kpi-value" :style="{ color: dashLatencyColor }">{{ dashHealth.avg_latency_ms > 0 ? Math.round(dashHealth.avg_latency_ms) + ' ms' : '—' }}</div>
-                        <div class="kpi-sub">全部模型均值</div>
-                    </div>
-                    <div class="glass-card kpi-card" @click="goLogsWithStatus('429')" title="查看 429 限流日志">
-                        <div class="kpi-label">429 限流</div>
-                        <div class="kpi-value" :style="{ color: dashHealth.fail_429 > 0 ? 'var(--color-warning)' : 'var(--text-muted)' }">{{ dashHealth.fail_429 || '—' }}</div>
-                        <div class="kpi-sub">{{ dashHealth.fail_401 > 0 ? dashHealth.fail_401 + ' 次 401' : '无 401' }}</div>
-                    </div>
-                    <div class="glass-card kpi-card" @click="goLogsWithStatus('500')" title="查看 5xx 错误日志">
-                        <div class="kpi-label">5xx 错误</div>
-                        <div class="kpi-value" :style="{ color: dashHealth.fail_500 > 0 ? 'var(--color-danger)' : 'var(--text-muted)' }">{{ dashHealth.fail_500 || '—' }}</div>
-                        <div class="kpi-sub" :style="{ color: issueModels.length > 0 ? 'var(--color-warning)' : '' }">{{ issueModels.length > 0 ? issueModels.length + ' 个模型待处理' : '模型全部正常' }}</div>
-                    </div>
-                </div>
-
-                <!-- ============ LAYER 1: SYSTEM HEALTH ============ -->
-                <!-- Alert banners: critical insights + cooling items -->
-                <div v-if="healthAlerts.length > 0" style="display:flex;flex-direction:column;gap:8px;margin-bottom:20px;">
-                    <div v-for="alert in healthAlerts" :key="alert.key"
-                         :style="{ background: alert.bg, border: '1px solid ' + alert.border,
-                                   borderLeft: '4px solid ' + alert.accent }"
-                         style="border-radius:10px;padding:11px 18px;display:flex;align-items:center;gap:12px;font-size:0.88rem;">
-                        <svg style="width:16px;height:16px;flex-shrink:0;" viewBox="0 0 24 24" fill="none"
-                             :stroke="alert.accent" stroke-width="2">
-                            <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
-                        </svg>
-                        <span :style="{ color: alert.accent, fontWeight:600 }">{{ alert.tag }}</span>
-                        <span style="color:var(--text-secondary);">{{ alert.message }}</span>
-                    </div>
-                </div>
-
-                <!-- 全绿时只显示一行细条，不占首屏空间 -->
-                <div v-if="coolingTree.length === 0 && insightData.health.error_summary.length === 0"
-                     class="health-ok-strip">
-                    <svg style="width:14px;height:14px;flex-shrink:0;" viewBox="0 0 24 24" fill="none" stroke="var(--color-success)" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-                    全部资源在线 · 无错误记录
-                </div>
-
-                <!-- Health row: Cooling + Error breakdown（仅在有异常时渲染；单卡自动占满整行） -->
-                <div v-else-if="!insightFilter || insightFilter === 'cooling' || insightFilter === 'error'" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(400px,1fr));gap:16px;margin-bottom:20px;">
-                    <!-- Cooling resources: hierarchical 平台 → 平台-key → 平台-key-模型 -->
-                    <div v-show="coolingTree.length > 0 && (!insightFilter || insightFilter === 'cooling')" class="glass-card" style="padding:18px;">
-                        <div class="card-header-row u-mb12">
-                            <span class="card-title">
-                                <svg style="width:15px;height:15px;" viewBox="0 0 24 24" fill="none" stroke="var(--color-warning)" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                                冷却中的资源
-                            </span>
-                            <span class="u-muted-md">平台 → 密钥 → 模型 · 点击跳转</span>
-                        </div>
-                        <div v-if="coolingTree.length === 0"
-                             style="text-align:center;color:var(--text-muted);padding:24px 0;font-size:0.86rem;">
-                            <svg style="width:28px;height:28px;opacity:0.25;display:block;margin:0 auto 8px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-                            全部资源在线
-                        </div>
-                        <div v-else style="display:flex;flex-direction:column;gap:8px;">
-                            <div v-for="grp in coolingTree" :key="'plat-'+grp.platform_id"
-                                 style="border:1px solid rgba(255,255,255,0.06);border-radius:8px;padding:8px 10px;">
-                                <!-- 平台层 -->
-                                <div style="display:flex;align-items:center;gap:8px;cursor:pointer;"
-                                     @click="jumpToPlatform(grp.platform_id)"
-                                     :title="'点击跳转到平台「' + grp.platform_name + '」配置'">
-                                    <svg style="width:13px;height:13px;flex-shrink:0;" viewBox="0 0 24 24" fill="none" stroke="var(--color-warning)" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
-                                    <span style="font-weight:700;font-size:0.86rem;">{{ grp.platform_name || ('平台-'+grp.platform_id) }}</span>
-                                    <span v-if="grp.keyCount > 0" style="font-size:0.72rem;padding:1px 7px;border-radius:4px;background:rgba(245,158,11,0.12);color:var(--color-warning);">密钥 ×{{ grp.keyCount }}</span>
-                                    <span v-if="grp.modelCount > 0" style="font-size:0.72rem;padding:1px 7px;border-radius:4px;background:rgba(56,189,248,0.12);color:var(--color-primary);">模型 ×{{ grp.modelCount }}</span>
-                                    <span class="u-flex1"></span>
-                                    <a v-if="grp.billing_address" :href="grp.billing_address" target="_blank" rel="noopener noreferrer"
-                                       @click.stop title="打开账单地址"
-                                       style="font-size:0.76rem;color:var(--color-primary);text-decoration:none;flex-shrink:0;border:1px solid rgba(56,189,248,0.25);padding:1px 7px;border-radius:4px;">账单 ↗</a>
-                                    <span style="font-size:0.74rem;color:var(--text-secondary);flex-shrink:0;">配置 ›</span>
-                                </div>
-                                <!-- 平台-key 层 -->
-                                <div v-for="k in grp.keys" :key="'key-'+k.id" style="margin-top:6px;">
-                                    <div style="cursor:pointer;display:flex;align-items:center;gap:8px;padding:5px 0 5px 10px;border-left:2px solid rgba(245,158,11,0.35);font-size:0.84rem;"
-                                         @click="jumpToPlatform(grp.platform_id)" :title="'点击跳转到平台「' + grp.platform_name + '」'">
-                                        <span style="width:6px;height:6px;border-radius:50%;flex-shrink:0;background:var(--color-warning);box-shadow:0 0 5px var(--color-warning);"></span>
-                                        <span style="font-family:var(--font-mono);font-weight:600;">{{ k.label || ('Key#'+k.key_index) }}</span>
-                                        <span style="font-size:0.72rem;color:var(--text-muted);flex-shrink:0;">#{{ k.key_index }}</span>
-                                        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-muted);font-size:0.78rem;" :title="k.reason">{{ k.reason }}</span>
-                                        <span v-if="k.recover_at" style="font-size:0.76rem;font-family:var(--font-mono);color:var(--text-secondary);flex-shrink:0;">{{ fmtCountdown(k.recover_at) }}</span>
-                                    </div>
-                                    <!-- 平台-key-模型 层 -->
-                                    <div v-if="k.models.length > 0" style="margin-left:22px;border-left:1px dashed rgba(255,255,255,0.08);padding-left:8px;">
-                                        <div v-for="m in k.models" :key="'km-'+m.id" style="cursor:pointer;display:flex;align-items:center;gap:8px;padding:4px 0;font-size:0.8rem;"
-                                             @click="jumpToPlatform(grp.platform_id)" :title="'点击跳转到平台「' + grp.platform_name + '」'">
-                                            <span :style="{ width:'5px', height:'5px', borderRadius:'50%', flexShrink:0,
-                                                background: m.invalidated ? 'var(--color-danger)' : 'var(--color-warning)',
-                                                boxShadow: '0 0 5px ' + (m.invalidated ? 'var(--color-danger)' : 'var(--color-warning)') }"></span>
-                                            <span style="font-family:var(--font-mono);font-weight:600;">{{ m.alias || ('模型-'+m.id) }}</span>
-                                            <span v-if="m.invalidated" style="font-size:0.7rem;padding:0 5px;border-radius:3px;background:rgba(244,63,94,0.12);color:var(--color-danger);">已禁用</span>
-                                            <span v-else class="u-muted-xs">×{{ m.consecutive_failures }}</span>
-                                            <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-muted);font-size:0.75rem;" :title="m.reason">{{ m.reason }}</span>
-                                            <span v-if="!m.invalidated && m.recover_at" style="font-size:0.74rem;font-family:var(--font-mono);color:var(--text-secondary);flex-shrink:0;">{{ fmtCountdown(m.recover_at) }}</span>
-                                        </div>
-                                    </div>
-                                </div>
-                                <!-- 平台-模型 层（冷却模型，未绑定到冷却中的具体 key） -->
-                                <div v-for="m in grp.keylessModels" :key="'pm-'+m.id"
-                                     style="cursor:pointer;display:flex;align-items:center;gap:8px;padding:5px 0 5px 10px;margin-top:6px;border-left:2px solid rgba(56,189,248,0.3);font-size:0.84rem;"
-                                     @click="jumpToPlatform(grp.platform_id)" :title="'点击跳转到平台「' + grp.platform_name + '」'">
-                                    <span :style="{ width:'6px', height:'6px', borderRadius:'50%', flexShrink:0,
-                                        background: m.invalidated ? 'var(--color-danger)' : 'var(--color-warning)',
-                                        boxShadow: '0 0 5px ' + (m.invalidated ? 'var(--color-danger)' : 'var(--color-warning)') }"></span>
-                                    <span style="font-family:var(--font-mono);font-weight:600;">{{ m.alias || ('模型-'+m.id) }}</span>
-                                    <span v-if="m.invalidated" style="font-size:0.72rem;padding:1px 5px;border-radius:3px;background:rgba(244,63,94,0.12);color:var(--color-danger);">已禁用</span>
-                                    <span v-else class="u-muted-sm">×{{ m.consecutive_failures }}</span>
-                                    <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-muted);font-size:0.78rem;" :title="m.reason">{{ m.reason }}</span>
-                                    <span v-if="!m.invalidated && m.recover_at" style="font-size:0.76rem;font-family:var(--font-mono);color:var(--text-secondary);flex-shrink:0;">{{ fmtCountdown(m.recover_at) }}</span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Error breakdown -->
-                    <div v-show="insightData.health.error_summary.length > 0 && (!insightFilter || insightFilter === 'error')" class="glass-card" style="padding:18px;">
-                        <div class="card-header-row u-mb12">
-                            <span class="card-title">
-                                <svg style="width:15px;height:15px;" viewBox="0 0 24 24" fill="none" stroke="var(--color-danger)" stroke-width="2"><polygon points="12 2 22 22 2 22"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-                                错误分布
-                            </span>
-                            <span class="u-muted-md">按错误类型分类 · 不同错误需不同处理</span>
-                        </div>
-                        <div v-if="insightData.health.error_summary.length === 0"
-                             style="text-align:center;color:var(--text-muted);padding:24px 0;font-size:0.86rem;">
-                            无错误记录
-                        </div>
-                        <div v-for="e in insightData.health.error_summary" :key="e.rapi_id"
-                             style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.03);font-size:0.84rem;">
-                            <span style="font-family:var(--font-mono);font-weight:600;min-width:100px;">{{ e.alias }}</span>
-                            <span style="flex:1;font-size:0.76rem;color:var(--text-muted);font-family:var(--font-mono);">
-                                {{ e.rate.toFixed(1) }}% 错误率 ({{ e.total }} 总请求)
-                            </span>
-                            <span v-if="e.fail_401 > 0" style="font-size:0.76rem;padding:2px 6px;border-radius:4px;background:rgba(168,85,247,0.12);color:#a855f7;font-family:var(--font-mono);">401×{{ e.fail_401 }}</span>
-                            <span v-if="e.fail_429 > 0" style="font-size:0.76rem;padding:2px 6px;border-radius:4px;background:rgba(245,158,11,0.12);color:var(--color-warning);font-family:var(--font-mono);">429×{{ e.fail_429 }}</span>
-                            <span v-if="e.fail_500 > 0" style="font-size:0.76rem;padding:2px 6px;border-radius:4px;background:rgba(244,63,94,0.12);color:var(--color-danger);font-family:var(--font-mono);">5xx×{{ e.fail_500 }}</span>
-                            <span v-if="e.fail_other > 0" style="font-size:0.76rem;padding:2px 6px;border-radius:4px;background:rgba(100,116,139,0.12);color:var(--text-muted);font-family:var(--font-mono);">其他×{{ e.fail_other }}</span>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- ============ INSIGHT FILTER BAR ============ -->
-                <div v-if="hasAnyInsights" class="filter-bar">
-                    <span class="filter-label">筛选:</span>
-                    <span class="chip" :class="{ active: insightFilter === '' }" @click="insightFilter = ''">全部</span>
-                    <span v-if="insightData.health.cooling_rapis.length + insightData.health.cooling_keys.length > 0"
-                          class="chip" :class="{ active: insightFilter === 'cooling', warning: insightFilter === 'cooling' }"
-                          @click="insightFilter = insightFilter === 'cooling' ? '' : 'cooling'">
-                        冷却
-                        <span class="chip-count">{{ insightData.health.cooling_rapis.length + insightData.health.cooling_keys.length }}</span>
-                    </span>
-                    <span v-if="insightData.health.error_summary.length > 0"
-                          class="chip" :class="{ active: insightFilter === 'error', danger: insightFilter === 'error' }"
-                          @click="insightFilter = insightFilter === 'error' ? '' : 'error'">
-                        错误
-                        <span class="chip-count">{{ insightData.health.error_summary.length }}</span>
-                    </span>
-                    <span v-if="insightData.efficiency.length > 0"
-                          class="chip" :class="{ active: insightFilter === 'efficiency', success: insightFilter === 'efficiency' }"
-                          @click="insightFilter = insightFilter === 'efficiency' ? '' : 'efficiency'">
-                        效率
-                        <span class="chip-count">{{ insightData.efficiency.length }}</span>
-                    </span>
-                    <span v-if="insightData.capacity.length > 0"
-                          class="chip" :class="{ active: insightFilter === 'capacity', warning: insightFilter === 'capacity' }"
-                          @click="insightFilter = insightFilter === 'capacity' ? '' : 'capacity'">
-                        容量
-                        <span class="chip-count">{{ insightData.capacity.length }}</span>
-                    </span>
-                    <!-- Level filter -->
-                    <span v-if="hasCriticalInsights" class="chip" :class="{ active: levelFilter === 'critical', danger: levelFilter === 'critical' }"
-                          @click="levelFilter = levelFilter === 'critical' ? '' : 'critical'">紧急</span>
-                    <span v-if="hasWarningInsights" class="chip" :class="{ active: levelFilter === 'warning', warning: levelFilter === 'warning' }"
-                          @click="levelFilter = levelFilter === 'warning' ? '' : 'warning'">警告</span>
-                </div>
-
-                <!-- ============ LAYER 2: RESOURCE EFFICIENCY (VISUAL) ============ -->
-                <div v-if="filteredEfficiency.length > 0" class="glass-card" style="padding:18px;margin-bottom:20px;">
+                <!-- 上层：中心连接信息（本地角色 / 连接状态 / 是否同步 / 各表中心·本地·启动以来变化） -->
+                <div class="glass-card" style="padding:14px 16px;margin-bottom:14px;">
                     <div class="card-header-row" style="margin-bottom:10px;">
-                        <span class="card-title">
-                            <svg style="width:15px;height:15px;" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary)" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
-                            资源效率
+                        <span class="card-title">中心连接信息</span>
+                        <span class="u-muted-md">本地镜像 vs 中心定义</span>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:12px;font-size:0.84rem;">
+                        <span>本地角色：
+                            <b :style="{color: roleColor(syncCenter.role)}">{{ roleLabel(syncCenter.role) }}</b>
                         </span>
-                        <span class="u-muted-md">{{ filteredEfficiency.length }} 条优化建议</span>
+                        <span>连接状态：
+                            <b v-if="syncCenter.enabled" :style="{color: syncCenter.connected ? '#46a758' : '#e5484d'}">{{ syncCenter.connected ? '● 已连通' : '● 未连接' }}</b>
+                            <b v-else style="color:var(--color-muted);">● 未配置中心</b>
+                        </span>
+                        <span v-if="syncCenter.connected">同步：
+                            <b :style="{color: syncCenter.in_sync ? '#46a758' : '#f5a524'}">{{ syncCenter.in_sync ? '✓ 已同步' : '⚠ 待同步' }}</b>
+                            <span v-if="!syncCenter.in_sync" class="u-muted-sm">（中心 v{{ syncCenter.center_version }} / 本地 v{{ syncCenter.local_version }}）</span>
+                        </span>
+                        <span v-if="syncCenter.error" style="color:var(--color-danger);">⚠ {{ syncCenter.error }}</span>
+                        <span class="u-flex1"></span>
+                        <button class="btn btn-secondary btn-sm" @click="setTab('sbconfig')">中心配置 ›</button>
                     </div>
-                    <div style="display:flex;flex-direction:column;gap:2px;">
-                        <template v-for="(ins, idx) in filteredEfficiency" :key="'eff-'+idx">
-                            <!-- Route Imbalance: visual compare bars -->
-                            <div v-if="ins.category === 'route_imbalance'" class="insight-compact"
-                                 :style="{ borderLeft: '3px solid ' + (ins.level==='warning' ? 'var(--color-warning)' : 'var(--color-primary)') }">
-                                <div class="insight-icon" :style="{ background: ins.level==='warning' ? 'rgba(245,158,11,0.1)' : 'rgba(56,189,248,0.1)' }">
-                                    <svg style="width:14px;height:14px;" viewBox="0 0 24 24" fill="none"
-                                         :stroke="ins.level==='warning' ? 'var(--color-warning)' : 'var(--color-primary)'" stroke-width="2">
-                                        <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
-                                    </svg>
-                                </div>
-                                <div style="flex:1;min-width:0;">
-                                    <div style="font-weight:600;font-size:0.84rem;margin-bottom:4px;">{{ ins.context.lapi_alias }}</div>
-                                    <div style="display:flex;gap:14px;font-size:0.76rem;">
-                                        <div style="display:flex;align-items:center;gap:4px;">
-                                            <span class="u-muted">{{ ins.context.primary_rapi }}</span>
-                                            <div class="compare-bar-wrap">
-                                                <div class="compare-bar-fill" :style="{ width: Math.min(ins.context.primary_hour_pct,100)+'%', background: ins.context.primary_hour_pct>=90 ? 'var(--color-danger)' : 'var(--color-warning)' }"></div>
-                                            </div>
-                                            <span style="font-family:var(--font-mono);color:var(--text-secondary);">{{ ins.context.primary_hour_pct.toFixed(0) }}%</span>
-                                        </div>
-                                        <span class="u-muted">vs</span>
-                                        <div style="display:flex;align-items:center;gap:4px;">
-                                            <span class="u-muted">{{ ins.context.alt_rapi }}</span>
-                                            <div class="compare-bar-wrap">
-                                                <div class="compare-bar-fill" :style="{ width: Math.min(ins.context.alt_hour_pct,100)+'%', background: 'var(--color-success)' }"></div>
-                                            </div>
-                                            <span style="font-family:var(--font-mono);color:var(--text-secondary);">{{ ins.context.alt_hour_pct.toFixed(0) }}%</span>
-                                        </div>
-                                    </div>
-                                </div>
-                                <button class="insight-detail-toggle" @click="ins._expanded = !ins._expanded">详情</button>
-                            </div>
-                            <!-- High Fallback: ring -->
-                            <div v-else-if="ins.category === 'high_fallback'" class="insight-compact"
-                                 style="border-left:3px solid var(--color-warning);">
-                                <div class="insight-icon" style="background:rgba(245,158,11,0.1);">
-                                    <svg class="fb-ring" style="width:20px;height:20px;" viewBox="0 0 36 36">
-                                        <circle cx="18" cy="18" r="14" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="3"/>
-                                        <circle cx="18" cy="18" r="14" fill="none" stroke="var(--color-warning)" stroke-width="3"
-                                                :stroke-dasharray="(ins.context.fallback_rate/100*88).toFixed(1) + ' 88'" stroke-linecap="round"/>
-                                    </svg>
-                                </div>
-                                <div style="flex:1;min-width:0;">
-                                    <span style="font-weight:600;font-size:0.84rem;">{{ ins.context.lapi_alias }}</span>
-                                </div>
-                                <div class="insight-visual">
-                                    <span style="font-family:var(--font-mono);font-weight:700;font-size:0.95rem;color:var(--color-warning);">{{ ins.context.fallback_rate.toFixed(0) }}%</span>
-                                    <span style="font-size:0.74rem;color:var(--text-muted);">{{ ins.context.fallback_count }}/{{ ins.context.total_requests }}</span>
-                                </div>
-                                <button class="insight-detail-toggle" @click="ins._expanded = !ins._expanded">详情</button>
-                            </div>
-                            <!-- Single Point: warning icon + count -->
-                            <div v-else-if="ins.category === 'single_point'" class="insight-compact"
-                                 style="border-left:3px solid var(--color-primary);">
-                                <div class="insight-icon" style="background:rgba(56,189,248,0.1);">
-                                    <svg style="width:14px;height:14px;" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary)" stroke-width="2">
-                                        <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
-                                    </svg>
-                                </div>
-                                <div style="flex:1;min-width:0;">
-                                    <span style="font-weight:600;font-size:0.84rem;">{{ ins.context.lapi_alias }}</span>
-                                </div>
-                                <div class="insight-visual">
-                                    <span style="font-family:var(--font-mono);font-weight:700;font-size:0.95rem;color:var(--color-primary);">{{ ins.context.enabled_count }}</span>
-                                    <span style="font-size:0.74rem;color:var(--text-muted);">个可用后端</span>
-                                </div>
-                                <button class="insight-detail-toggle" @click="ins._expanded = !ins._expanded">详情</button>
-                            </div>
-                            <!-- Fallback: generic text card -->
-                            <div v-else class="insight-compact" style="border-left:3px solid var(--text-muted);">
-                                <span style="font-weight:600;font-size:0.84rem;">{{ ins.title }}</span>
-                            </div>
-                            <!-- Expanded detail (shared) -->
-                            <div v-if="ins._expanded" class="insight-detail-text" style="padding-left:52px;">{{ ins.detail }}</div>
-                        </template>
-                    </div>
+                    <table style="width:100%;font-size:0.82rem;border-collapse:collapse;">
+                        <thead>
+                            <tr style="color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-size:0.72rem;">
+                                <th style="text-align:left;padding:4px 8px;">定义表</th>
+                                <th style="text-align:right;padding:4px 8px;">中心</th>
+                                <th style="text-align:right;padding:4px 8px;">本地</th>
+                                <th style="text-align:right;padding:4px 8px;">启动以来变化</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="t in ['platform','platform_keys','rapi','lapi','lapi_rapi_order']" :key="t" style="border-top:1px solid rgba(255,255,255,0.05);">
+                                <td style="padding:5px 8px;">{{ tableNameLabel(t) }}</td>
+                                <td style="text-align:right;padding:5px 8px;font-family:var(--font-mono);">{{ syncCenter.connected ? ((syncCenter.tables ?? {})[t] ?? '—') : '—' }}</td>
+                                <td style="text-align:right;padding:5px 8px;font-family:var(--font-mono);">{{ (syncCenter.local_tables ?? {})[t] ?? '—' }}</td>
+                                <td style="text-align:right;padding:5px 8px;font-family:var(--font-mono);" v-html="tableDelta((syncCenter.local_tables ?? {})[t], (syncCenter.startup_tables ?? {})[t])"></td>
+                            </tr>
+                        </tbody>
+                    </table>
                 </div>
 
-                <!-- ============ LAYER 3: CAPACITY & UTILIZATION (MERGED VISUAL) ============ -->
-                <div v-if="capacityGrouped.length > 0 || rapiUtilization.length > 0" class="glass-card" style="padding:18px;margin-bottom:20px;">
-                    <div class="card-header-row" style="margin-bottom:14px;">
-                        <span class="card-title">
-                            <svg style="width:15px;height:15px;" viewBox="0 0 24 24" fill="none" stroke="var(--color-success)" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
-                            容量与用量
+                <!-- 顶行：周期切换 + 待处理 chips + KPI 摘要 -->
+                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
+                    <span class="chip" :class="{ active: metricsPeriod === 'today' }" @click="metricsPeriod='today'; loadMetrics()">今日</span>
+                    <span class="chip" :class="{ active: metricsPeriod === 'month' }" @click="metricsPeriod='month'; loadMetrics()">本月</span>
+                    <span style="flex:1;"></span>
+                    <template v-for="it in (metricsData.needs_attention || [])" :key="it.kind+it.name">
+                        <span class="chip" :class="{ danger: it.kind==='platform' || it.kind==='key', warning: it.kind==='model' }"
+                              :title="it.reason"
+                              @click="jumpToAttention(it)">
+                            {{ attentionLabel(it.kind) }} {{ it.name }}
                         </span>
-                        <span class="u-muted-md">实时限额占用 · 按模型分组</span>
-                    </div>
-                    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px;">
-                        <template v-for="g in capacityGrouped" :key="'cg-'+g.rapi_id">
-                            <!-- RAPIs with capacity pressure insights -->
-                            <div v-if="g.insights.length > 0" class="capacity-group"
-                                 :style="{ borderColor: g.maxLevel==='critical' ? 'rgba(244,63,94,0.3)' : 'rgba(245,158,11,0.3)' }">
-                                <div class="capacity-group-header">
-                                    <div style="display:flex;align-items:center;gap:8px;">
-                                        <span class="capacity-group-alias" :style="{ color: g.maxLevel==='critical' ? 'var(--color-danger)' : 'var(--color-warning)' }">{{ g.alias }}</span>
-                                        <span class="capacity-group-platform">{{ g.platform }}</span>
+                    </template>
+                    <span v-if="!(metricsData.needs_attention||[]).length" style="font-size:0.8rem;color:var(--color-success);">全部资源正常</span>
+                </div>
+
+                <!-- 指标矩阵：10 指标行 × 4 维度列（每格 TOP3） -->
+                <div class="glass-card" style="padding:14px 16px;margin-bottom:14px;overflow-x:auto;">
+                    <table class="metrics-matrix">
+                        <thead>
+                            <tr>
+                                <th style="min-width:120px;text-align:left;">指标</th>
+                                <th>平台 TOP3</th>
+                                <th>Key TOP3</th>
+                                <th>模型 TOP3</th>
+                                <th>接口 TOP3</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="m in metricRows" :key="m.key">
+                                <td class="mm-label">{{ m.label }}</td>
+                                <td v-for="dim in ['platform','key','model','interface']" :key="dim" class="mm-cell">
+                                    <div v-for="(row, idx) in (metricsData[dim]?.[m.key] || [])" :key="idx" class="mm-entry" :class="{ first: idx===0 }">
+                                        <span class="mm-rank">{{ idx+1 }}</span>
+                                        <span class="mm-name" :title="row.name">{{ row.name || '—' }}</span>
+                                        <span class="mm-val" :style="{ color: m.color }">{{ m.fmt ? m.fmt(row.value) : row.value }}</span>
                                     </div>
-                                    <span :style="{ fontSize:'0.7rem', fontWeight:700, padding:'1px 6px', borderRadius:'3px',
-                                        background: g.maxLevel==='critical' ? 'rgba(244,63,94,0.15)' : 'rgba(245,158,11,0.15)',
-                                        color: g.maxLevel==='critical' ? 'var(--color-danger)' : 'var(--color-warning)' }">
-                                        {{ g.maxLevel === 'critical' ? '紧急' : '注意' }}
-                                    </span>
-                                </div>
-                                <!-- Utilization bars for this RAPI -->
-                                <template v-if="g.util">
-                                    <div v-if="g.util.rph_limit > 0" class="capacity-insight-item">
-                                        <span style="color:var(--text-muted);min-width:28px;">RPH</span>
-                                        <div class="util-bar"><div class="util-bar-fill" :style="{ width: Math.min(g.util.rph_pct,100)+'%',
-                                            background: g.util.rph_pct>=90 ? 'var(--color-danger)' : g.util.rph_pct>=70 ? 'var(--color-warning)' : 'var(--color-success)' }"></div></div>
-                                        <span :style="{ fontFamily:'var(--font-mono)', fontSize:'0.76rem', color: g.util.rph_pct>=90 ? 'var(--color-danger)' : g.util.rph_pct>=70 ? 'var(--color-warning)' : 'var(--text-secondary)', minWidth:'72px', textAlign:'right' }">
-                                            {{ g.util.hour_req }}/{{ g.util.rph_limit }}
-                                        </span>
+                                    <div v-if="!(metricsData[dim]?.[m.key]||[]).length" class="mm-empty">—</div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- 底行：需要用户操作的信息（按平台/key/模型/接口四类分组，可点击跳转） + 最近错误日志 -->
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
+                    <div class="glass-card" style="padding:14px 16px;">
+                        <div class="card-header-row" style="margin-bottom:10px;">
+                            <span class="card-title" style="font-size:0.95rem;">待处理（按类别）</span>
+                            <span class="u-muted-md">{{ (metricsData.needs_attention||[]).length }} 项</span>
+                        </div>
+                        <div v-if="!(metricsData.needs_attention||[]).length" style="text-align:center;color:var(--color-success);font-size:0.84rem;padding:12px 0;">
+                            <svg style="width:22px;height:22px;opacity:0.4;display:block;margin:0 auto 6px;" viewBox="0 0 24 24" fill="none" stroke="var(--color-success)" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                            全部资源正常
+                        </div>
+                        <div v-else style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+                            <template v-for="kind in ['platform','key','model','interface']" :key="kind">
+                                <div v-if="attentionByKind(kind).length" style="border:1px solid rgba(255,255,255,0.06);border-radius:8px;padding:8px 10px;">
+                                    <div style="font-size:0.76rem;color:var(--text-muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px;">
+                                        {{ attentionLabel(kind) }} <span style="color:var(--color-danger);">×{{ attentionByKind(kind).length }}</span>
                                     </div>
-                                    <div v-if="g.util.rpd_limit > 0" class="capacity-insight-item">
-                                        <span style="color:var(--text-muted);min-width:28px;">RPD</span>
-                                        <div class="util-bar"><div class="util-bar-fill" :style="{ width: Math.min(g.util.rpd_pct,100)+'%',
-                                            background: g.util.rpd_pct>=90 ? 'var(--color-danger)' : g.util.rpd_pct>=70 ? 'var(--color-warning)' : 'var(--color-success)' }"></div></div>
-                                        <span :style="{ fontFamily:'var(--font-mono)', fontSize:'0.76rem', color: g.util.rpd_pct>=90 ? 'var(--color-danger)' : g.util.rpd_pct>=70 ? 'var(--color-warning)' : 'var(--text-secondary)', minWidth:'72px', textAlign:'right' }">
-                                            {{ g.util.day_req }}/{{ g.util.rpd_limit }}
-                                        </span>
-                                    </div>
-                                    <div v-if="g.util.tph_limit > 0" class="capacity-insight-item">
-                                        <span style="color:var(--text-muted);min-width:28px;">TPH</span>
-                                        <div class="util-bar"><div class="util-bar-fill" :style="{ width: Math.min(g.util.tph_pct,100)+'%',
-                                            background: g.util.tph_pct>=90 ? 'var(--color-danger)' : g.util.tph_pct>=70 ? 'var(--color-warning)' : 'var(--color-success)' }"></div></div>
-                                        <span :style="{ fontFamily:'var(--font-mono)', fontSize:'0.76rem', color: g.util.tph_pct>=90 ? 'var(--color-danger)' : g.util.tph_pct>=70 ? 'var(--color-warning)' : 'var(--text-secondary)', minWidth:'72px', textAlign:'right' }">
-                                            {{ g.util.hour_tok }}/{{ g.util.tph_limit }}
-                                        </span>
-                                    </div>
-                                </template>
-                                <!-- Pressure badges -->
-                                <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;">
-                                    <span v-for="(ci, ciIdx) in g.insights" :key="ciIdx"
-                                          style="font-size:0.74rem;padding:2px 8px;border-radius:4px;font-family:var(--font-mono);">
-                                        <span :style="{ background: ci.level==='critical' ? 'rgba(244,63,94,0.12)' : 'rgba(245,158,11,0.12)',
-                                                        color: ci.level==='critical' ? 'var(--color-danger)' : 'var(--color-warning)' }">
-                                            {{ ci.context.dimension }} {{ ci.context.pct.toFixed(0) }}%
-                                            <template v-if="ci.context.suppressed > 0"> ({{ ci.context.suppressed }}次限流)</template>
-                                        </span>
-                                    </span>
-                                </div>
-                            </div>
-                            <!-- RAPIs with utilization only (no pressure) -->
-                            <div v-else class="capacity-group">
-                                <div class="capacity-group-header">
-                                    <div style="display:flex;align-items:center;gap:8px;">
-                                        <span class="capacity-group-alias">{{ g.alias }}</span>
-                                        <span class="capacity-group-platform">{{ g.platform }}</span>
+                                    <div v-for="(it, i) in attentionByKind(kind)" :key="kind+i"
+                                         class="u-pointer" style="display:flex;align-items:center;gap:6px;padding:3px 4px;border-radius:5px;font-size:0.8rem;"
+                                         @click="jumpToAttention(it)">
+                                        <span style="width:5px;height:5px;border-radius:50%;flex-shrink:0;" :style="{ background: attentionColor(it.kind) }"></span>
+                                        <span style="font-family:var(--font-mono);font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" :title="it.name">{{ it.name }}</span>
+                                        <span style="flex:1;color:var(--text-muted);font-size:0.72rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" :title="it.reason">{{ it.reason }}</span>
+                                        <span style="color:var(--text-muted);font-size:0.72rem;flex-shrink:0;">›</span>
                                     </div>
                                 </div>
-                                <template v-if="g.util">
-                                    <div v-if="g.util.rph_limit > 0" class="capacity-insight-item">
-                                        <span style="color:var(--text-muted);min-width:28px;">RPH</span>
-                                        <div class="util-bar"><div class="util-bar-fill" :style="{ width: Math.min(g.util.rph_pct,100)+'%',
-                                            background: g.util.rph_pct>=90 ? 'var(--color-danger)' : g.util.rph_pct>=70 ? 'var(--color-warning)' : 'var(--color-success)' }"></div></div>
-                                        <span :style="{ fontFamily:'var(--font-mono)', fontSize:'0.76rem', color: g.util.rph_pct>=90 ? 'var(--color-danger)' : g.util.rph_pct>=70 ? 'var(--color-warning)' : 'var(--text-secondary)', minWidth:'72px', textAlign:'right' }">
-                                            {{ g.util.hour_req }}/{{ g.util.rph_limit }}
-                                        </span>
-                                    </div>
-                                    <div v-if="g.util.rpd_limit > 0" class="capacity-insight-item">
-                                        <span style="color:var(--text-muted);min-width:28px;">RPD</span>
-                                        <div class="util-bar"><div class="util-bar-fill" :style="{ width: Math.min(g.util.rpd_pct,100)+'%',
-                                            background: g.util.rpd_pct>=90 ? 'var(--color-danger)' : g.util.rpd_pct>=70 ? 'var(--color-warning)' : 'var(--color-success)' }"></div></div>
-                                        <span :style="{ fontFamily:'var(--font-mono)', fontSize:'0.76rem', color: g.util.rpd_pct>=90 ? 'var(--color-danger)' : g.util.rpd_pct>=70 ? 'var(--color-warning)' : 'var(--text-secondary)', minWidth:'72px', textAlign:'right' }">
-                                            {{ g.util.day_req }}/{{ g.util.rpd_limit }}
-                                        </span>
-                                    </div>
-                                    <div v-if="g.util.tph_limit > 0" class="capacity-insight-item">
-                                        <span style="color:var(--text-muted);min-width:28px;">TPH</span>
-                                        <div class="util-bar"><div class="util-bar-fill" :style="{ width: Math.min(g.util.tph_pct,100)+'%',
-                                            background: g.util.tph_pct>=90 ? 'var(--color-danger)' : g.util.tph_pct>=70 ? 'var(--color-warning)' : 'var(--color-success)' }"></div></div>
-                                        <span :style="{ fontFamily:'var(--font-mono)', fontSize:'0.76rem', color: g.util.tph_pct>=90 ? 'var(--color-danger)' : g.util.tph_pct>=70 ? 'var(--color-warning)' : 'var(--text-secondary)', minWidth:'72px', textAlign:'right' }">
-                                            {{ g.util.hour_tok }}/{{ g.util.tph_limit }}
-                                        </span>
-                                    </div>
-                                </template>
-                            </div>
-                        </template>
-                        <!-- Queue pressure items (not per-RAPI) -->
-                        <div v-for="(qi, qiIdx) in queueInsights" :key="'qi-'+qiIdx"
-                             class="capacity-group" style="border-color:rgba(244,63,94,0.3);">
-                            <div style="display:flex;align-items:center;gap:8px;">
-                                <div class="insight-icon" style="background:rgba(244,63,94,0.1);width:24px;height:24px;">
-                                    <svg style="width:12px;height:12px;" viewBox="0 0 24 24" fill="none" stroke="var(--color-danger)" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-                                </div>
-                                <span style="font-weight:600;font-size:0.84rem;color:var(--color-danger);">{{ qi.context.queued }} 个请求排队</span>
-                            </div>
+                            </template>
                         </div>
                     </div>
-                </div>
-
-                <!-- Traffic chart (keep but simplify) -->
-                <div class="glass-card" style="padding:18px;margin-bottom:20px;">
-                    <div class="card-header-row">
-                        <span class="card-title">实时流量趋势</span>
-                        <span style="font-size:0.8rem;color:var(--text-muted)">最近 30 分钟每分钟请求数</span>
-                    </div>
-                    <div class="chart-container">
-                        <canvas id="trafficChart"></canvas>
-                    </div>
-                </div>
-
-                <!-- Model health table (keep but simplified) -->
-                <div class="glass-card" style="margin-bottom:20px;">
-                    <div class="card-header-row">
-                        <span class="card-title">模型健康报表</span>
-                        <span class="u-muted-md">按请求量降序 · 仅展示有流量或存在问题的模型</span>
-                    </div>
-                    <div class="table-responsive">
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>模型别名</th>
-                                    <th>所属平台</th>
-                                    <th>状态</th>
-                                    <th class="u-tr">请求总数</th>
-                                    <th class="u-tr">成功率</th>
-                                    <th class="u-tr">均值延迟</th>
-                                    <th class="u-tr">429</th>
-                                    <th class="u-tr">5xx</th>
-                                    <th class="u-tr">最后使用</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <tr v-if="dashTableRows.length === 0">
-                                    <td colspan="9" style="text-align:center;color:var(--text-muted);padding:28px;">暂无流量数据</td>
-                                </tr>
-                                <tr v-for="m in dashTableRows" :key="m.id"
-                                    :style="{ opacity: (!m.enabled || !m.available) ? 0.6 : 1 }">
-                                    <td><span style="font-family:var(--font-mono);font-size:0.88rem;">{{ m.alias }}</span></td>
-                                    <td style="color:var(--text-secondary);font-size:0.85rem;">{{ m.platform_name }}</td>
-                                    <td>
-                                        <span v-if="!m.available" class="badge-status inactive" style="color:var(--color-danger);background:rgba(244,63,94,0.08);border-color:rgba(244,63,94,0.2);">
-                                            <span style="width:6px;height:6px;border-radius:50%;background:var(--color-danger);display:inline-block;"></span> 失效
-                                        </span>
-                                        <span v-else-if="!m.enabled" class="badge-status inactive">
-                                            <span style="width:6px;height:6px;border-radius:50%;background:var(--text-muted);display:inline-block;"></span> 停用
-                                        </span>
-                                        <span v-else class="badge-status active">
-                                            <span style="width:6px;height:6px;border-radius:50%;background:var(--color-success);display:inline-block;"></span> 正常
-                                        </span>
-                                    </td>
-                                    <td style="text-align:right;font-family:var(--font-mono);">{{ fmtNum(m.total_req) }}</td>
-                                    <td class="u-tr">
-                                        <span :style="{ color: m.total_req===0 ? 'var(--text-muted)' : m.success_rate>=95 ? 'var(--color-success)' : m.success_rate>=80 ? 'var(--color-warning)' : 'var(--color-danger)', fontWeight:600, fontFamily:'var(--font-mono)' }">
-                                            {{ m.total_req > 0 ? m.success_rate.toFixed(1) + '%' : '—' }}
-                                        </span>
-                                    </td>
-                                    <td style="text-align:right;font-family:var(--font-mono);">
-                                        <span :style="{ color: m.avg_latency_ms===0 ? 'var(--text-muted)' : m.avg_latency_ms > 10000 ? 'var(--color-danger)' : m.avg_latency_ms > 5000 ? 'var(--color-warning)' : 'var(--text-primary)' }">
-                                            {{ m.avg_latency_ms > 0 ? Math.round(m.avg_latency_ms) + ' ms' : '—' }}
-                                        </span>
-                                    </td>
-                                    <td style="text-align:right;font-family:var(--font-mono);">
-                                        <span :style="{ color: m.fail_429 > 0 ? 'var(--color-warning)' : 'var(--text-muted)' }">{{ m.fail_429 || '—' }}</span>
-                                    </td>
-                                    <td style="text-align:right;font-family:var(--font-mono);">
-                                        <span :style="{ color: m.fail_500 > 0 ? 'var(--color-danger)' : 'var(--text-muted)' }">{{ m.fail_500 || '—' }}</span>
-                                    </td>
-                                    <td style="text-align:right;font-size:0.8rem;color:var(--text-muted);">{{ m.last_used === 'Never' ? '—' : fmtRelTime(m.last_used) }}</td>
-                                </tr>
-                            </tbody>
-                        </table>
+                    <div class="glass-card" style="padding:14px 16px;">
+                        <div class="card-header-row" style="margin-bottom:8px;">
+                            <span class="card-title" style="font-size:0.95rem;">近期错误日志</span>
+                            <button class="btn btn-secondary btn-sm" @click="setTab('logs')">全部 ›</button>
+                        </div>
+                        <div v-if="!(metricsData.recent_errors||[]).length" class="u-muted" style="font-size:0.84rem;padding:8px 0;">无错误记录</div>
+                        <div v-else style="display:flex;flex-direction:column;gap:4px;max-height:220px;overflow-y:auto;">
+                            <div v-for="(e, i) in (metricsData.recent_errors||[])" :key="i"
+                                 class="u-pointer" style="display:flex;align-items:center;gap:8px;padding:4px 6px;border-radius:6px;font-size:0.8rem;"
+                                 @click="openLogById(e.id)">
+                                <span style="font-family:var(--font-mono);color:var(--color-danger);min-width:32px;">{{ e.status }}</span>
+                                <span style="font-family:var(--font-mono);">{{ e.lapi || '—' }}</span>
+                                <span style="color:var(--text-muted);min-width:60px;">{{ e.rapi || '—' }}</span>
+                                <span style="flex:1;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" :title="e.error">{{ e.error }}</span>
+                                <span style="color:var(--text-muted);font-size:0.72rem;">{{ fmtRelTime(e.timestamp) }}</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -2409,7 +2155,7 @@
                     <div class="glass-card" style="padding:18px;margin-bottom:16px;">
                         <div class="card-header-row u-mb12"><span class="card-title">基本信息</span></div>
                         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px 28px;font-size:0.85rem;">
-                            <div><div class="u-muted-sm u-mb3">模型名称（自动生成）</div>
+                            <div><div class="u-muted-sm u-mb3">模型名称</div>
                                 <div style="font-family:var(--font-mono);font-weight:600;color:var(--color-primary);">{{ rapiDisplayName(rapiDetail) }}</div></div>
                             <div><div class="u-muted-sm u-mb3">模型备注</div>
                                 <div class="u-primary">{{ rapiDetail.notes || '—' }}</div></div>
@@ -2829,6 +2575,27 @@
                         </div>
                     </div>
 
+                    <!-- 系统/中心互联日志（syncOnce 成败、直写成败、池冷却等） -->
+                    <details class="glass-card" style="padding:12px 16px;margin-bottom:14px;" :open="systemLogOpen ? 'open' : null">
+                        <summary style="cursor:pointer;font-weight:600;font-size:0.92rem;color:var(--text-secondary);" @click="systemLogOpen = !systemLogOpen">
+                            ▸ 系统 / 中心互联日志
+                            <span v-if="systemLogs.length" class="u-muted-md" style="margin-left:8px;">{{ systemLogs.length }} 条</span>
+                        </summary>
+                        <div v-if="systemLogs.length === 0" class="u-muted" style="font-size:0.84rem;padding:8px 0;">无系统日志</div>
+                        <div v-else style="max-height:240px;overflow-y:auto;margin-top:8px;">
+                            <div v-for="l in systemLogs" :key="l.id"
+                                 style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.03);font-size:0.8rem;">
+                                <span style="font-family:var(--font-mono);font-size:0.72rem;color:var(--text-muted);min-width:120px;">{{ formatTime(l.created_at) }}</span>
+                                <span style="font-size:0.7rem;padding:1px 6px;border-radius:4px;min-width:48px;text-align:center;"
+                                      :style="{ background: l.level==='error' ? 'rgba(244,63,94,0.12)' : l.level==='warn' ? 'rgba(245,158,11,0.12)' : 'rgba(56,189,248,0.12)', color: l.level==='error' ? 'var(--color-danger)' : l.level==='warn' ? 'var(--color-warning)' : 'var(--color-primary)' }">
+                                    {{ l.level }}
+                                </span>
+                                <span style="font-family:var(--font-mono);font-size:0.72rem;color:var(--text-muted);min-width:60px;">{{ l.category }}</span>
+                                <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" :title="l.message">{{ l.message }}</span>
+                            </div>
+                        </div>
+                    </details>
+
                     <div class="table-responsive">
                         <table>
                             <thead>
@@ -2874,6 +2641,110 @@
                         </table>
                     </div>
                 </template>
+            </div>
+
+            <!-- 6a. SB CONFIG tab — 中心配置（Supabase）：URL+key 加密保存+角色探测+同步状态 -->
+            <div v-if="activeTab === 'sbconfig'" class="tab-pane">
+                <!-- 头部：标题 + 单一状态徽章（角色·连通，合并去重）+ 右上角操作 -->
+                <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap;">
+                    <span style="font-size:1.1rem;font-weight:700;color:var(--color-primary);">中心配置</span>
+                    <span class="badge-status" :class="sbConfig.role !== 'offline' ? 'active' : 'inactive'"
+                          :style="{ color: roleColor(sbConfig.role) }">
+                        {{ roleLabel(sbConfig.role) }}{{ sbConfig.connected ? ' · 已连通' : (sbConfig.role === 'offline' ? '' : ' · 未连通') }}
+                    </span>
+                    <span v-if="sbConfig.error" style="color:var(--color-danger);font-size:0.8rem;">⚠ {{ sbConfig.error }}</span>
+                    <span class="u-flex1"></span>
+                    <button class="btn btn-secondary btn-sm" @click="fetchSBConfig">重新探测</button>
+                    <button class="btn btn-primary btn-sm" @click="saveSBConfig(sbConfigForm.url, sbConfigForm.key, sbConfigForm.centerKey)">保存并激活</button>
+                </div>
+
+                <!-- 录入 API Key（紧凑：URL + Key 同行） -->
+                <div class="glass-card" style="padding:12px 16px;margin-bottom:14px;">
+                    <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+                        <span class="card-title" style="font-size:0.95rem;">录入 API Key</span>
+                        <span class="u-muted-md">角色由 key 权限自动判定：可写=管理端 / 只读=代理端 / 空=未连接</span>
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+                        <div>
+                            <div class="u-muted-sm u-mb3">Supabase Project ID 或完整 URL</div>
+                            <input type="text" class="form-control" placeholder="abcdefghijk（Project ID）或 https://xxx.supabase.co" v-model="sbConfigForm.url">
+                        </div>
+                        <div>
+                            <div class="u-muted-sm u-mb3">API Key（secret 私钥=管理端 / publishable 公钥=代理端）</div>
+                            <input type="password" class="form-control" placeholder="粘贴 key（不会明文回显）" v-model="sbConfigForm.key">
+                            <div v-if="sbConfig.key_mask" class="u-muted-sm" style="margin-top:3px;">当前：{{ sbConfig.key_mask }}</div>
+                        </div>
+                        <div>
+                            <div class="u-muted-sm u-mb3">center_key（可选，64 位 hex；填了中心存密文 token）</div>
+                            <input type="password" class="form-control" placeholder="留空 = 中心存明文 token" v-model="sbConfigForm.centerKey">
+                            <div class="u-muted-sm" style="margin-top:3px;">{{ sbConfig.center_key_set ? '当前：已配置（中心存密文）' : '当前：未配置（中心存明文）' }}</div>
+                        </div>
+                    </div>
+                    <div class="u-muted-sm" style="margin-top:8px;">保存即热激活，无需重启；配置加密存本地数据库，proxy.cfg 仅作无头启动回退。</div>
+                </div>
+
+                <!-- 同步状态：中心/本地各表对比 + 角色相关同步按钮 -->
+                <div class="glass-card" style="padding:14px 16px;">
+                    <div class="card-header-row" style="margin-bottom:10px;">
+                        <span class="card-title">同步状态</span>
+                        <span class="u-muted-md">各定义表行数（中心 vs 本地）</span>
+                    </div>
+
+                    <!-- 同步按钮：本地角色决定显示 -->
+                    <div v-if="sbConfig.role === 'management'" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+                        <button class="btn btn-primary btn-sm" :disabled="syncPulling" @click="manualPull">{{ syncPulling ? '拉取中…' : '⬇ 中心到本地' }}</button>
+                        <button class="btn btn-primary btn-sm" :disabled="pushingToCenter" @click="pushToCenter">{{ pushingToCenter ? '推送中…' : '⬆ 本地到中心' }}</button>
+                        <span v-if="sbConfig.in_sync" class="u-muted-sm" style="color:#46a758;">✓ 已同步（v{{ sbConfig.local_ver }}）</span>
+                        <span v-else class="u-muted-sm" style="color:#f5a524;">⚠ 待同步（中心 v{{ sbConfig.center_ver }} / 本地 v{{ sbConfig.local_ver }}）</span>
+                    </div>
+                    <div v-else-if="sbConfig.role === 'proxy'" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+                        <button class="btn btn-primary btn-sm" :disabled="syncPulling" @click="manualPull">{{ syncPulling ? '拉取中…' : '⬇ 远端到本地' }}</button>
+                        <span v-if="sbConfig.in_sync" class="u-muted-sm" style="color:#46a758;">✓ 已同步（v{{ sbConfig.local_ver }}）</span>
+                        <span v-else class="u-muted-sm" style="color:#f5a524;">⚠ 待同步（中心 v{{ sbConfig.center_ver }} / 本地 v{{ sbConfig.local_ver }}）</span>
+                    </div>
+                    <div v-else style="margin-bottom:12px;padding:8px 12px;border-radius:8px;background:rgba(229,72,77,0.06);border:1px solid rgba(229,72,77,0.2);font-size:0.82rem;color:var(--color-danger);">
+                        未连接中心，无法同步。请在上方录入 API Key 并保存探测。
+                    </div>
+
+                    <table style="width:100%;font-size:0.84rem;border-collapse:collapse;">
+                        <thead>
+                            <tr style="color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-size:0.72rem;">
+                                <th style="text-align:left;padding:4px 8px;">定义表</th>
+                                <th style="text-align:right;padding:4px 8px;">中心</th>
+                                <th style="text-align:right;padding:4px 8px;">本地</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="t in ['platform','platform_keys','rapi','lapi','lapi_rapi_order']" :key="t" style="border-top:1px solid rgba(255,255,255,0.05);">
+                                <td style="padding:5px 8px;">{{ tableNameLabel(t) }}</td>
+                                <td style="text-align:right;padding:5px 8px;font-family:var(--font-mono);">{{ (sbConfig.tables ?? {})[t] ?? '—' }}</td>
+                                <td style="text-align:right;padding:5px 8px;font-family:var(--font-mono);">{{ (sbConfig.local_tables ?? {})[t] ?? '—' }}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+
+                    <div v-if="sbConfig.role === 'management'" style="margin-top:12px;padding:8px 12px;border-radius:8px;background:rgba(56,189,248,0.06);border:1px solid rgba(56,189,248,0.2);font-size:0.82rem;color:var(--color-primary);">
+                        管理模式：定义类增删改直写中心库，所有代理节点将在轮询间隔（默认 60s）内自动拉取。「本地到中心」会用本地定义整体覆盖中心（破坏性）。修改 key 后需重启网关以应用。
+                    </div>
+                    <div v-else-if="sbConfig.role === 'proxy'" style="margin-top:12px;padding:8px 12px;border-radius:8px;background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.2);font-size:0.82rem;color:var(--color-warning);">
+                        代理模式：定时轮询拉取中心定义。代理可本地增删改（应急，写本地 SQLite，不推中心）；拉取模式可切换为手动以保留本地改不被覆盖。修改 key 后需重启网关以应用。
+                    </div>
+
+                    <!-- 代理拉取模式切换（管理端直写中心，无需此区块） -->
+                    <div v-if="sbConfig.role === 'proxy'" style="margin-top:12px;padding:12px;border-radius:8px;border:1px solid rgba(255,255,255,0.08);font-size:0.84rem;">
+                        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:8px;">
+                            <span style="font-weight:600;">拉取模式：</span>
+                            <span class="chip" :class="{ active: syncPullMode === 'auto' }" @click="setPullMode('auto')">自动（60s 轮询应用）</span>
+                            <span class="chip" :class="{ active: syncPullMode === 'manual', warning: syncPullMode === 'manual' }" @click="setPullMode('manual')">手动（只记待拉取，保留本地改）</span>
+                        </div>
+                        <div v-if="syncPullMode === 'manual' && syncPullPending" style="padding:6px 10px;border-radius:6px;background:rgba(245,158,11,0.1);color:var(--color-warning);font-size:0.8rem;">
+                            ⚠ 中心有新版本待拉取（v{{ syncPullPending }}）。点「⬇ 远端到本地」应用——会覆盖本地应急改。
+                        </div>
+                        <div v-else-if="syncPullMode === 'manual'" style="padding:6px 10px;color:var(--text-muted);font-size:0.8rem;">
+                            手动模式：中心更新不会被自动应用，本地应急改保留。需要时点上方按钮拉取。
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <!-- 6. PLAYGROUND tab — independent debug module -->
@@ -3192,6 +3063,10 @@
                     </div>
                     <div class="modal-body">
                         <div class="form-group">
+                            <label>名称（显示名，可随便改；留空则按下方命名规则自动生成）</label>
+                            <input type="text" class="form-control" placeholder="例如：生产 GPT-4o 主通道" v-model="rapiModal.form.alias" autocomplete="off">
+                        </div>
+                        <div class="form-group">
                             <label>所属平台</label>
                             <select class="form-control" v-model="rapiModal.form.platform_id">
                                 <option v-for="p in platforms" :value="p.id">{{ p.name }}</option>
@@ -3244,7 +3119,7 @@
                         </div>
                         <div class="form-group">
                             <div style="padding:8px 12px;border-radius:8px;background:rgba(56,189,248,0.06);border:1px dashed rgba(56,189,248,0.25);font-size:0.84rem;">
-                                模型名称（按 厂商/系列-版本-后缀 自动生成）：
+                                名称留空时将自动生成（厂商/系列-版本-后缀 → 备注 → 上游模型名）：
                                 <span style="font-family:var(--font-mono);font-weight:700;color:var(--color-primary);">{{ computeModelName(rapiModal.form.vendor, rapiModal.form.series, rapiModal.form.version, rapiModal.form.suffix, rapiModal.form.notes, rapiModal.form.model) || '（待填写）' }}</span>
                             </div>
                         </div>
@@ -3902,6 +3777,9 @@
             setup() {
                 // TABS
                 const activeTab = ref('dashboard');
+                const localNavOpen = ref(true); // 本地配置子菜单展开
+                const localTabs = ['platforms','keys','rapis','lapis','logs','playground'];
+                const isLocalTabActive = computed(() => localTabs.includes(activeTab.value));
                 const gatewayLive = ref(true);
 
                 // DETAIL VIEW — 汇总页点击行进入对应实体的详情页；详情页内展示
@@ -3921,13 +3799,129 @@
                 
                 // STATE CONTAINERS
                 const stats = ref({});
-                const dashHealth = ref({ total_requests: 0, overall_success_rate: 0, avg_latency_ms: 0, fail_429: 0, fail_401: 0, fail_500: 0, rapi_count: 0, lapi_count: 0, platforms: [], models: [] });
                 const insightData = ref({
                     health: { cooling_rapis: [], cooling_keys: [], error_summary: [] },
                     efficiency: [],
                     capacity: []
                 });
                 const analyticsCounters = ref([]);
+                // 仪表盘单屏指标矩阵：4 维度 × 10 指标 TOP3 × 今日/本月 + 待处理 + 近期错误。
+                const metricsData = ref({ platform: {}, key: {}, model: {}, interface: {}, needs_attention: [], recent_errors: [] });
+                const metricsPeriod = ref('today');
+                // Supabase 角色（management/proxy/offline）：用于 confirm() 加 sb 提醒
+                // 和中心配置页徽章。启动时拉一次。
+                const sbRole = ref('offline');
+                const sbConfig = ref({ connected: false, role: 'offline', url: '', key_mask: '', tables: {}, error: '' });
+                const sbConfigForm = ref({ url: '', key: '', centerKey: '' });
+                const sbRoleLabel = computed(() => ({
+                    management: '管理端（可写）', proxy: '代理端（只读）', offline: '未连接'
+                }[sbConfig.value.role] || sbConfig.value.role));
+                const tableNameLabel = (t) => ({
+                    platform: '平台', platform_keys: '密钥', rapi: '上游模型',
+                    lapi: '客户端模型', lapi_rapi_order: '路由链'
+                }[t] || t);
+                // 角色 → 可读标签 / 颜色（仪表盘中心连接信息卡 + 中心配置页共用）。
+                const roleLabel = (r) => ({
+                    management: '管理端（可写）', proxy: '代理端（只读）', offline: '未连接'
+                }[r] || r || '未连接');
+                const roleColor = (r) => r === 'management' ? '#46a758' : r === 'proxy' ? '#f5a524' : 'var(--color-danger)';
+                // tableDelta：当前本地行数 − 启动快照，返回带颜色的 HTML（0 灰 / 正绿 / 负红）。
+                const tableDelta = (cur, start) => {
+                    if (cur == null || start == null) return '<span style="color:var(--text-muted);">—</span>';
+                    const d = Number(cur) - Number(start);
+                    if (d === 0) return '<span style="color:var(--text-muted);">0</span>';
+                    const color = d > 0 ? '#46a758' : '#e5484d';
+                    return '<span style="color:' + color + ';">' + (d > 0 ? '+' : '') + d + '</span>';
+                };
+                // 拉取模式（代理角色）：auto 自动应用 / manual 只记 pending 保留本地应急改。
+                const syncPullMode = ref('auto');
+                const syncPullPending = ref('');
+                const syncPulling = ref(false);
+                const loadPullMode = async () => {
+                    try {
+                        const r = await fetch('/api/sync/pull-mode');
+                        if (r.ok) {
+                            const d = await r.json();
+                            syncPullMode.value = d.mode || 'auto';
+                            syncPullPending.value = d.pending_remote_version || '';
+                        }
+                    } catch (e) {}
+                };
+                const setPullMode = async (mode) => {
+                    try {
+                        const r = await fetch('/api/sync/pull-mode', {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ mode })
+                        });
+                        if (r.ok) { syncPullMode.value = mode; showToast('拉取模式', '已切换为 ' + (mode === 'auto' ? '自动' : '手动'), 'success'); }
+                    } catch (e) {}
+                };
+                const manualPull = async () => {
+                    syncPulling.value = true;
+                    try {
+                        const r = await fetch('/api/sync/refresh', { method: 'POST' });
+                        if (r.ok) {
+                            const d = await r.json();
+                            syncPullPending.value = '';
+                            showToast('拉取成功', '中心配置已应用到本地', 'success');
+                            fetchSyncCenter();
+                        } else {
+                            const d = await r.json().catch(() => ({}));
+                            showToast('拉取失败', d.error?.message || '', 'error');
+                        }
+                    } catch (e) { showToast('拉取失败', String(e), 'error'); }
+                    syncPulling.value = false;
+                };
+                // 本地→中心 整体覆盖推送（管理模式专用，破坏性，二次确认）。
+                const pushingToCenter = ref(false);
+                const pushToCenter = async () => {
+                    if (!confirm('将用本地定义覆盖中心现有数据，不可撤销。\n确认推送？')) return;
+                    pushingToCenter.value = true;
+                    try {
+                        const r = await fetch('/api/sync/push', { method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ confirm: 'OVERWRITE-CENTER' }) });
+                        const d = await r.json().catch(() => ({}));
+                        if (r.ok) {
+                            const ct = d.center_tables || {};
+                            showToast('推送成功', '本地定义已覆盖中心（平台×' + (ct.platform ?? 0) +
+                                ' / 密钥×' + (ct.platform_keys ?? 0) + ' / 模型×' + (ct.rapi ?? 0) +
+                                ' / 接口×' + (ct.lapi ?? 0) + ' / 路由链×' + (ct.lapi_rapi_order ?? 0) + '）', 'success');
+                            fetchSBConfig();
+                            fetchSyncCenter();
+                        } else {
+                            showToast('推送失败', d.error?.message || d.error || '', 'error');
+                        }
+                    } catch (e) { showToast('推送失败', String(e), 'error'); }
+                    pushingToCenter.value = false;
+                };
+                // 系统/中心互联日志（日志页折叠卡片）。
+                const systemLogs = ref([]);
+                const systemLogOpen = ref(false);
+                const loadSystemLogs = async () => {
+                    try {
+                        const r = await fetch('/api/logs/system?limit=50');
+                        if (r.ok) {
+                            const d = await r.json();
+                            systemLogs.value = d.logs || [];
+                        }
+                    } catch (e) {}
+                };
+                const sbNote = () => sbRole.value === 'management'
+                    ? '\n⚠ 管理模式：此操作将直写 Supabase 中心库，并同步影响所有代理节点。'
+                    : '';
+                const metricRows = [
+                    { key: 'total_tokens',    label: '最多总 token',      color: 'var(--color-primary)' },
+                    { key: 'input_tokens',    label: '最多输入 token',     color: 'var(--color-primary)' },
+                    { key: 'cached_tokens',   label: '最多命中缓存 token', color: 'var(--color-secondary)' },
+                    { key: 'output_tokens',   label: '最多输出 token',     color: 'var(--color-primary)' },
+                    { key: 'attempts',        label: '最多尝试访问',       color: 'var(--text-primary)' },
+                    { key: 'errors',          label: '最多报错',           color: 'var(--color-danger)' },
+                    { key: 'ttft_lowest',     label: '首 token 延迟最低',  color: 'var(--color-success)', fmt: (v) => v + ' ms' },
+                    { key: 'rest_lat_lowest', label: '除首 token 延迟最低',color: 'var(--color-success)', fmt: (v) => v + ' ms' },
+                    { key: 'ttft_highest',    label: '首 token 延迟最高',  color: 'var(--color-warning)', fmt: (v) => v + ' ms' },
+                    { key: 'rest_lat_highest',label: '除首 token 延迟最高',color: 'var(--color-warning)', fmt: (v) => v + ' ms' },
+                ];
                 const platforms = ref([]);
                 const rapis = ref([]);
                 // key×model capability blocks: "keyId:rapiId" → {reason, expires_at}
@@ -3962,7 +3956,7 @@
                     pwVisible: false // login password eye toggle
                 });
                 const addToLapiModal = reactive({ show: false, rapi: null, selectedLapiId: null });
-                const rapiModal = reactive({ show: false, item: null, form: { platform_id: '', model: '', vendor: '', series: '', version: '', suffix: '', notes: '' }, headers: [], keyIDs: [] });
+                const rapiModal = reactive({ show: false, item: null, form: { platform_id: '', alias: '', model: '', vendor: '', series: '', version: '', suffix: '', notes: '' }, headers: [], keyIDs: [] });
                 // Key-model direct test modal (per-RAPI 测试 button).
                 const rapiTestModal = reactive({ show: false, rapi: null, keyId: 0, body: '', sending: false, status: 0, latency: 0, response: '', clearOnSuccess: true });
                 // Keys this RAPI may use (its filtered pool), for the test-key selector.
@@ -4167,100 +4161,6 @@
                 let trafficChart = null;
 
                 // COMPUTED PROPERTIES
-                const successRateText = computed(() => {
-                    if (!stats.value || stats.value.total_requests === 0) return '100.00%';
-                    const errCount = logs.value.filter(l => l.response_status && l.response_status >= 400).length;
-                    const totalCount = logs.value.length;
-                    if (totalCount === 0) return '100.00%';
-                    return ((1 - (errCount / totalCount)) * 100).toFixed(2) + '%';
-                });
-
-                const successRateColor = computed(() => {
-                    const rate = parseFloat(successRateText.value);
-                    if (rate >= 95) return 'var(--color-success)';
-                    if (rate >= 80) return 'var(--color-warning)';
-                    return 'var(--color-danger)';
-                });
-
-                // Dashboard health computed properties
-                const dashSuccessText = computed(() => {
-                    const r = dashHealth.value.overall_success_rate;
-                    if (!dashHealth.value.total_requests) return '—';
-                    return r.toFixed(2) + '%';
-                });
-
-                const dashSuccessColor = computed(() => {
-                    const r = dashHealth.value.overall_success_rate;
-                    if (!dashHealth.value.total_requests) return 'var(--text-muted)';
-                    if (r >= 95) return 'var(--color-success)';
-                    if (r >= 80) return 'var(--color-warning)';
-                    return 'var(--color-danger)';
-                });
-
-                const dashLatencyColor = computed(() => {
-                    const ms = dashHealth.value.avg_latency_ms;
-                    if (!ms) return 'var(--text-muted)';
-                    if (ms > 10000) return 'var(--color-danger)';
-                    if (ms > 5000) return 'var(--color-warning)';
-                    return 'var(--text-primary)';
-                });
-
-                // Models that need attention: unavailable, disabled, or error rate > 20%
-                const issueModels = computed(() => {
-                    return (dashHealth.value.models || []).filter(m =>
-                        !m.available || !m.enabled ||
-                        (m.total_req > 5 && m.success_rate < 80)
-                    ).sort((a, b) => {
-                        // Unavailable first, then disabled, then high-error
-                        const score = m => (!m.available ? 2 : !m.enabled ? 1 : 0);
-                        return score(b) - score(a);
-                    });
-                });
-
-                // Table rows: models with traffic or issues, sorted by total_req desc
-                const dashTableRows = computed(() => {
-                    return (dashHealth.value.models || [])
-                        .filter(m => m.total_req > 0 || !m.available || !m.enabled)
-                        .sort((a, b) => b.total_req - a.total_req);
-                });
-
-                // Alert banners: offline models, disabled platforms, throttled models
-                const dashAlerts = computed(() => {
-                    const alerts = [];
-                    const models = dashHealth.value.models || [];
-                    const offlineModels = models.filter(m => !m.available);
-                    if (offlineModels.length > 0) {
-                        alerts.push({
-                            key: 'offline',
-                            level: 'danger',
-                            tag: '模型失效',
-                            message: `${offlineModels.length} 个模型已被系统标记失效：${offlineModels.map(m => m.alias).join('、')}`,
-                            action: 'rapis'
-                        });
-                    }
-                    const throttled = models.filter(m => m.fail_429 > 0);
-                    if (throttled.length > 0) {
-                        const totalThrottle = throttled.reduce((s, m) => s + m.fail_429, 0);
-                        alerts.push({
-                            key: 'throttle',
-                            level: 'warning',
-                            tag: '限流警告',
-                            message: `累计触发上游限速 ${totalThrottle} 次，涉及模型：${throttled.map(m => m.alias).join('、')}`,
-                            action: null
-                        });
-                    }
-                    const disabledPlats = (dashHealth.value.platforms || []).filter(p => !p.enabled);
-                    if (disabledPlats.length > 0) {
-                        alerts.push({
-                            key: 'platdisabled',
-                            level: 'warning',
-                            tag: '平台停用',
-                            message: `${disabledPlats.length} 个平台处于停用状态：${disabledPlats.map(p => p.name).join('、')}`,
-                            action: 'platforms'
-                        });
-                    }
-                    return alerts;
-                });
 
                 // Global fuzzy filters + auto sort (故障 → 警告 → 禁用 → 正常)
                 const filteredPlatforms = computed(() => {
@@ -4438,15 +4338,6 @@
                 };
 
                 // LOAD DATA FUNCTIONS
-                const loadDashboard = async () => {
-                    try {
-                        const r = await fetch('/api/dashboard');
-                        if (r.ok) {
-                            dashHealth.value = await r.json();
-                        }
-                    } catch (e) {}
-                };
-
                 const loadInsights = async () => {
                     try {
                         const r = await fetch('/api/insights');
@@ -4466,29 +4357,73 @@
                     } catch (e) {}
                 };
 
-                // Compute alert banners from insights + cooling state
-                const healthAlerts = computed(() => {
-                    const alerts = [];
-                    const d = insightData.value;
-                    // Critical: queue pressure
-                    (d.capacity || []).filter(i => i.level === 'critical').forEach(i => {
-                        alerts.push({ key: 'cap-' + i.category, tag: '紧急', message: i.detail,
-                            bg: 'rgba(244,63,94,0.07)', border: 'rgba(244,63,94,0.25)', accent: 'var(--color-danger)' });
-                    });
-                    // Warning: disabled platforms
-                    const disabledPlats = (dashHealth.value.platforms || []).filter(p => !p.enabled);
-                    if (disabledPlats.length > 0) {
-                        alerts.push({ key: 'disabled-plats', tag: '平台停用',
-                            message: disabledPlats.map(p => p.name).join(', ') + ' 已停用，其下属模型不可用',
-                            bg: 'rgba(245,158,11,0.07)', border: 'rgba(245,158,11,0.25)', accent: 'var(--color-warning)' });
-                    }
-                    // Warning: efficiency issues
-                    (d.efficiency || []).filter(i => i.level === 'warning').slice(0, 3).forEach(i => {
-                        alerts.push({ key: 'eff-' + i.category, tag: '优化建议', message: i.detail,
-                            bg: 'rgba(56,189,248,0.07)', border: 'rgba(56,189,248,0.25)', accent: 'var(--color-primary)' });
-                    });
-                    return alerts;
-                });
+                // 仪表盘单屏指标矩阵：4 维度 × 10 指标 TOP3 × 今日/本月。
+                const loadMetrics = async () => {
+                    try {
+                        const r = await fetch('/api/dashboard/metrics?period=' + metricsPeriod.value);
+                        if (r.ok) {
+                            metricsData.value = await r.json();
+                        }
+                    } catch (e) {}
+                };
+
+                const attentionLabel = (kind) => ({
+                    platform: '平台', key: 'Key', model: '模型', interface: '接口'
+                }[kind] || kind);
+                // 按类别过滤待处理项（平台/key/模型/接口四块分组渲染用）。
+                const attentionByKind = (kind) => (metricsData.value.needs_attention || []).filter(it => it.kind === kind);
+                const attentionColor = (kind) => ({
+                    platform: 'rgba(244,63,94,0.2)', key: 'rgba(244,63,94,0.2)',
+                    model: 'rgba(245,158,11,0.25)', interface: 'rgba(245,158,11,0.25)'
+                }[kind] || 'rgba(255,255,255,0.08)');
+                // 拉取 Supabase 配置与角色（中心配置页 + confirm sb 提醒用）。
+                const fetchSBConfig = async () => {
+                    try {
+                        const r = await fetch('/api/sb-config');
+                        if (r.ok) {
+                            const d = await r.json();
+                            sbConfig.value = d;
+                            sbRole.value = d.role || 'offline';
+                            if (d.url) sbConfigForm.value.url = d.url;
+                        }
+                    } catch (e) {}
+                };
+                const saveSBConfig = async (url, key, centerKey) => {
+                    try {
+                        const r = await fetch('/api/sb-config', {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ url, key, center_key: centerKey || '' })
+                        });
+                        const d = await r.json();
+                        if (r.ok) {
+                            sbConfig.value = d;
+                            sbRole.value = d.role || 'offline';
+                            sbConfigForm.value.centerKey = ''; // 不落表单
+                            if (d.activate_error) {
+                                showToast('已保存但未激活', d.activate_error, 'error');
+                            } else if (d.activated) {
+                                showToast('已保存并激活（免重启）', d.role === 'management' ? '管理端（可写）' : '代理端（只读）', 'success');
+                                refreshData();
+                            } else {
+                                showToast('已保存', d.role === 'management' ? '管理端（可写）' : d.role === 'proxy' ? '代理端（只读）' : '未连接', 'success');
+                            }
+                        } else {
+                            showToast('保存失败', d.error || '', 'error');
+                        }
+                    } catch (e) { showToast('保存失败', String(e), 'error'); }
+                };
+                const jumpToAttention = (it) => {
+                    if (it.kind === 'platform') { setTab('platforms'); }
+                    else if (it.kind === 'key') { setTab('keys'); }
+                    else if (it.kind === 'model') { setTab('rapis'); }
+                    else if (it.kind === 'interface') { setTab('lapis'); }
+                };
+                const openLogById = async (id) => {
+                    setTab('logs');
+                    await loadLogs();
+                    const log = logs.value.find(l => l.id === id);
+                    if (log) selectLog(log);
+                };
 
                 // Build hierarchical cooling tree: 平台 → 平台-key → 平台-key-模型
                 const coolingTree = computed(() => {
@@ -4820,7 +4755,7 @@
                             warn += '\n删除后这些模型的白名单会自动剥离该 Key。';
                         }
                     }
-                    if (!confirm(`确定删除 Key #${k.key_index}（${k.label || (k.token || '').slice(0,12)}…）吗？${warn}`)) return;
+                    if (!confirm(`确定删除 Key #${k.key_index}（${k.label || (k.token || '').slice(0,12)}…）吗？${warn}${sbNote()}`)) return;
                     try {
                         const r = await fetch(`/api/platforms/${k.platform_id}/keys?key_id=${k.id}`, { method: 'DELETE' });
                         if (r.ok) {
@@ -4914,7 +4849,7 @@
                 const blockedKeysForRapi = (rapi) => keyPoolForRapi(rapi).keys.filter(k => keyModelBlock(k, rapi));
                 const unblockKeyModel = async (k, rapi) => {
                     const b = keyModelBlock(k, rapi);
-                    if (!confirm(`解除 Key「${keyShortLabel(k)}」对模型「${rapi.alias || rapi.model}」的能力限制吗？\n原因: ${b ? b.reason : ''}\n解除后模型会自动重新探测，若平台仍未授权将再次加入黑名单。`)) return;
+                    if (!confirm(`解除 Key「${keyShortLabel(k)}」对模型「${rapi.alias || rapi.model}」的能力限制吗？\n原因: ${b ? b.reason : ''}\n解除后模型会自动重新探测，若平台仍未授权将再次加入黑名单。${sbNote()}`)) return;
                     try {
                         const r = await fetch(`/api/key-model-blocks?key_id=${k.id}&rapi_id=${rapi.id}`, { method: 'DELETE' });
                         if (r.ok) {
@@ -4988,19 +4923,71 @@
                     } catch (e) {}
                     loadUnread();
                 };
+                // 单条已读（不导航）：点条目右侧 ✕。
+                const markItemRead = async (id) => {
+                    try {
+                        await fetch('/api/unread/read', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
+                    } catch (e) {}
+                    loadUnread();
+                };
                 const markAllRead = async () => {
                     try {
                         await fetch('/api/unread/read', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ all: true }) });
                     } catch (e) {}
                     loadUnread();
                 };
-                const unreadDotColor = (kind) => kind === 'delete' || kind === 'failure' ? 'var(--color-danger)' : kind === 'update' ? 'var(--color-warning)' : 'var(--color-success)';
+                const unreadDotColor = (kind) => {
+                    // 错误/失效/冷却/删除/级联 → 红；更新/警告 → 黄；成功/恢复/正常 → 绿。
+                    if (['delete', 'failure', 'cooling', 'error', 'perm_fail', 'cascade'].includes(kind)) return 'var(--color-danger)';
+                    if (['update', 'warn', 'warning'].includes(kind)) return 'var(--color-warning)';
+                    return 'var(--color-success)';
+                };
+                // 通知标题文字分色：错误红、正常绿，与圆点同色系。
+                const unreadTitleColor = (kind) => {
+                    if (['delete', 'failure', 'cooling', 'error', 'perm_fail', 'cascade'].includes(kind)) return 'var(--color-danger)';
+                    if (['update', 'warn', 'warning'].includes(kind)) return 'var(--color-warning)';
+                    return 'var(--color-success)';
+                };
                 const unreadTime = (t) => t ? new Date(t).toLocaleString('zh-CN', { hour12: false }) : '';
+                // 相对时间（面板每 8s 轮询重渲染，顺带刷新，无定时器零额外开销）。
+                const unreadRelTime = (t) => {
+                    if (!t) return '';
+                    const sec = Math.max(0, (Date.now() - new Date(t).getTime()) / 1000 | 0);
+                    if (sec < 10) return '刚刚';
+                    if (sec < 60) return sec + ' 秒前';
+                    if (sec < 3600) return (sec / 60 | 0) + ' 分钟前';
+                    if (sec < 86400) return (sec / 3600 | 0) + ' 小时前';
+                    return (sec / 86400 | 0) + ' 天前';
+                };
+                // tooltip：首现~最近（合并条目能看到持续时间跨度）。
+                const unreadFullTime = (it) => {
+                    const latest = unreadTime(it.created_at);
+                    if (it.count > 1 && it.first_at && it.first_at !== it.created_at) {
+                        return '首次 ' + unreadTime(it.first_at) + '\n最近 ' + latest + '\n共 ' + it.count + ' 次';
+                    }
+                    return latest;
+                };
                 const menuToTab = { platforms: 'platforms', keys: 'keys', models: 'rapis', interfaces: 'lapis' };
+                // 点击条目：只标记该条已读，跳转到对应页签并把该实体预填进页面搜索框，
+                // 直接定位到具体配置行（而非只到功能页）。
                 const openUnreadItem = (it) => {
                     unreadPanelOpen.value = false;
-                    markMenuRead(it.menu);
+                    markItemRead(it.id);
                     setTab(menuToTab[it.menu] || it.menu);
+                    const id = Number(it.entity_id) || 0;
+                    if (it.menu === 'platforms') {
+                        const p = platforms.value.find(x => x.id === id);
+                        platformSearchQuery.value = p ? p.name : '';
+                    } else if (it.menu === 'keys') {
+                        const k = keysList.value.find(x => x.id === id);
+                        keysSearchQuery.value = k ? (k.label || ('#' + k.key_index)) : '';
+                    } else if (it.menu === 'models') {
+                        const ra = rapis.value.find(x => x.id === id);
+                        rapiSearchQuery.value = ra ? ra.alias : '';
+                    } else if (it.menu === 'interfaces') {
+                        const la = lapis.value.find(x => x.id === id);
+                        lapiSearchQuery.value = la ? la.alias : '';
+                    }
                 };
 
                 // ---- Global fuzzy search across platforms/keys/models/interfaces ----
@@ -5112,7 +5099,7 @@
                     return '🟢 正常';
                 };
                 const probeKeyFlat = async (k) => {
-                    if (!confirm(`确定重置 Key #${k.key_index} 的失败状态吗？系统会发送探测请求验证 key 是否恢复。`)) return;
+                    if (!confirm(`确定重置 Key #${k.key_index} 的失败状态吗？系统会发送探测请求验证 key 是否恢复。${sbNote()}`)) return;
                     try {
                         const r = await fetch(`/api/platforms/${k.platform_id}/keys/${k.id}/probe`, { method: 'POST' });
                         if (r.ok) showToast('成功', 'Key 已恢复正常，失败状态已清除', 'success');
@@ -5312,7 +5299,7 @@
                     loadUnread();
                     loadKeyModelBlocks();
                     loadKeys();
-                    if (activeTab.value === 'dashboard') { loadDashboard(); loadInsights(); loadAnalytics(); }
+                    if (activeTab.value === 'dashboard') { fetchSyncCenter(); loadInsights(); loadAnalytics(); loadMetrics(); }
                     if (activeTab.value === 'platforms') { loadPlatforms(); loadRapis(); }
                     if (activeTab.value === 'keys') { loadPlatforms(); loadRapis(); }
                     if (activeTab.value === 'rapis') {
@@ -5326,6 +5313,12 @@
                     if (activeTab.value === 'logs') {
                         loadLapis();
                         loadLogs();
+                        loadSystemLogs();
+                    }
+                    if (activeTab.value === 'sbconfig') {
+                        fetchSBConfig();
+                        fetchSyncCenter();
+                        loadPullMode();
                     }
                 };
 
@@ -5541,7 +5534,7 @@
                     const cascadeMsg = rapiCount > 0
                         ? `\n\n⚠️ 该平台下有 ${rapiCount} 个模型将被一并删除，相关路由引用也将自动移除。`
                         : '';
-                    if (!confirm(`确定删除平台「${plat.name}」吗？${cascadeMsg}`)) return;
+                    if (!confirm(`确定删除平台「${plat.name}」吗？${cascadeMsg}${sbNote()}`)) return;
                     try {
                         const r = await fetch(`/api/platforms?id=${plat.id}&force=true`, { method: 'DELETE' });
                         if (r.ok) {
@@ -5632,7 +5625,7 @@
                 };
 
                 const deleteManualExisting = async (id) => {
-                    if (!confirm('确认删除此手工模型？生效状态的模型需先禁用。')) return;
+                    if (!confirm('确认删除此手工模型？生效状态的模型需先禁用。' + sbNote())) return;
                     try {
                         const r = await fetch('/api/rapis?id=' + id + '&force=true', { method: 'DELETE' });
                         if (r.ok) {
@@ -5814,7 +5807,7 @@
                         // key_ids is a CSV string on the model; expose as a number array.
                         rapiModal.keyIDs = (item.key_ids || '').split(',').map(s => s.trim()).filter(Boolean).map(Number);
                     } else {
-                        rapiModal.form = { platform_id: platforms.value[0]?.id || '', model: '', vendor: '', series: '', version: '', suffix: '', notes: '' };
+                        rapiModal.form = { platform_id: platforms.value[0]?.id || '', alias: '', model: '', vendor: '', series: '', version: '', suffix: '', notes: '' };
                         rapiModal.headers = [];
                         rapiModal.keyIDs = [];
                     }
@@ -5941,7 +5934,7 @@
                     const cascadeMsg = refLapis.length > 0
                         ? `\n\n⚠️ 该模型被 ${refLapis.length} 个路由引用（${refLapis.map(l => l.alias).join(', ')}），删除后将自动移除关联。`
                         : '';
-                    if (!confirm(`确定删除模型「${rapiDisplayName(rapi)}」吗？${cascadeMsg}`)) return;
+                    if (!confirm(`确定删除模型「${rapiDisplayName(rapi)}」吗？${cascadeMsg}${sbNote()}`)) return;
                     try {
                         const r = await fetch(`/api/rapis?id=${rapi.id}&force=true`, { method: 'DELETE' });
                         if (r.ok) {
@@ -6020,7 +6013,7 @@
                 };
 
                 const deleteLapi = async (lapi) => {
-                    if (!confirm(`确定彻底删除本地接口「${lapi.alias}」吗？其路由映射将一并清除。`)) return;
+                    if (!confirm(`确定彻底删除本地接口「${lapi.alias}」吗？其路由映射将一并清除。${sbNote()}`)) return;
                     try {
                         const r = await fetch(`/api/lapis?id=${lapi.id}`, { method: 'DELETE' });
                         if (r.ok) {
@@ -6245,7 +6238,7 @@
                 };
 
                 const clearLogs = async () => {
-                    if (!confirm('确定要清空数据库中的全部请求历史日志吗？')) return;
+                    if (!confirm('确定要清空数据库中的全部请求历史日志吗？' + sbNote())) return;
                     try {
                         const r = await fetch('/api/logs/clear', { method: 'DELETE' });
                         if (r.ok) {
@@ -6649,7 +6642,7 @@
                             const level = raw.level === 'error' ? 'error' : raw.level === 'warning' ? 'warning' : 'primary';
                             showToast(raw.message || raw.title || '系统事件', raw.title || '', level);
                             loadStats();
-                            if (activeTab.value === 'logs') loadLogs();
+                            if (activeTab.value === 'logs') { loadLogs(); loadSystemLogs(); }
                         } catch (e) {}
                     };
                     source.onerror = () => {
@@ -6659,9 +6652,35 @@
                 };
 
                 // INITIAL MOUNT
+                // ── 中心（Supabase）同步状态卡：连通性 + 各表统计 + 是否同步 ──
+                const syncCenter = ref({ enabled: false, connected: false, in_sync: false, center_version: 0, local_version: 0, tables: {}, error: '', last_synced_at: null });
+                const syncPanelOpen = ref(false);
+                const fetchSyncCenter = async () => {
+                    try {
+                        const r = await fetch('/api/sync/center');
+                        syncCenter.value = await r.json();
+                    } catch (e) {
+                        syncCenter.value = { ...syncCenter.value, connected: false, error: String(e) };
+                    }
+                };
+                const toggleSyncPanel = () => {
+                    syncPanelOpen.value = !syncPanelOpen.value;
+                    if (syncPanelOpen.value) fetchSyncCenter();
+                };
+                const syncNow = async () => {
+                    try { await fetch('/api/sync/refresh', { method: 'POST' }); } catch (e) { /* 面板会显示离线 */ }
+                    await fetchSyncCenter();
+                    refreshData();
+                };
+                const syncDotColor = computed(() => {
+                    const s = syncCenter.value;
+                    if (!s.enabled) return '#666';
+                    if (!s.connected) return '#e5484d';
+                    return s.in_sync ? '#46a758' : '#f5a524';
+                });
+
                 onMounted(() => {
                     loadStats();
-                    loadDashboard();
                     loadInsights();
                     loadAnalytics();
                     loadPlatforms();
@@ -6669,22 +6688,43 @@
                     loadKeys();
                     loadUnread();
                     setupSSE();
+                    fetchSyncCenter();
 
+                    // 顶栏弹层（未读/中心同步）点击页面任意处关闭；容器自身已 @click.stop。
+                    document.addEventListener('click', () => {
+                        unreadPanelOpen.value = false;
+                        syncPanelOpen.value = false;
+                    });
+
+                    setInterval(fetchSyncCenter, 30000);
                     setInterval(loadStats, 10000);
-                    setInterval(loadDashboard, 30000);
                     setInterval(loadInsights, 30000);
                     setInterval(loadAnalytics, 30000);
+                    setInterval(loadMetrics, 30000);
+                    setInterval(fetchSBConfig, 60000);
                     setInterval(loadUnread, 8000);
+                    loadMetrics();
+                    fetchSBConfig();
+                    loadPullMode();
+                    loadSystemLogs();
                 });
 
                 return {
                     activeTab,
+                    localNavOpen,
+                    isLocalTabActive,
                     setTab,
                     goLogsWithStatus,
                     getTabTitle,
                     getTabSubtitle,
                     gatewayLive,
                     stats,
+                    syncCenter,
+                    syncPanelOpen,
+                    toggleSyncPanel,
+                    syncNow,
+                    fetchSyncCenter,
+                    syncDotColor,
                     platforms,
                     rapis,
                     lapis,
@@ -6716,7 +6756,7 @@
                     rapiPlatformFilter, openPlatformModelsTab,
 
                     // Fixed top bar: unread / search / keys / add wizard
-                    appVersion, unread, totalUnread, unreadItems, unreadCounts, unreadPanelOpen, unreadGrouped, markMenuRead, markAllRead, openUnreadItem, unreadDotColor, unreadTime,
+                    appVersion, unread, totalUnread, unreadItems, unreadCounts, unreadPanelOpen, unreadGrouped, markMenuRead, markAllRead, markItemRead, openUnreadItem, unreadDotColor, unreadTitleColor, unreadTime, unreadRelTime, unreadFullTime,
                     globalSearchQuery, globalSearchCandidates, showSearchResults, searchSelection, onGlobalSearchInput, onSearchBlur, moveSearchSelection, chooseSearchResult, clearGlobalSearch, searchMenuLabel, searchMenuStyle,
                     keysList, keysSearchQuery, filteredKeys, sortedKeys, keyPlatformFilter, loadKeys, keyHealthLabel, probeKeyFlat, discoverKeyModels, toggleKeyFlat, deleteKeyFlat, keyModal, openKeyModal, closeKeyModal, saveKeyModal, openKeysTab, jumpToPlatform,
                     addWizard, openAddWizard, closeAddWizard, checkPlatDomain, testWizardPlatform, testWizardKey, testWizardModel, submitAddWizard, doWizardSave, wizardHasNew, wizardKeyOptions, wizardModelOptions,
@@ -6746,22 +6786,24 @@
                     formatTime,
                     fmtNum,
                     fmtRelTime,
-                    successRateText,
-                    successRateColor,
                     refreshData,
-                    // Dashboard health
-                    dashHealth,
-                    insightData, healthAlerts, rapiUtilization, fmtCountdown,
+                    insightData, rapiUtilization, fmtCountdown,
                     insightFilter, levelFilter,
                     hasAnyInsights, hasCriticalInsights, hasWarningInsights,
                     filteredEfficiency, filteredCapacity, capacityGrouped, queueInsights,
                     coolingTree, jumpToPlatform,
-                    dashSuccessText,
-                    dashSuccessColor,
-                    dashLatencyColor,
-                    issueModels,
-                    dashTableRows,
-                    dashAlerts,
+                    // 仪表盘单屏指标矩阵
+                    metricsData, metricsPeriod, metricRows, loadMetrics,
+                    attentionLabel, attentionByKind, attentionColor, jumpToAttention, openLogById,
+                    // Supabase 配置 + 角色 + confirm sb 提醒
+                    sbRole, sbConfig, sbConfigForm, sbRoleLabel, tableNameLabel,
+                    roleLabel, roleColor, tableDelta,
+                    fetchSBConfig, saveSBConfig, sbNote,
+                    // 系统/中心日志
+                    systemLogs, systemLogOpen, loadSystemLogs,
+                    // 代理拉取模式（auto/manual + pending + 手动拉取）
+                    syncPullMode, syncPullPending, syncPulling, loadPullMode, setPullMode, manualPull,
+                    pushingToCenter, pushToCenter,
                     
                     // Modals toggle & save
                     maskToken, formatKeyExpiry, isKeyExpired,

@@ -25,6 +25,8 @@ import (
 	"gateway/internal/models"
 	"gateway/internal/notify"
 	"gateway/internal/scheduler"
+	"gateway/internal/store"
+	"gateway/internal/supabase"
 )
 
 // ============ Security / Input Validation ============
@@ -109,6 +111,9 @@ func validatePlatformInput(p *models.Platform) error {
 }
 
 // recordUnread appends an in-memory unread event routed to a UI menu.
+// recordUnread 记一条未读。**仅用于系统事件与用户操作的连带效应**（冷却/
+// 失败/恢复/级联影响）；用户自己在面板上做的增删改不记未读——操作者刚做完
+// 的事不需要再提醒他看一遍。
 func recordUnread(menu, kind string, entityID int64, title, detail string) {
 	if notifySvc != nil {
 		notifySvc.RecordUnread(menu, kind, title, detail, entityID)
@@ -117,7 +122,7 @@ func recordUnread(menu, kind string, entityID int64, title, detail string) {
 
 // platformName returns a platform's display name, falling back to its id.
 func platformName(pid int64) string {
-	if p, err := db.Get().GetPlatformByID(pid); err == nil && p != nil {
+	if p, err := store.A().GetPlatformByID(pid); err == nil && p != nil {
 		return p.Name
 	}
 	return fmt.Sprintf("%d", pid)
@@ -202,6 +207,11 @@ func (s *Service) Run() error {
 		logger.DefaultConsole().Error("service", "database init failed", "error", err.Error())
 		return err
 	}
+	// 定义类持久层接缝：默认绑定本地 SQLite；管理模式（[management] 配置）
+	// 在后面换成 supabase Store 直写中心。
+	store.Init(db.Get())
+	// 冻结启动时本地定义表行数，供仪表盘「启动以来变化量」对比。
+	captureStartupSnapshot()
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -250,7 +260,7 @@ func (s *Service) Run() error {
 	proxyMux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
 		// Bug 8.9: only expose enabled LAPIs.
 		w.Header().Set("Content-Type", "application/json")
-		lapis, _ := db.Get().GetLAPIs()
+		lapis, _ := store.A().GetLAPIs()
 		type modelEntry struct {
 			ID      string `json:"id"`
 			Object  string `json:"object"`
@@ -288,8 +298,8 @@ func (s *Service) Run() error {
 	})
 	proxyMux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		rapis, _ := db.Get().GetRAPIs()
-		lapis, _ := db.Get().GetLAPIs()
+		rapis, _ := store.A().GetRAPIs()
+		lapis, _ := store.A().GetLAPIs()
 		stats, _ := db.Get().GetRAPIStats()
 		totalReq := 0
 		for _, s := range stats {
@@ -345,6 +355,94 @@ func (s *Service) Run() error {
 			db.Get().CleanupOldTrends(120)
 		}
 	}()
+
+	// 中心配置同步（读路径）+ 管理模式（写路径）。
+	// 转发机配 [sync]（只读拉取）；管理机配 [management]（定义类 CRUD 直写中心，
+	// 写成功后立即拉回刷新本地镜像；拉取配置由 [management] 派生）。
+	syncCfg := cfg.Sync
+	if cfg.Management.Configured() {
+		var mgmtMu sync.Mutex
+		sup, err := supabase.New(supabase.Config{
+			URL:        cfg.Management.SupabaseURL,
+			ServiceKey: cfg.Management.ServiceKey,
+			CenterKey:  cfg.Management.CenterKey,
+		}, func() {
+			mgmtMu.Lock()
+			defer mgmtMu.Unlock()
+			_ = syncOnce(true) // 写后立即拉回（强制 apply），管理机本地镜像即时一致
+		})
+		if err != nil {
+			logger.DefaultConsole().Error("service", "[MGMT] invalid [management] config, falling back to local store",
+				"error", err.Error())
+		} else {
+			store.Use(sup)
+			manageMode.Store(true)
+			base := strings.TrimSuffix(strings.TrimSpace(cfg.Management.SupabaseURL), "/")
+			syncCfg = config.Sync{
+				SourceURL:       base + "/rest/v1/rpc/get_bundle",
+				VersionURL:      base + "/rest/v1/rpc/get_version",
+				AnonKey:         cfg.Management.ServiceKey,
+				CenterKey:       cfg.Management.CenterKey,
+				PollIntervalSec: cfg.Sync.PollIntervalSec,
+			}
+			logger.DefaultConsole().Info("service", "[MGMT] management mode: definitions write through to center",
+				"center", base)
+			// 面板 sb-config 也存了一份（settings 表）。若与 proxy.cfg 不一致，
+			// 启动以 proxy.cfg 为准，但 sb-config 页显示的是 settings 值 → 面板
+			// 与实际生效连接不符。记系统日志让操作员能发现配置漂移。
+			if sbURL, _, ok := loadSavedSBConfig(); ok {
+				if normalizeSBURL(sbURL) != normalizeSBURL(cfg.Management.SupabaseURL) {
+					msg := "[MGMT] 中心配置不一致：proxy.cfg [management] 生效（" + base +
+						"），面板「中心配置」页显示的是另一份（" + normalizeSBURL(sbURL) + "）。以 proxy.cfg 为准。"
+					logger.DefaultConsole().Warn("service", msg)
+					_ = db.Get().InsertSystemLog("warn", "center", msg)
+				}
+			}
+		}
+	}
+	// 回退：操作员若在仪表盘「中心配置」页录入了 Supabase URL+key（存 settings
+	// 表）而非编辑 proxy.cfg [management]，则据此激活管理模式，使运行时 store、
+	// 同步循环与仪表盘 sync-center 卡都与 sb-config 页一致（否则卡显示未连接）。
+	// center_key 同样从 settings（sb_center_key）读，proxy.cfg 仅作兜底。
+	if !manageMode.Load() {
+		if sbURL, sbKey, ok := loadSavedSBConfig(); ok {
+			centerKeyHex := effectiveCenterKey("")
+			var mgmtMu sync.Mutex
+			sup, err := supabase.New(supabase.Config{
+				URL:        sbURL,
+				ServiceKey: sbKey,
+				CenterKey:  centerKeyHex,
+			}, func() {
+				mgmtMu.Lock()
+				defer mgmtMu.Unlock()
+				_ = syncOnce(true) // 写后立即拉回，本地镜像即时一致
+			})
+			if err != nil {
+				logger.DefaultConsole().Error("service", "[MGMT] saved sb-config invalid, falling back to local store",
+					"error", err.Error())
+				_ = db.Get().InsertSystemLog("warn", "center",
+					"管理模式启动激活失败（回退本地）: "+err.Error()+"——请在中心配置页检查后重新保存")
+			} else {
+				store.Use(sup)
+				manageMode.Store(true)
+				base := strings.TrimSuffix(strings.TrimSpace(sbURL), "/")
+				syncCfg = config.Sync{
+					SourceURL:       base + "/rest/v1/rpc/get_bundle",
+					VersionURL:      base + "/rest/v1/rpc/get_version",
+					AnonKey:         sbKey,
+					CenterKey:       centerKeyHex,
+					PollIntervalSec: cfg.Sync.PollIntervalSec,
+				}
+				logger.DefaultConsole().Info("service", "[MGMT] management mode from saved sb-config",
+					"center", base)
+				msg := "[MGMT] 管理模式由面板「中心配置」页（settings 表）激活：" + base +
+					"。如需固定/迁移请写入 proxy.cfg [management]（启动优先读 cfg）。"
+				logger.DefaultConsole().Info("service", msg)
+				_ = db.Get().InsertSystemLog("info", "center", msg)
+			}
+		}
+	}
+	startSyncLoop(s.stopCh, syncCfg)
 
 	// Startup health recovery: probe every RAPI persisted as unavailable and
 	// restore the ones that respond. Runs async so it never blocks serving.
@@ -415,12 +513,23 @@ func createWebHandler() http.Handler {
 		w.Write([]byte(dashboardHTML))
 	})
 
+	// 中心同步状态 + 手动刷新（设计 §5.1）。只读，定义类 CRUD 在代理端按需只读化。
+	mux.HandleFunc("/api/sync/state", handleSyncState)
+	mux.HandleFunc("/api/sync/refresh", handleSyncRefresh)
+	mux.HandleFunc("/api/sync/pull-mode", handleSyncPullMode)
+	// 排障：管理端无法上传/管理模式未激活的具体原因。
+	mux.HandleFunc("/api/sync/diagnostics", handleSyncDiagnostics)
+	// 中心连通性 + 各表统计 + 是否同步（仪表盘状态卡）。
+	mux.HandleFunc("/api/sync/center", handleSyncCenter)
+	// 本地→中心 整体覆盖推送（管理模式专用，破坏性，前端二次确认）。
+	mux.HandleFunc("/api/sync/push", handleSyncPush)
+
 	// RAPI endpoints
 	mux.HandleFunc("/api/rapis", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.Method {
 		case http.MethodGet:
-			rapis, err := db.Get().GetRAPIs()
+			rapis, err := store.A().GetRAPIs()
 			if err != nil {
 				writeJSONError(w, 500, err)
 				return
@@ -438,15 +547,26 @@ func createWebHandler() http.Handler {
 				return
 			}
 			trimRAPINaming(&rapi)
-			// Alias is now derived server-side from the unified naming rule
-			// (厂商/系列/版本/后缀 → 备注 → 上游模型名) and stays lowercase for
-			// LAPI matching. Model preserves its original casing upstream.
-			rapi.Alias = deriveRAPIAlias(&rapi, 0)
+			// Alias 是显示名（设计 §2：可随便改）——用户显式填写则尊重；
+			// 留空才按统一命名规则（厂商/系列-版本-后缀 → 备注 → 上游模型名）
+			// 自动生成。统一小写以兼容 LAPI 兜底匹配；Model 保留上游原始大小写。
+			rapi.Alias = strings.ToLower(strings.TrimSpace(rapi.Alias))
 			if rapi.Alias == "" {
-				writeJSONError(w, 400, fmt.Errorf("请至少填写厂商/系列/版本/后缀、模型备注或上游模型名之一"))
+				rapi.Alias = deriveRAPIAlias(&rapi)
+			}
+			if rapi.Alias == "" {
+				writeJSONError(w, 400, fmt.Errorf("请填写名称，或至少填写厂商/系列/版本/后缀、模型备注或上游模型名之一"))
 				return
 			}
-			if err := db.Get().CreateRAPI(&rapi); err != nil {
+			// 端点身份 = (base_url, model)：同平台同 model 重复即冲突（设计 §2）。
+			if exists, err := store.A().RAPIModelExists(rapi.PlatformID, rapi.Model, 0); err != nil {
+				writeJSONError(w, 500, err)
+				return
+			} else if exists {
+				writeJSONError(w, 409, fmt.Errorf("该平台下模型 %q 已存在（同 base_url + model 视为同一端点）", rapi.Model))
+				return
+			}
+			if err := store.A().CreateRAPI(&rapi); err != nil {
 				logger.DefaultConsole().Error("service", "[API] CreateRAPI failed",
 					"alias", rapi.Alias, "platform_id", rapi.PlatformID, "error", err.Error())
 				writeJSONError(w, 500, err)
@@ -454,7 +574,6 @@ func createWebHandler() http.Handler {
 			}
 			logger.DefaultConsole().Info("service", "[API] CreateRAPI success",
 				"id", rapi.ID, "alias", rapi.Alias, "model", rapi.Model, "platform_id", rapi.PlatformID)
-			recordUnread(notify.MenuModels, "create", rapi.ID, "新增模型 "+rapi.Alias, rapi.Model)
 			// Auto-map: if model identity matches a LAPI, add to its routing chain
 			autoMapRAPItoLAPI(&rapi)
 			w.Write([]byte(`{"success":true}`))
@@ -466,25 +585,34 @@ func createWebHandler() http.Handler {
 				return
 			}
 			trimRAPINaming(&rapi)
-			// Alias is derived from the unified naming rule (see POST above);
-			// excludeID keeps the row's own alias out of the dedup check.
-			rapi.Alias = deriveRAPIAlias(&rapi, rapi.ID)
+			// Alias 规则同 POST：显式填写优先，留空才自动生成。
+			rapi.Alias = strings.ToLower(strings.TrimSpace(rapi.Alias))
 			if rapi.Alias == "" {
-				writeJSONError(w, 400, fmt.Errorf("请至少填写厂商/系列/版本/后缀、模型备注或上游模型名之一"))
+				rapi.Alias = deriveRAPIAlias(&rapi)
+			}
+			if rapi.Alias == "" {
+				writeJSONError(w, 400, fmt.Errorf("请填写名称，或至少填写厂商/系列/版本/后缀、模型备注或上游模型名之一"))
+				return
+			}
+			// 端点身份冲突校验（excludeID 排除自身行）。
+			if exists, err := store.A().RAPIModelExists(rapi.PlatformID, rapi.Model, rapi.ID); err != nil {
+				writeJSONError(w, 500, err)
+				return
+			} else if exists {
+				writeJSONError(w, 409, fmt.Errorf("该平台下模型 %q 已存在（同 base_url + model 视为同一端点）", rapi.Model))
 				return
 			}
 			// Remember whether the model was unavailable before the edit, so a
 			// key_ids whitelist change that adds a usable key can trigger an
 			// automatic re-probe (previously it stayed dead until manual retry).
 			wasUnavailable := false
-			if prev, err := db.Get().GetRAPIByID(rapi.ID); err == nil && prev != nil {
+			if prev, err := store.A().GetRAPIByID(rapi.ID); err == nil && prev != nil {
 				wasUnavailable = prev.Enabled && !prev.Available
 			}
-			if err := db.Get().UpdateRAPI(&rapi); err != nil {
+			if err := store.A().UpdateRAPI(&rapi); err != nil {
 				writeJSONError(w, 500, err)
 				return
 			}
-			recordUnread(notify.MenuModels, "update", rapi.ID, "修改模型 "+rapi.Alias, rapi.Model)
 			if wasUnavailable {
 				rep := proxyGateway.RecoverRAPIs(r.Context(), []int64{rapi.ID}, 1, 8)
 				if len(rep.Recovered) > 0 {
@@ -506,7 +634,7 @@ func createWebHandler() http.Handler {
 			fmt.Sscanf(id, "%d", &rapiID)
 
 			// State-based delete: active RAPIs cannot be deleted
-			rapiInfo, err := db.Get().GetRAPIByID(rapiID)
+			rapiInfo, err := store.A().GetRAPIByID(rapiID)
 			if err != nil {
 				writeJSONError(w, 404, fmt.Errorf("模型不存在"))
 				return
@@ -518,20 +646,19 @@ func createWebHandler() http.Handler {
 
 			if force || sync {
 				// Cascade delete: remove LAPI references + metrics + RAPI
-				if err := db.Get().DeleteRAPICascade(rapiID); err != nil {
+				if err := store.A().DeleteRAPICascade(rapiID); err != nil {
 					writeJSONError(w, 500, err)
 					return
 				}
 				proxyGateway.InvalidateRAPI(rapiID)
 			} else {
 				// Non-force: only succeeds if no LAPI references exist
-				if err := db.Get().DeleteRAPI(rapiID); err != nil {
+				if err := store.A().DeleteRAPI(rapiID); err != nil {
 					writeJSONError(w, 409, err)
 					return
 				}
 				proxyGateway.InvalidateRAPI(rapiID)
 			}
-			recordUnread(notify.MenuModels, "delete", rapiID, "删除模型 "+rapiInfo.Alias, "")
 			w.Write([]byte(`{"success":true}`))
 		}
 	})
@@ -556,12 +683,12 @@ func createWebHandler() http.Handler {
 			http.Error(w, `{"error":"invalid json"}`, 400)
 			return
 		}
-		rapi, err := db.Get().GetRAPIByID(req.RAPIID)
+		rapi, err := store.A().GetRAPIByID(req.RAPIID)
 		if err != nil || rapi == nil {
 			writeJSONError(w, 404, fmt.Errorf("模型不存在"))
 			return
 		}
-		platform, err := db.Get().GetPlatformByID(rapi.PlatformID)
+		platform, err := store.A().GetPlatformByID(rapi.PlatformID)
 		if err != nil || platform == nil {
 			writeJSONError(w, 404, fmt.Errorf("平台不存在"))
 			return
@@ -569,7 +696,7 @@ func createWebHandler() http.Handler {
 		// Resolve the chosen key token (key_id=0 falls back to the platform token).
 		var token string
 		if req.KeyID > 0 {
-			keys, err := db.Get().GetPlatformKeys(platform.ID)
+			keys, err := store.A().GetPlatformKeys(platform.ID)
 			if err != nil {
 				writeJSONError(w, 500, err)
 				return
@@ -737,18 +864,18 @@ func createWebHandler() http.Handler {
 			http.Error(w, `{"error":"invalid json"}`, 400)
 			return
 		}
-		if err := db.Get().SetPlatformEnabled(req.ID, req.Enabled); err != nil {
+		if err := store.A().SetPlatformEnabled(req.ID, req.Enabled); err != nil {
 			writeJSONError(w, 500, err)
 			return
 		}
 		// Sync all RAPIs for this platform: disable+invalidate or enable+revalidate.
-		rapis, _ := db.Get().GetRAPIsByPlatform(req.ID)
+		rapis, _ := store.A().GetRAPIsByPlatform(req.ID)
 		for _, r := range rapis {
 			if !req.Enabled {
-				db.Get().SetRAPIEnabled(r.ID, false)
+				store.A().SetRAPIEnabled(r.ID, false)
 				proxyGateway.InvalidateRAPI(r.ID)
 			} else {
-				db.Get().SetRAPIEnabled(r.ID, true)
+				store.A().SetRAPIEnabled(r.ID, true)
 				proxyGateway.RevalidateRAPI(r.ID)
 			}
 		}
@@ -769,7 +896,7 @@ func createWebHandler() http.Handler {
 			http.Error(w, `{"error":"invalid json"}`, 400)
 			return
 		}
-		if err := db.Get().SetRAPIEnabled(req.ID, req.Enabled); err != nil {
+		if err := store.A().SetRAPIEnabled(req.ID, req.Enabled); err != nil {
 			writeJSONError(w, 500, err)
 			return
 		}
@@ -796,7 +923,7 @@ func createWebHandler() http.Handler {
 			http.Error(w, `{"error":"invalid json"}`, 400)
 			return
 		}
-		rapi, err := db.Get().GetRAPIByID(req.ID)
+		rapi, err := store.A().GetRAPIByID(req.ID)
 		if err != nil {
 			writeJSONError(w, 404, fmt.Errorf("模型不存在"))
 			return
@@ -827,7 +954,7 @@ func createWebHandler() http.Handler {
 			return
 		}
 		if len(supported) > 0 {
-			db.Get().UpdateRAPIFormats(req.ID, apiformat.FormatsToJSON(supported))
+			store.A().UpdateRAPIFormats(req.ID, apiformat.FormatsToJSON(supported))
 		}
 		proxyGateway.RevalidateRAPI(req.ID)
 		logger.DefaultConsole().Info("service", "[API] restoreRAPI probed ok",
@@ -873,7 +1000,7 @@ func createWebHandler() http.Handler {
 			http.Error(w, `{"error":"invalid json"}`, 400)
 			return
 		}
-		platform, err := db.Get().GetPlatformByID(req.ID)
+		platform, err := store.A().GetPlatformByID(req.ID)
 		if err != nil {
 			writeJSONError(w, 404, fmt.Errorf("platform not found"))
 			return
@@ -918,7 +1045,7 @@ func createWebHandler() http.Handler {
 		// RAPI is cleared + revalidated.
 		pe := proxyGateway.Scheduler().PlatformEntity(req.ID, false)
 		pe.OnDetectSuccess()
-		rapis, _ := db.Get().GetRAPIsByPlatform(req.ID)
+		rapis, _ := store.A().GetRAPIsByPlatform(req.ID)
 		for _, rapi := range rapis {
 			db.Get().SetRAPIUnavailableWithReason(rapi.ID, true, "")
 			proxyGateway.RevalidateRAPI(rapi.ID)
@@ -942,7 +1069,7 @@ func createWebHandler() http.Handler {
 
 		switch r.Method {
 		case http.MethodGet:
-			rapi, err := db.Get().GetRAPIByID(rapiID)
+			rapi, err := store.A().GetRAPIByID(rapiID)
 			if err != nil {
 				writeJSONError(w, 404, fmt.Errorf("RAPI not found"))
 				return
@@ -958,7 +1085,7 @@ func createWebHandler() http.Handler {
 				http.Error(w, `{"error":"invalid json"}`, 400)
 				return
 			}
-			if err := db.Get().UpdateRAPIHeaders(rapiID, body.CustomHeaders); err != nil {
+			if err := store.A().UpdateRAPIHeaders(rapiID, body.CustomHeaders); err != nil {
 				writeJSONError(w, 500, err)
 				return
 			}
@@ -983,7 +1110,7 @@ func createWebHandler() http.Handler {
 			http.Error(w, `{"error":"invalid json"}`, 400)
 			return
 		}
-		rapi, err := db.Get().GetRAPIByID(req.ID)
+		rapi, err := store.A().GetRAPIByID(req.ID)
 		if err != nil {
 			writeJSONError(w, 404, fmt.Errorf("RAPI not found"))
 			return
@@ -998,7 +1125,7 @@ func createWebHandler() http.Handler {
 			}
 		}
 		formatsJSON := apiformat.FormatsToJSON(supported)
-		if err := db.Get().UpdateRAPIFormats(req.ID, formatsJSON); err != nil {
+		if err := store.A().UpdateRAPIFormats(req.ID, formatsJSON); err != nil {
 			writeJSONError(w, 500, err)
 			return
 		}
@@ -1017,7 +1144,7 @@ func createWebHandler() http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.Method {
 		case http.MethodGet:
-			platforms, err := db.Get().GetPlatforms()
+			platforms, err := store.A().GetPlatforms()
 			if err != nil {
 				writeJSONError(w, 500, err)
 				return
@@ -1038,11 +1165,10 @@ func createWebHandler() http.Handler {
 				writeJSONError(w, 400, err)
 				return
 			}
-			if err := db.Get().CreatePlatform(&p); err != nil {
+			if err := store.A().CreatePlatform(&p); err != nil {
 				writeJSONError(w, 500, err)
 				return
 			}
-			recordUnread(notify.MenuPlatforms, "create", p.ID, "新增平台 "+p.Name, "")
 			// Never echo the plaintext login password back to the client.
 			p.LoginPassword = ""
 			data, _ := json.Marshal(p)
@@ -1058,11 +1184,10 @@ func createWebHandler() http.Handler {
 				writeJSONError(w, 400, err)
 				return
 			}
-			if err := db.Get().UpdatePlatform(&p); err != nil {
+			if err := store.A().UpdatePlatform(&p); err != nil {
 				writeJSONError(w, 500, err)
 				return
 			}
-			recordUnread(notify.MenuPlatforms, "update", p.ID, "修改平台 "+p.Name, "")
 			w.Write([]byte(`{"success":true}`))
 
 		case http.MethodDelete:
@@ -1072,7 +1197,7 @@ func createWebHandler() http.Handler {
 			fmt.Sscanf(id, "%d", &pID)
 
 			// State-based delete: active platforms cannot be deleted
-			platform, err := db.Get().GetPlatformByID(pID)
+			platform, err := store.A().GetPlatformByID(pID)
 			if err != nil {
 				writeJSONError(w, 404, fmt.Errorf("平台不存在"))
 				return
@@ -1085,22 +1210,21 @@ func createWebHandler() http.Handler {
 			if force {
 				// Cascade delete: platform + all child RAPIs + references + keys
 				// Invalidate all child RAPIs in scheduler first
-				rapis, _ := db.Get().GetRAPIsByPlatform(pID)
+				rapis, _ := store.A().GetRAPIsByPlatform(pID)
 				for _, rapi := range rapis {
 					proxyGateway.InvalidateRAPI(rapi.ID)
 				}
-				if err := db.Get().DeletePlatformCascade(pID); err != nil {
+				if err := store.A().DeletePlatformCascade(pID); err != nil {
 					writeJSONError(w, 500, err)
 					return
 				}
 			} else {
 				// Non-force: only succeeds if no child RAPIs exist
-				if err := db.Get().DeletePlatform(pID); err != nil {
+				if err := store.A().DeletePlatform(pID); err != nil {
 					writeJSONError(w, 409, err)
 					return
 				}
 			}
-			recordUnread(notify.MenuPlatforms, "delete", pID, "删除平台 "+platform.Name, "")
 			w.Write([]byte(`{"success":true}`))
 		}
 	})
@@ -1214,7 +1338,7 @@ func createWebHandler() http.Handler {
 			http.Error(w, `{"error":"invalid json"}`, 400)
 			return
 		}
-		platform, err := db.Get().GetPlatformByID(req.ID)
+		platform, err := store.A().GetPlatformByID(req.ID)
 		if err != nil {
 			writeJSONError(w, 404, fmt.Errorf("platform not found"))
 			return
@@ -1222,7 +1346,7 @@ func createWebHandler() http.Handler {
 		// Task 19: Use the first (index=0) PlatformKey token instead of platform.Token.
 		client := &http.Client{Timeout: 15 * time.Second}
 		fetchToken := platform.Token
-		if keys, err := db.Get().GetPlatformKeys(platform.ID); err == nil && len(keys) > 0 {
+		if keys, err := store.A().GetPlatformKeys(platform.ID); err == nil && len(keys) > 0 {
 			fetchToken = keys[0].Token
 		}
 
@@ -1328,7 +1452,7 @@ func createWebHandler() http.Handler {
 		if source == "" {
 			source = "manual"
 		}
-		platform, err := db.Get().GetPlatformByID(req.PlatformID)
+		platform, err := store.A().GetPlatformByID(req.PlatformID)
 		if err != nil {
 			writeJSONError(w, 404, fmt.Errorf("platform not found"))
 			return
@@ -1363,7 +1487,7 @@ func createWebHandler() http.Handler {
 		}
 		// Persist as the platform-level authority (propagate to child RAPIs below).
 		if formatsJSON != "" {
-			if err := db.Get().UpdatePlatformFormats(req.PlatformID, formatsJSON, false, endpointsJSON); err != nil {
+			if err := store.A().UpdatePlatformFormats(req.PlatformID, formatsJSON, false, endpointsJSON); err != nil {
 				logger.DefaultConsole().Error("service", "[BATCH] UpdatePlatformFormats failed",
 					"platform_id", req.PlatformID, "error", err.Error())
 			}
@@ -1389,12 +1513,11 @@ func createWebHandler() http.Handler {
 				SupportedFormats: formatsJSON,
 				Source:           source,
 			}
-			if err := db.Get().CreateRAPI(&rapi); err != nil {
+			if err := store.A().CreateRAPI(&rapi); err != nil {
 				errors = append(errors, fmt.Sprintf("%s: %v", modelName, err))
 				logger.DefaultConsole().Error("service", "[BATCH] create RAPI failed",
 					"model", modelName, "error", err.Error())
 			} else {
-				recordUnread(notify.MenuModels, "create", rapi.ID, "新增模型 "+rapi.Alias, rapi.Model)
 				autoMapRAPItoLAPI(&rapi)
 				created = append(created, map[string]interface{}{
 					"id":     rapi.ID,
@@ -1446,7 +1569,7 @@ func createWebHandler() http.Handler {
 
 		switch r.Method {
 		case http.MethodGet:
-			keys, err := db.Get().GetPlatformKeys(platformID)
+			keys, err := store.A().GetPlatformKeys(platformID)
 			if err != nil {
 				writeJSONError(w, 500, err)
 				return
@@ -1464,11 +1587,10 @@ func createWebHandler() http.Handler {
 				return
 			}
 			k.PlatformID = platformID
-			if err := db.Get().AddPlatformKey(&k); err != nil {
+			if err := store.A().AddPlatformKey(&k); err != nil {
 				writeJSONError(w, 500, err)
 				return
 			}
-			recordUnread(notify.MenuKeys, "create", k.ID, fmt.Sprintf("新增密钥 #%d（%s）", k.KeyIndex, platformName(platformID)), k.Label)
 			// A usable key was added: automatically re-probe any models of this
 			// platform that were marked unavailable because all their keys were
 			// dead, and restore the ones that actually respond with the new key.
@@ -1498,7 +1620,7 @@ func createWebHandler() http.Handler {
 				k.ID = kid
 				k.PlatformID = platformID
 				if strings.TrimSpace(k.Token) == "" {
-					keys, err := db.Get().GetPlatformKeys(platformID)
+					keys, err := store.A().GetPlatformKeys(platformID)
 					if err != nil {
 						writeJSONError(w, 500, err)
 						return
@@ -1514,11 +1636,10 @@ func createWebHandler() http.Handler {
 						return
 					}
 				}
-				if err := db.Get().UpdatePlatformKey(&k); err != nil {
+				if err := store.A().UpdatePlatformKey(&k); err != nil {
 					writeJSONError(w, 500, err)
 					return
 				}
-				recordUnread(notify.MenuKeys, "update", kid, fmt.Sprintf("修改密钥（%s）", platformName(platformID)), k.Label)
 				w.Write([]byte(`{"success":true}`))
 				return
 			}
@@ -1535,7 +1656,7 @@ func createWebHandler() http.Handler {
 			// cooldowns / permanent-failure markers. Clients that send ids (current
 			// dashboard) match directly; id-less clients (old cached pages, raw API
 			// callers) fall back to matching by decrypted token to keep identity.
-			existing, _ := db.Get().GetPlatformKeys(platformID)
+			existing, _ := store.A().GetPlatformKeys(platformID)
 			byID := make(map[int64]models.PlatformKey, len(existing))
 			byToken := make(map[string]models.PlatformKey, len(existing))
 			for _, ek := range existing {
@@ -1563,11 +1684,10 @@ func createWebHandler() http.Handler {
 					}
 				}
 			}
-			if err := db.Get().SetPlatformKeys(platformID, keys); err != nil {
+			if err := store.A().SetPlatformKeys(platformID, keys); err != nil {
 				writeJSONError(w, 500, err)
 				return
 			}
-			recordUnread(notify.MenuKeys, "update", platformID, fmt.Sprintf("更新密钥列表（%s）", platformName(platformID)), "")
 			// Mirrors POST: a non-empty key list restores the platform.
 			hasNonEmpty := false
 			for _, k := range keys {
@@ -1596,18 +1716,27 @@ func createWebHandler() http.Handler {
 			// Strip the deleted key from every RAPI key_ids whitelist first so no
 			// model keeps a dangling reference (silent pool shrink). Report the
 			// affected models back to the UI for the confirmation toast.
-			removedFrom, err := db.Get().DetachKeyFromRAPIs(kid)
+			removedFrom, err := store.A().DetachKeyFromRAPIs(kid)
 			if err != nil {
 				writeJSONError(w, 500, err)
 				return
 			}
-			if err := db.Get().DeletePlatformKey(kid); err != nil {
+			if err := store.A().DeletePlatformKey(kid); err != nil {
 				writeJSONError(w, 500, err)
 				return
 			}
 			// Drop the in-memory scheduler entity (cooldown / recovery scan).
 			proxyGateway.RemoveKey(kid)
-			recordUnread(notify.MenuKeys, "delete", kid, fmt.Sprintf("删除密钥（%s）", platformName(platformID)), "")
+			// 连带效应未读（用户操作本身不记，但删 key 导致模型失去绑定的
+			// 隐性后果需要浮出）：有多少模型被摘掉了这把 key。
+			if len(removedFrom) > 0 {
+				detail := strings.Join(removedFrom, "、")
+				if len([]rune(detail)) > 120 {
+					detail = string([]rune(detail)[:120]) + "…"
+				}
+				recordUnread(notify.MenuModels, "cascade", 0,
+					fmt.Sprintf("删除密钥连带：%d 个模型失去密钥绑定", len(removedFrom)), detail)
+			}
 			data, _ := json.Marshal(map[string]interface{}{
 				"success":      true,
 				"removed_from": removedFrom,
@@ -1631,7 +1760,7 @@ func createWebHandler() http.Handler {
 			http.Error(w, `{"error":"invalid json"}`, 400)
 			return
 		}
-		if err := db.Get().SetPlatformSortOrder(ids); err != nil {
+		if err := store.A().SetPlatformSortOrder(ids); err != nil {
 			writeJSONError(w, 500, err)
 			return
 		}
@@ -1649,7 +1778,7 @@ func createWebHandler() http.Handler {
 			http.Error(w, `{"error":"invalid json"}`, 400)
 			return
 		}
-		if err := db.Get().SetRAPISortOrder(ids); err != nil {
+		if err := store.A().SetRAPISortOrder(ids); err != nil {
 			writeJSONError(w, 500, err)
 			return
 		}
@@ -1661,7 +1790,7 @@ func createWebHandler() http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.Method {
 		case http.MethodGet:
-			lapis, err := db.Get().GetLAPIs()
+			lapis, err := store.A().GetLAPIs()
 			if err != nil {
 				writeJSONError(w, 500, err)
 				return
@@ -1680,7 +1809,7 @@ func createWebHandler() http.Handler {
 			}
 			// Enforce lowercase: LAPI alias must be lowercase to match incoming request model names
 			lapi.Alias = strings.ToLower(strings.TrimSpace(lapi.Alias))
-			if err := db.Get().CreateLAPI(&lapi); err != nil {
+			if err := store.A().CreateLAPI(&lapi); err != nil {
 				logger.DefaultConsole().Error("service", "[API] CreateLAPI failed",
 					"alias", lapi.Alias, "error", err.Error())
 				writeJSONError(w, 500, err)
@@ -1688,7 +1817,6 @@ func createWebHandler() http.Handler {
 			}
 			logger.DefaultConsole().Info("service", "[API] CreateLAPI success",
 				"id", lapi.ID, "alias", lapi.Alias)
-			recordUnread(notify.MenuInterfaces, "create", lapi.ID, "新增接口 "+lapi.Alias, "")
 			data, _ := json.Marshal(lapi)
 			w.Write(data)
 
@@ -1700,11 +1828,10 @@ func createWebHandler() http.Handler {
 			}
 			// Enforce lowercase: LAPI alias must be lowercase to match incoming request model names
 			lapi.Alias = strings.ToLower(strings.TrimSpace(lapi.Alias))
-			if err := db.Get().UpdateLAPI(&lapi); err != nil {
+			if err := store.A().UpdateLAPI(&lapi); err != nil {
 				writeJSONError(w, 500, err)
 				return
 			}
-			recordUnread(notify.MenuInterfaces, "update", lapi.ID, "修改接口 "+lapi.Alias, "")
 			w.Write([]byte(`{"success":true}`))
 
 		case http.MethodDelete:
@@ -1713,7 +1840,7 @@ func createWebHandler() http.Handler {
 			fmt.Sscanf(id, "%d", &lapiID)
 
 			// State-based delete: active LAPIs cannot be deleted
-			lapiInfo, err := db.Get().GetLAPIByID(lapiID)
+			lapiInfo, err := store.A().GetLAPIByID(lapiID)
 			if err != nil {
 				writeJSONError(w, 404, fmt.Errorf("路由不存在"))
 				return
@@ -1723,11 +1850,10 @@ func createWebHandler() http.Handler {
 				return
 			}
 
-			if err := db.Get().DeleteLAPI(lapiID); err != nil {
+			if err := store.A().DeleteLAPI(lapiID); err != nil {
 				writeJSONError(w, 500, err)
 				return
 			}
-			recordUnread(notify.MenuInterfaces, "delete", lapiID, "删除接口 "+lapiInfo.Alias, "")
 			w.Write([]byte(`{"success":true}`))
 		}
 	})
@@ -1747,7 +1873,7 @@ func createWebHandler() http.Handler {
 			http.Error(w, `{"error":"invalid json"}`, 400)
 			return
 		}
-		if err := db.Get().SetLAPIEnabled(req.ID, req.Enabled); err != nil {
+		if err := store.A().SetLAPIEnabled(req.ID, req.Enabled); err != nil {
 			writeJSONError(w, 500, err)
 			return
 		}
@@ -1771,7 +1897,7 @@ func createWebHandler() http.Handler {
 
 		if strings.Contains(r.URL.Path, "/rapis") {
 			if r.Method == http.MethodGet {
-				rapis, err := db.Get().GetRAPIsForLAPI(lapiID)
+				rapis, err := store.A().GetRAPIsForLAPI(lapiID)
 				if err != nil {
 					writeJSONError(w, 500, err)
 					return
@@ -1784,7 +1910,7 @@ func createWebHandler() http.Handler {
 					http.Error(w, `{"error":"invalid json"}`, 400)
 					return
 				}
-				if err := db.Get().SetLAPIRAPIOrder(lapiID, rapiIDs); err != nil {
+				if err := store.A().SetLAPIRAPIOrder(lapiID, rapiIDs); err != nil {
 					writeJSONError(w, 500, err)
 					return
 				}
@@ -1817,7 +1943,7 @@ func createWebHandler() http.Handler {
 
 		// Enrich with RAPI stats for each LAPI
 		for i := range stats {
-			rapis, err := db.Get().GetRAPIsForLAPIWithStats(stats[i].LapiID)
+			rapis, err := store.A().GetRAPIsForLAPIWithStats(stats[i].LapiID)
 			if err == nil {
 				stats[i].RAPIs = rapis
 			}
@@ -1827,117 +1953,16 @@ func createWebHandler() http.Handler {
 		w.Write(data)
 	})
 
-	// Dashboard aggregated health endpoint
-	mux.HandleFunc("/api/dashboard", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-
-		rapis, _ := db.Get().GetRAPIs()
-		lapis, _ := db.Get().GetLAPIs()
-		platforms, _ := db.Get().GetPlatforms()
-		rapiStats, _ := db.Get().GetRAPIStats()
-
-		// Build stat lookup by rapi_id
-		statByID := make(map[int64]db.RAPIStat)
-		for _, s := range rapiStats {
-			statByID[s.RapiID] = s
-		}
-
-		// Aggregate totals
-		totalReq := 0
-		totalSuccess := 0
-		totalLatencyMs := int64(0)
-		totalFail429 := 0
-		totalFail401 := 0
-		totalFail500 := 0
-		for _, s := range rapiStats {
-			totalReq += s.TotalRequests
-			totalSuccess += s.SuccessRequests
-			totalLatencyMs += int64(s.AvgLatencyMs * float64(s.TotalRequests))
-			totalFail429 += s.Fail429
-			totalFail401 += s.Fail401
-			totalFail500 += s.Fail500
-		}
-		var overallSuccessRate float64
-		var avgLatencyMs float64
-		if totalReq > 0 {
-			overallSuccessRate = float64(totalSuccess) / float64(totalReq) * 100
-			avgLatencyMs = float64(totalLatencyMs) / float64(totalReq)
-		}
-
-		// Disabled platforms
-		type platformSummary struct {
-			ID      int64  `json:"id"`
-			Name    string `json:"name"`
-			Enabled bool   `json:"enabled"`
-		}
-		platSummaries := make([]platformSummary, 0, len(platforms))
-		for _, p := range platforms {
-			platSummaries = append(platSummaries, platformSummary{
-				ID: p.ID, Name: p.Name, Enabled: p.Enabled,
-			})
-		}
-
-		// Per-model health rows (only models with any activity or issues)
-		type modelHealth struct {
-			ID            int64   `json:"id"`
-			Alias         string  `json:"alias"`
-			PlatformName  string  `json:"platform_name"`
-			Enabled       bool    `json:"enabled"`
-			Available     bool    `json:"available"`
-			UnavailReason string  `json:"unavail_reason,omitempty"`
-			TotalReq      int     `json:"total_req"`
-			SuccessRate   float64 `json:"success_rate"`
-			AvgLatencyMs  float64 `json:"avg_latency_ms"`
-			Fail429       int     `json:"fail_429"`
-			Fail401       int     `json:"fail_401"`
-			Fail500       int     `json:"fail_500"`
-			LastUsed      string  `json:"last_used"`
-		}
-		// Build platform name lookup
-		platName := make(map[int64]string)
-		for _, p := range platforms {
-			platName[p.ID] = p.Name
-		}
-		models := make([]modelHealth, 0, len(rapis))
-		for _, ra := range rapis {
-			s := statByID[ra.ID]
-			models = append(models, modelHealth{
-				ID:            ra.ID,
-				Alias:         ra.Alias,
-				PlatformName:  platName[ra.PlatformID],
-				Enabled:       ra.Enabled,
-				Available:     ra.Available,
-				UnavailReason: ra.UnavailableReason,
-				TotalReq:      s.TotalRequests,
-				SuccessRate:   s.SuccessRate,
-				AvgLatencyMs:  s.AvgLatencyMs,
-				Fail429:       s.Fail429,
-				Fail401:       s.Fail401,
-				Fail500:       s.Fail500,
-				LastUsed:      s.LastUsed,
-			})
-		}
-
-		resp := map[string]interface{}{
-			"total_requests":       totalReq,
-			"total_success":        totalSuccess,
-			"overall_success_rate": overallSuccessRate,
-			"avg_latency_ms":       avgLatencyMs,
-			"fail_429":             totalFail429,
-			"fail_401":             totalFail401,
-			"fail_500":             totalFail500,
-			"rapi_count":           len(rapis),
-			"lapi_count":           len(lapis),
-			"platform_count":       len(platforms),
-			"platforms":            platSummaries,
-			"models":               models,
-		}
-		data, _ := json.Marshal(resp)
-		w.Write(data)
-	})
-
 	// Insights endpoint — three-layer analysis: health, efficiency, capacity
 	mux.HandleFunc("/api/insights", handleInsights)
+
+	// 仪表盘单屏指标：4 维度 × 10 指标 TOP3 × 今日/本月 + 待处理 + 近期错误。
+	mux.HandleFunc("/api/dashboard/metrics", handleDashboardMetrics)
+
+	// 中心配置（Supabase）：URL + API key 加密保存 + 角色自动探测。
+	mux.HandleFunc("/api/sb-config", handleSBConfig)
+	// 系统/中心互联日志（syncOnce 成败、直写成败、池冷却等）。
+	mux.HandleFunc("/api/logs/system", handleSystemLogs)
 
 	// Analytics: 24h hourly distribution for traffic chart
 	mux.HandleFunc("/api/analytics/hourly", func(w http.ResponseWriter, r *http.Request) {
@@ -1980,8 +2005,8 @@ func createWebHandler() http.Handler {
 	// 状态接口 - 用于Dashboard显示
 	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		rapis, _ := db.Get().GetRAPIs()
-		lapis, _ := db.Get().GetLAPIs()
+		rapis, _ := store.A().GetRAPIs()
+		lapis, _ := store.A().GetLAPIs()
 		stats, _ := db.Get().GetRAPIStats()
 
 		// 获取刷新间隔参数（默认10秒）
@@ -2013,7 +2038,7 @@ func createWebHandler() http.Handler {
 		// 计算lapi被请求数量（通过检查关联的rapi是否在时间窗口内有请求）
 		lapiRequested := 0
 		for _, u := range lapis {
-			rapiIds, _ := db.Get().GetLAPIRAPIMapping(u.ID)
+			rapiIds, _ := store.A().GetLAPIRAPIMapping(u.ID)
 			for _, rapiId := range rapiIds {
 				if requestedRAPIIds[rapiId] {
 					lapiRequested++
@@ -2217,7 +2242,7 @@ func createWebHandler() http.Handler {
 			http.Error(w, `{"error":"invalid platform id"}`, 400)
 			return
 		}
-		platform, err := db.Get().GetPlatformByID(platformID)
+		platform, err := store.A().GetPlatformByID(platformID)
 		if err != nil {
 			writeJSONError(w, 404, fmt.Errorf("platform not found"))
 			return
@@ -2245,7 +2270,7 @@ func createWebHandler() http.Handler {
 			http.Error(w, `{"error":"method not allowed"}`, 405)
 			return
 		}
-		keys, err := db.Get().GetAllPlatformKeys()
+		keys, err := store.A().GetAllPlatformKeys()
 		if err != nil {
 			writeJSONError(w, 500, err)
 			return
@@ -2253,12 +2278,12 @@ func createWebHandler() http.Handler {
 		if keys == nil {
 			keys = []models.PlatformKey{}
 		}
-		platforms, _ := db.Get().GetPlatforms()
+		platforms, _ := store.A().GetPlatforms()
 		platName := make(map[int64]string, len(platforms))
 		for _, p := range platforms {
 			platName[p.ID] = p.Name
 		}
-		rapis, _ := db.Get().GetRAPIs()
+		rapis, _ := store.A().GetRAPIs()
 		blocks, _ := db.Get().GetKeyModelBlocks()
 		blockSet := make(map[string]models.KeyModelBlock, len(blocks))
 		for _, b := range blocks {
@@ -2333,18 +2358,24 @@ func createWebHandler() http.Handler {
 		var req struct {
 			Menu string `json:"menu"`
 			All  bool   `json:"all"`
+			ID   int64  `json:"id"` // 单条已读（点击条目/逐条关闭）
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		if notifySvc != nil {
-			if req.All || req.Menu == "" {
+			switch {
+			case req.ID != 0:
+				notifySvc.MarkItemRead(req.ID)
+			case req.All || req.Menu == "":
 				notifySvc.MarkAllRead()
-			} else {
+			default:
 				notifySvc.MarkMenuRead(req.Menu)
 			}
 		}
 		w.Write([]byte(`{"success":true}`))
 	})
 
+	// 代理可本地写（应急改本地 SQLite，不推中心，无害）；管理端直写中心由 store.Use(sup) 保证。
+	// 历史的只读守卫已移除——代理写本地 db.DB 不影响中心权威。
 	return mux
 }
 
@@ -2362,25 +2393,14 @@ func trimRAPINaming(rapi *models.RAPI) {
 	rapi.Model = strings.TrimSpace(rapi.Model)
 }
 
-// deriveRAPIAlias computes the internal per-platform unique alias from the
-// unified naming rule: lower(计算名 || 模型备注 || 上游模型名). When the result
-// collides with another model of the same platform, -2/-3/... is appended.
-// Returns "" when nothing names the model. excludeID lets updates skip the
-// row itself.
-func deriveRAPIAlias(rapi *models.RAPI, excludeID int64) string {
+// deriveRAPIAlias computes the display alias from the unified naming rule:
+// lower(计算名 || 模型备注 || 上游模型名). 自然键身份模型下 alias 只是显示名
+// （无唯一约束，不再追加 -2/-3 去重后缀）；端点身份冲突由 handler 层用
+// RAPIModelExists 按 (base_url, model) 拒绝。Returns "" when nothing names
+// the model.
+func deriveRAPIAlias(rapi *models.RAPI) string {
 	name := models.ComputeModelName(rapi.Vendor, rapi.Series, rapi.Version, rapi.Suffix, rapi.Notes, rapi.Model)
-	base := strings.ToLower(strings.TrimSpace(name))
-	if base == "" {
-		return ""
-	}
-	alias := base
-	for i := 2; ; i++ {
-		exists, err := db.Get().RAPIAliasExists(rapi.PlatformID, alias, excludeID)
-		if err != nil || !exists {
-			return alias
-		}
-		alias = fmt.Sprintf("%s-%d", base, i)
-	}
+	return strings.ToLower(strings.TrimSpace(name))
 }
 
 // autoMapRAPItoLAPI checks if a newly created RAPI's naming identity
@@ -2396,18 +2416,18 @@ func autoMapRAPItoLAPI(rapi *models.RAPI) {
 		if rapi.Alias == "" {
 			return
 		}
-		lapi, err = db.Get().GetLAPIByAlias(rapi.Alias)
+		lapi, err = store.A().GetLAPIByAlias(rapi.Alias)
 		if err != nil || lapi == nil {
 			return
 		}
 	} else {
-		lapi, err = db.Get().FindLAPIByModelIdentity(rapi.Vendor, rapi.Series, rapi.Version, rapi.Suffix)
+		lapi, err = store.A().FindLAPIByModelIdentity(rapi.Vendor, rapi.Series, rapi.Version, rapi.Suffix)
 		if err != nil || lapi == nil {
 			return // No matching LAPI
 		}
 	}
 	// Get current routing chain and check for duplicates
-	existing, err := db.Get().GetLAPIRAPIMapping(lapi.ID)
+	existing, err := store.A().GetLAPIRAPIMapping(lapi.ID)
 	if err != nil {
 		return
 	}
@@ -2418,7 +2438,7 @@ func autoMapRAPItoLAPI(rapi *models.RAPI) {
 	}
 	// Append to the end of the chain
 	existing = append(existing, rapi.ID)
-	if err := db.Get().SetLAPIRAPIOrder(lapi.ID, existing); err != nil {
+	if err := store.A().SetLAPIRAPIOrder(lapi.ID, existing); err != nil {
 		logger.DefaultConsole().Error("service", "[AUTO-MAP] failed to add rapi to lapi",
 			"rapi_id", rapi.ID, "lapi", lapi.Alias, "error", err.Error())
 		return
@@ -2450,12 +2470,12 @@ func platformKeyToken(platformID int64, platformToken string) string {
 // that's now decoupled: platform.available only reflects base_url reachability
 // (set by detect-formats / restore endpoint), not key presence.
 func restorePlatformAvailability(platformID int64) {
-	plat, err := db.Get().GetPlatformByID(platformID)
+	plat, err := store.A().GetPlatformByID(platformID)
 	if err != nil || plat == nil {
 		return
 	}
 	if proxyGateway != nil {
-		rapis, _ := db.Get().GetRAPIsByPlatform(platformID)
+		rapis, _ := store.A().GetRAPIsByPlatform(platformID)
 		for _, ra := range rapis {
 			// Clear persisted unavailable state (written by the gateway when all keys
 			// were dead) so the RAPI re-enters GetEnabledRAPIsForLAPI immediately.
@@ -2477,14 +2497,14 @@ func handleKeyProbe(w http.ResponseWriter, r *http.Request, platformID int64, ke
 		return
 	}
 
-	platform, err := db.Get().GetPlatformByID(platformID)
+	platform, err := store.A().GetPlatformByID(platformID)
 	if err != nil || platform == nil {
 		writeJSONError(w, 404, fmt.Errorf("platform not found"))
 		return
 	}
 
 	// Find the specific key
-	keys, err := db.Get().GetPlatformKeys(platformID)
+	keys, err := store.A().GetPlatformKeys(platformID)
 	if err != nil {
 		writeJSONError(w, 500, err)
 		return

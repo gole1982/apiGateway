@@ -831,9 +831,12 @@ func filterKeysByKeyIDs(keys []models.PlatformKey, keyIDsCSV string) []models.Pl
 	return filtered
 }
 
-// tryKeyForRAPI tries each PlatformKey for a given RAPI in sequence.
+// tryKeyForRAPI tries each PlatformKey for a given RAPI in sequence (round-robin).
 // Returns (resp, keyID, err). On 429/503 it marks the key failed and tries the next key.
-// If all keys are cooling, it marks the RAPI failed and returns ErrAllKeysUnavailable.
+// If all keys are cooling, it aligns the whole pool to the pool-standard cooldown
+// (the earliest key recoverAt), cools the RAPI to the same moment and returns
+// ErrAllKeysUnavailable — the caller then moves to the next RAPI in the chain
+// instead of waiting on this key pool.
 func (g *ProxyGateway) tryKeyForRAPI(
 	ctx context.Context,
 	rapi models.RAPIWithPlatform,
@@ -848,8 +851,8 @@ func (g *ProxyGateway) tryKeyForRAPI(
 	if len(keys) == 0 {
 		syntheticKey := models.PlatformKey{
 			ID:         -1,
-			PlatformID: rapi.PlatformID,
 			KeyIndex:   0,
+			PlatformID: rapi.PlatformID,
 			Token:      rapi.Token,
 			Enabled:    true,
 		}
@@ -867,9 +870,13 @@ func (g *ProxyGateway) tryKeyForRAPI(
 			// persists the model as unavailable instead of spinning on 404s.
 			return nil, 0, scheduler.ErrAllKeysUnavailable
 		}
-		key, _, err := g.scheduler.PickAvailableKey(keys)
+		key, keyNextAvail, err := g.scheduler.PickAvailableKey(keys)
 		if err != nil {
-			// All keys for this RAPI are cooling — escalate to RAPI-level failure.
+			// All keys for this RAPI are cooling — align the pool to the pool
+			// standard (earliest key recoverAt) so the RAPI cooldown matches,
+			// then escalate; the caller proceeds to the next chain node
+			// instead of spinning on this pool.
+			g.markPoolExhausted(rapi, keys, keyNextAvail, requestID)
 			return nil, 0, scheduler.ErrAllKeysUnavailable
 		}
 
@@ -878,7 +885,7 @@ func (g *ProxyGateway) tryKeyForRAPI(
 		// key/rapi context the operator needs to diagnose per-key failures.
 		keyLog := logger.DefaultConsole().With("request_id", requestID).With("rapi", rapi.Alias, "key_id", key.ID)
 
-		resp, _, doErr := g.doUpstreamRequest(ctx, rapi, effectiveURL, upstreamBody, token, requestID, retryCount, targetFormat)
+		resp, _, doErr := g.doUpstreamRequest(ctx, rapi, effectiveURL, upstreamBody, token, requestID, retryCount, targetFormat, key.ID)
 		if doErr != nil {
 			isTimeout := isTimeoutError(doErr)
 			keyLog.Error("gateway", "[ERR] upstream request failed",
@@ -947,7 +954,15 @@ func (g *ProxyGateway) tryKeyForRAPI(
 				// 白打一次该 key，充值后冷却到期自动回归。
 				keyLog.Warn("gateway", "[KEY-RECOVER] billing error treated as temporary",
 					"status", resp.StatusCode, "reason", reason)
-				g.scheduler.MarkKeyBillingFailure(key.ID, reason)
+				recoverAt := g.scheduler.MarkKeyBillingFailure(key.ID, reason)
+				if g.notifyService != nil {
+					g.notifyService.PublishEvent("error", notify.MenuKeys, "cooling",
+						fmt.Sprintf("Key #%d 计费错误冷却（%s）", key.KeyIndex, rapi.PlatformName),
+						reason, key.ID)
+					g.notifyService.RecordUnread(notify.MenuKeys, "cooling",
+						fmt.Sprintf("Key #%d 冷却中（计费，至 %s）", key.KeyIndex, recoverAt.Format("15:04:05")),
+						reason, key.ID)
+				}
 				if g.log != nil {
 					g.log.RecordError(requestID, reason+" (可恢复计费错误，已按临时失败处理)", "UPSTREAM_RESPONSE")
 				}
@@ -1013,9 +1028,43 @@ func (g *ProxyGateway) tryKeyForRAPI(
 				continue
 			}
 			retryAt := scheduler.RetryAt(resp.Header, time.Time{})
-			g.scheduler.MarkKeyTemporaryFailure(key.ID, retryAt, reason)
+			recoverAt := g.scheduler.MarkKeyTemporaryFailure(key.ID, retryAt, reason)
+			// 429/5xx 冷却通知（限流类最有价值；capability/计费已在上文单独通知）。
+			if g.notifyService != nil && (resp.StatusCode == 429 || resp.StatusCode >= 500) {
+				g.notifyService.PublishEvent("error", notify.MenuKeys, "cooling",
+					fmt.Sprintf("Key #%d 冷却（%s，%d）", key.KeyIndex, rapi.PlatformName, resp.StatusCode),
+					reason, key.ID)
+				g.notifyService.RecordUnread(notify.MenuKeys, "cooling",
+					fmt.Sprintf("Key #%d 冷却中（至 %s）", key.KeyIndex, recoverAt.Format("15:04:05")),
+					reason, key.ID)
+			}
 			continue
 		}
+	}
+}
+
+// markPoolExhausted 对"全部 key 冷却中"的软池执行池标准冷却：
+// 以池内最早恢复时刻（第一个进入 429 的 key 的恢复时刻）为标准，对齐池内
+// 所有 key 与 RAPI 的冷却，并写入请求日志，让日志页可见"池耗尽→冷却至
+// HH:MM:SS→转下一节点"。poolRecoverAt 为零（无冷却信息）时退回旧短冷却。
+func (g *ProxyGateway) markPoolExhausted(rapi models.RAPIWithPlatform, keys []models.PlatformKey, poolRecoverAt time.Time, requestID string) {
+	ids := make([]int64, 0, len(keys))
+	for _, k := range keys {
+		if k.ID > 0 {
+			ids = append(ids, k.ID)
+		}
+	}
+	if poolRecoverAt.IsZero() {
+		// 无池时间信息（例如池里全是能力黑名单外的死 key）→ 旧路径。
+		g.handleAllKeysUnavailable(rapi, requestID, logger.DefaultConsole().With("request_id", requestID))
+		return
+	}
+	g.scheduler.MarkPoolExhausted(rapi.ID, ids, poolRecoverAt, "key pool exhausted (all cooling)")
+	if g.log != nil {
+		g.log.RecordError(requestID,
+			fmt.Sprintf("rapi=%s [%s] 全部 Key 冷却中，池标准冷却至 %s，转下一节点",
+				rapi.Alias, rapi.PlatformName, poolRecoverAt.Format("15:04:05")),
+			"UPSTREAM_RESPONSE")
 	}
 }
 
@@ -1165,7 +1214,9 @@ func (g *ProxyGateway) handleStreamingRequest(w http.ResponseWriter, r *http.Req
 		}
 
 		startTime := time.Now()
-		resp, keyID, err := g.tryKeyForRAPI(r.Context(), rapi, effectiveURL, upstreamBody, requestID, retryCount, targetFormat)
+		// keyID 现在经 tryKeyForRAPI → doUpstreamRequest → RecordUpstreamSent 落库
+		// （request_logs.selected_key_id，指标 key 维度埋点）。
+		resp, _, err := g.tryKeyForRAPI(r.Context(), rapi, effectiveURL, upstreamBody, requestID, retryCount, targetFormat)
 		latencyMs := int(time.Since(startTime).Milliseconds())
 
 		if err != nil {
@@ -1190,7 +1241,7 @@ func (g *ProxyGateway) handleStreamingRequest(w http.ResponseWriter, r *http.Req
 			retryCount++
 			continue
 		}
-		_ = keyID
+		// 每请求实际使用的 key / 平台埋点（指标 key 维度）。
 
 		// Extract token usage from response headers
 		tokensUsed := extractTokenUsage(resp.Header)
@@ -1212,10 +1263,12 @@ func (g *ProxyGateway) handleStreamingRequest(w http.ResponseWriter, r *http.Req
 		needsConversion := targetFormat != clientFormat
 
 		// Capture up to 32 KB of the raw upstream SSE body for logging while
-		// still streaming bytes to the client in real time.
+		// still streaming bytes to the client in real time. firstByteAt 记录首帧
+		// 写出时刻，用于 TTFT（首 token 延迟）。
 		const streamLogCapBytes = 32 * 1024
 		var streamLogBuf bytes.Buffer
-		teeBody := io.TeeReader(resp.Body, &limitedWriter{w: &streamLogBuf, limit: streamLogCapBytes})
+		var firstFrameAt time.Time
+		teeBody := io.TeeReader(resp.Body, &firstFrameRecorder{firstSeen: &firstFrameAt, next: &limitedWriter{w: &streamLogBuf, limit: streamLogCapBytes}})
 
 		if !needsConversion {
 			// Bug 8.3: Read synchronously — no goroutine needed.
@@ -1264,7 +1317,19 @@ func (g *ProxyGateway) handleStreamingRequest(w http.ResponseWriter, r *http.Req
 		resp.Body.Close()
 
 		if g.log != nil {
-			g.log.RecordUpstreamResponse(requestID, resp.StatusCode, respHeaders(resp), streamLogBuf.String(), latencyMs, tokensUsed)
+			// TTFT：流式首帧延迟；除首 token 延迟 = 总延迟 - TTFT。
+			// token 明细从 32KB 日志缓冲解析（三协议，最后 usage 帧生效）。
+			ttftMs := latencyMs
+			if !firstFrameAt.IsZero() {
+				ttftMs = int(firstFrameAt.Sub(startTime).Milliseconds())
+			}
+			restMs := latencyMs - ttftMs
+			if restMs < 0 {
+				restMs = 0
+			}
+			in, out, cached := extractUsageDetail(streamLogBuf.String())
+			g.log.RecordUpstreamResponseDetail(requestID, resp.StatusCode, respHeaders(resp), streamLogBuf.String(),
+				latencyMs, ttftMs, tokensUsed, in, out, cached)
 		}
 
 		if responseCommitted {
@@ -1361,7 +1426,9 @@ func (g *ProxyGateway) handleNonStreamingRequest(w http.ResponseWriter, r *http.
 		}
 
 		startTime := time.Now()
-		resp, keyID, err := g.tryKeyForRAPI(reqCtx, rapi, effectiveURL, upstreamBody, requestID, retryCount, targetFormat)
+		// keyID 现在经 tryKeyForRAPI → doUpstreamRequest → RecordUpstreamSent 落库
+		// （request_logs.selected_key_id，指标 key 维度埋点）。
+		resp, _, err := g.tryKeyForRAPI(reqCtx, rapi, effectiveURL, upstreamBody, requestID, retryCount, targetFormat)
 		latencyMs := int(time.Since(startTime).Milliseconds())
 
 		if err != nil {
@@ -1382,7 +1449,7 @@ func (g *ProxyGateway) handleNonStreamingRequest(w http.ResponseWriter, r *http.
 			retryCount++
 			continue
 		}
-		_ = keyID
+		// 每请求实际使用的 key / 平台埋点（指标 key 维度）。
 
 		tokensUsed := extractTokenUsage(resp.Header)
 		if tokensUsed <= 0 {
@@ -1401,7 +1468,11 @@ func (g *ProxyGateway) handleNonStreamingRequest(w http.ResponseWriter, r *http.
 		g.db.RecordRequest(rapi.ID, lapi.ID, resp.StatusCode, latencyMs, tokensUsed)
 
 		if g.log != nil {
-			g.log.RecordUpstreamResponse(requestID, resp.StatusCode, respHeaders(resp), string(respBody), latencyMs, tokensUsed)
+			// 非流式：TTFT = 总延迟（整包一次返回），除首 token 延迟 = 0。
+			// token 明细从响应体解析（三协议）。
+			in, out, cached := extractUsageDetail(string(respBody))
+			g.log.RecordUpstreamResponseDetail(requestID, resp.StatusCode, respHeaders(resp), string(respBody),
+				latencyMs, latencyMs, tokensUsed, in, out, cached)
 		}
 
 		// Convert response back to client format if needed.
@@ -1446,7 +1517,7 @@ func expandHeaderValue(v string) string {
 // NewProxyGatewayWithConfig — we do NOT set http.Client.Timeout or a per-request context
 // deadline here, because either would kill streaming response bodies mid-flight.
 // The caller's ctx carries the client-connection lifetime as an implicit upper bound.
-func (g *ProxyGateway) doUpstreamRequest(ctx context.Context, rapi models.RAPIWithPlatform, url string, body []byte, token string, requestID string, retryCount int, targetFormat string) (*http.Response, int, error) {
+func (g *ProxyGateway) doUpstreamRequest(ctx context.Context, rapi models.RAPIWithPlatform, url string, body []byte, token string, requestID string, retryCount int, targetFormat string, keyID int64) (*http.Response, int, error) {
 	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(body))
 	if err != nil {
 		return nil, 0, err
@@ -1500,7 +1571,7 @@ func (g *ProxyGateway) doUpstreamRequest(ctx context.Context, rapi models.RAPIWi
 				headers[k] = logger.SanitizeKey(v[0])
 			}
 		}
-		g.log.RecordUpstreamSent(requestID, fmt.Sprintf("%s [%s]", rapi.Alias, rapi.PlatformName), url, headers, string(body), retryCount)
+		g.log.RecordUpstreamSent(requestID, fmt.Sprintf("%s [%s]", rapi.Alias, rapi.PlatformName), url, headers, string(body), retryCount, keyID, rapi.PlatformID)
 	}
 
 	resp, err := g.httpClient.Do(upstreamReq)
@@ -1552,6 +1623,115 @@ func extractTokenUsage(header http.Header) int {
 		}
 	}
 	return 0
+}
+
+// extractUsageDetail parses the token usage breakdown (input / output / cached)
+// from an upstream response body. It handles all three native protocols and
+// both plain-JSON and SSE-framed bodies (the last usage frame wins):
+//
+//   - openai:    usage.prompt_tokens / completion_tokens /
+//     usage.prompt_tokens_details.cached_tokens
+//   - anthropic: usage.input_tokens / output_tokens /
+//     cache_read_input_tokens (+ cache_creation_input_tokens counts as
+//     cached too — it is a cache write, reported on the cached line)
+//   - gemini:    usageMetadata.promptTokenCount / candidatesTokenCount /
+//     cachedContentTokenCount
+//
+// Zero fields mean "not reported"; callers fall back to the header total /
+// estimate. The body is already truncated to the log cap, so this never sees
+// unbounded payloads.
+func extractUsageDetail(body string) (in, out, cached int) {
+	if body == "" {
+		return 0, 0, 0
+	}
+	// Streaming: scan SSE frames for the last object carrying usage info.
+	if strings.Contains(body, "data:") {
+		for _, line := range strings.Split(body, "\n") {
+			line = strings.TrimSpace(line)
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			if payload == "" || payload == "[DONE]" {
+				continue
+			}
+			var probe map[string]json.RawMessage
+			if json.Unmarshal([]byte(payload), &probe) != nil {
+				continue
+			}
+			if i, o, c := usageFromObject(probe); i > 0 || o > 0 || c > 0 {
+				in, out, cached = i, o, c
+			}
+		}
+		if in > 0 || out > 0 || cached > 0 {
+			return in, out, cached
+		}
+	}
+	var probe map[string]json.RawMessage
+	if json.Unmarshal([]byte(body), &probe) != nil {
+		return 0, 0, 0
+	}
+	return usageFromObject(probe)
+}
+
+// usageFromObject extracts the token breakdown from one decoded JSON object,
+// trying all three protocol shapes. Later matches only fill still-zero fields,
+// so a hybrid body cannot lose information.
+func usageFromObject(obj map[string]json.RawMessage) (in, out, cached int) {
+	// openai / anthropic share the "usage" object key.
+	if u, ok := obj["usage"]; ok {
+		var um map[string]json.RawMessage
+		if json.Unmarshal(u, &um) == nil {
+			// openai: prompt_tokens / completion_tokens / prompt_tokens_details{cached_tokens}
+			in = rawInt(um["prompt_tokens"])
+			out = rawInt(um["completion_tokens"])
+			if d, ok := um["prompt_tokens_details"]; ok {
+				var dm map[string]json.RawMessage
+				if json.Unmarshal(d, &dm) == nil {
+					cached = rawInt(dm["cached_tokens"])
+				}
+			}
+			// anthropic: input_tokens / output_tokens / cache_read_input_tokens
+			// (+ cache_creation_input_tokens counts as cached — cache write).
+			if in == 0 {
+				in = rawInt(um["input_tokens"])
+			}
+			if out == 0 {
+				out = rawInt(um["output_tokens"])
+			}
+			if cached == 0 {
+				cached = rawInt(um["cache_read_input_tokens"]) + rawInt(um["cache_creation_input_tokens"])
+			}
+		}
+	}
+	// gemini: usageMetadata{promptTokenCount, candidatesTokenCount, cachedContentTokenCount}
+	if um, ok := obj["usageMetadata"]; ok {
+		var gm map[string]json.RawMessage
+		if json.Unmarshal(um, &gm) == nil {
+			if in == 0 {
+				in = rawInt(gm["promptTokenCount"])
+			}
+			if out == 0 {
+				out = rawInt(gm["candidatesTokenCount"])
+			}
+			if cached == 0 {
+				cached = rawInt(gm["cachedContentTokenCount"])
+			}
+		}
+	}
+	return in, out, cached
+}
+
+// rawInt decodes a JSON number field; missing / non-numeric → 0.
+func rawInt(raw json.RawMessage) int {
+	if len(raw) == 0 {
+		return 0
+	}
+	var f float64
+	if err := json.Unmarshal(raw, &f); err != nil {
+		return 0
+	}
+	return int(f)
 }
 
 // pickTargetFormat determines the best format to use when forwarding to a RAPI.
@@ -1636,4 +1816,19 @@ func (lw *limitedWriter) Write(p []byte) (int, error) {
 		p = p[:remaining]
 	}
 	return lw.w.Write(p)
+}
+
+// firstFrameRecorder wraps a writer and stamps firstSeen with the time the
+// first non-empty chunk flowed through — the streaming TTFT anchor. It
+// forwards every write to next unchanged.
+type firstFrameRecorder struct {
+	firstSeen *time.Time
+	next     io.Writer
+}
+
+func (f *firstFrameRecorder) Write(p []byte) (int, error) {
+	if len(p) > 0 && f.firstSeen != nil && f.firstSeen.IsZero() {
+		*f.firstSeen = time.Now()
+	}
+	return f.next.Write(p)
 }
