@@ -1,11 +1,85 @@
 package models
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"net/url"
+	"strings"
 	"time"
 
 	"gateway/internal/apiformat"
 )
+
+// NormalizeBaseURL 归一化 base_url（平台/端点的自然键组成部分）：
+// scheme+host 小写、去默认端口（https:443 / http:80）、去路径尾部斜杠、丢弃
+// query/fragment。路径大小写保留。解析失败时退化为 trim + 去尾斜杠（不丢信息）。
+func NormalizeBaseURL(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.Host == "" {
+		return strings.TrimRight(s, "/")
+	}
+	scheme := strings.ToLower(u.Scheme)
+	host := strings.ToLower(u.Hostname())
+	if port := u.Port(); port != "" &&
+		!((scheme == "https" && port == "443") || (scheme == "http" && port == "80")) {
+		host += ":" + port
+	}
+	return scheme + "://" + host + strings.TrimRight(u.Path, "/")
+}
+
+// TokenHash 是凭据的自然键：sha256(明文 token) 取前 16 个 hex 字符。
+// 空 token（动态令牌占位凭据）无自然键，返回空串 —— 落库为 NULL，
+// 不参与唯一性约束（SQLite/Postgres 的唯一索引都允许多个 NULL）。
+func TokenHash(token string) string {
+	if token == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])[:16]
+}
+
+// Credential 是全局唯一的 API 凭据（自然键 TokenHash）。
+// PlatformID 是"归属平台"（管理分组/默认绑定范围，非身份）；label 为显示标签。
+// 跨平台同 token 只存一行；运行时的 key 池即本表行的投影（id 语义不变）。
+type Credential struct {
+	ID         int64     `json:"id"`
+	PlatformID int64     `json:"platform_id"` // 归属平台（home），非身份
+	TokenHash  string    `json:"token_hash"`  // 自然键；空 token → ""
+	Token      string    `json:"token"`
+	Label      string    `json:"label,omitempty"`
+	Enabled    bool      `json:"enabled"`
+	// FailureType/FailureReason/FailedAt：代理本地健康态，不进中心、不进 bundle。
+	FailureType   int        `json:"failure_type"`
+	FailureReason string     `json:"failure_reason,omitempty"`
+	FailedAt      *time.Time `json:"failed_at,omitempty"`
+	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
+	IsFree        bool       `json:"is_free"`
+	SortOrder     int        `json:"sort_order"` // 归属平台内展示序
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+}
+
+// EndpointCredential 是端点↔凭据绑定（调度单元 (凭据, 端点, 模型) 的物化）。
+// 自然键 (RAPIID, CredentialID)。Enabled=false 表示该凭据不服务此端点
+// （旧 key_ids 白名单语义的显式化）。限额字段为绑定层限额（Phase 2 启用，
+// 0=不限；Phase 1 调度只看 rapi 端点层限额）。
+type EndpointCredential struct {
+	ID           int64 `json:"id"`
+	RAPIID       int64 `json:"rapi_id"`
+	CredentialID int64 `json:"credential_id"`
+	RPMLimit     int   `json:"rpm_limit"`
+	RPHLimit     int   `json:"rph_limit"`
+	RPDLimit     int   `json:"rpd_limit"`
+	TPMLimit     int   `json:"tpm_limit"`
+	TPHLimit     int   `json:"tph_limit"`
+	TPDLimit     int   `json:"tpd_limit"`
+	Enabled      bool  `json:"enabled"`
+}
 
 // PlatformKey represents one API key (token) belonging to a Platform.
 // A platform may have multiple keys for load-spreading / failover.

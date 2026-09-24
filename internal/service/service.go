@@ -547,12 +547,23 @@ func createWebHandler() http.Handler {
 				return
 			}
 			trimRAPINaming(&rapi)
-			// Alias is now derived server-side from the unified naming rule
-			// (厂商/系列/版本/后缀 → 备注 → 上游模型名) and stays lowercase for
-			// LAPI matching. Model preserves its original casing upstream.
-			rapi.Alias = deriveRAPIAlias(&rapi, 0)
+			// Alias 是显示名（设计 §2：可随便改）——用户显式填写则尊重；
+			// 留空才按统一命名规则（厂商/系列-版本-后缀 → 备注 → 上游模型名）
+			// 自动生成。统一小写以兼容 LAPI 兜底匹配；Model 保留上游原始大小写。
+			rapi.Alias = strings.ToLower(strings.TrimSpace(rapi.Alias))
 			if rapi.Alias == "" {
-				writeJSONError(w, 400, fmt.Errorf("请至少填写厂商/系列/版本/后缀、模型备注或上游模型名之一"))
+				rapi.Alias = deriveRAPIAlias(&rapi)
+			}
+			if rapi.Alias == "" {
+				writeJSONError(w, 400, fmt.Errorf("请填写名称，或至少填写厂商/系列/版本/后缀、模型备注或上游模型名之一"))
+				return
+			}
+			// 端点身份 = (base_url, model)：同平台同 model 重复即冲突（设计 §2）。
+			if exists, err := store.A().RAPIModelExists(rapi.PlatformID, rapi.Model, 0); err != nil {
+				writeJSONError(w, 500, err)
+				return
+			} else if exists {
+				writeJSONError(w, 409, fmt.Errorf("该平台下模型 %q 已存在（同 base_url + model 视为同一端点）", rapi.Model))
 				return
 			}
 			if err := store.A().CreateRAPI(&rapi); err != nil {
@@ -574,11 +585,21 @@ func createWebHandler() http.Handler {
 				return
 			}
 			trimRAPINaming(&rapi)
-			// Alias is derived from the unified naming rule (see POST above);
-			// excludeID keeps the row's own alias out of the dedup check.
-			rapi.Alias = deriveRAPIAlias(&rapi, rapi.ID)
+			// Alias 规则同 POST：显式填写优先，留空才自动生成。
+			rapi.Alias = strings.ToLower(strings.TrimSpace(rapi.Alias))
 			if rapi.Alias == "" {
-				writeJSONError(w, 400, fmt.Errorf("请至少填写厂商/系列/版本/后缀、模型备注或上游模型名之一"))
+				rapi.Alias = deriveRAPIAlias(&rapi)
+			}
+			if rapi.Alias == "" {
+				writeJSONError(w, 400, fmt.Errorf("请填写名称，或至少填写厂商/系列/版本/后缀、模型备注或上游模型名之一"))
+				return
+			}
+			// 端点身份冲突校验（excludeID 排除自身行）。
+			if exists, err := store.A().RAPIModelExists(rapi.PlatformID, rapi.Model, rapi.ID); err != nil {
+				writeJSONError(w, 500, err)
+				return
+			} else if exists {
+				writeJSONError(w, 409, fmt.Errorf("该平台下模型 %q 已存在（同 base_url + model 视为同一端点）", rapi.Model))
 				return
 			}
 			// Remember whether the model was unavailable before the edit, so a
@@ -2372,25 +2393,14 @@ func trimRAPINaming(rapi *models.RAPI) {
 	rapi.Model = strings.TrimSpace(rapi.Model)
 }
 
-// deriveRAPIAlias computes the internal per-platform unique alias from the
-// unified naming rule: lower(计算名 || 模型备注 || 上游模型名). When the result
-// collides with another model of the same platform, -2/-3/... is appended.
-// Returns "" when nothing names the model. excludeID lets updates skip the
-// row itself.
-func deriveRAPIAlias(rapi *models.RAPI, excludeID int64) string {
+// deriveRAPIAlias computes the display alias from the unified naming rule:
+// lower(计算名 || 模型备注 || 上游模型名). 自然键身份模型下 alias 只是显示名
+// （无唯一约束，不再追加 -2/-3 去重后缀）；端点身份冲突由 handler 层用
+// RAPIModelExists 按 (base_url, model) 拒绝。Returns "" when nothing names
+// the model.
+func deriveRAPIAlias(rapi *models.RAPI) string {
 	name := models.ComputeModelName(rapi.Vendor, rapi.Series, rapi.Version, rapi.Suffix, rapi.Notes, rapi.Model)
-	base := strings.ToLower(strings.TrimSpace(name))
-	if base == "" {
-		return ""
-	}
-	alias := base
-	for i := 2; ; i++ {
-		exists, err := store.A().RAPIAliasExists(rapi.PlatformID, alias, excludeID)
-		if err != nil || !exists {
-			return alias
-		}
-		alias = fmt.Sprintf("%s-%d", base, i)
-	}
+	return strings.ToLower(strings.TrimSpace(name))
 }
 
 // autoMapRAPItoLAPI checks if a newly created RAPI's naming identity

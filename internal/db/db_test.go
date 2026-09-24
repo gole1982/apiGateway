@@ -180,11 +180,142 @@ func setupTestDB(t *testing.T) *DB {
 		t.Fatalf("failed to create tables: %v", err)
 	}
 
+	// 上面的 DDL 还是旧形态（platform_keys / UNIQUE(platform_id, alias) 等）；
+	// 走真实自然键迁移升级到新形态（credential / endpoint_credential / 部分唯一
+	// 索引），顺带在每次测试里回归迁移路径本身。
+	if _, err := MigrateNaturalKeysConn(conn); err != nil {
+		t.Fatalf("natural-key migration: %v", err)
+	}
+
 	t.Cleanup(func() {
 		conn.Close()
 	})
 
 	return instance
+}
+
+func TestInitAtPathEmptyAndIdempotent(t *testing.T) {
+	initTestCrypto(t)
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+
+	for run := 1; run <= 2; run++ {
+		if err := initAtPath(dbPath); err != nil {
+			t.Fatalf("init run %d: %v", run, err)
+		}
+		conn := instance.conn
+		if !tableExists(conn, "credential") || !tableExists(conn, "endpoint_credential") {
+			t.Fatalf("run %d: natural-key tables missing", run)
+		}
+		if tableExists(conn, "platform_keys") {
+			t.Fatalf("run %d: legacy platform_keys must not be recreated", run)
+		}
+		if !columnExists(conn, "token_cache", "credential_id") || columnExists(conn, "token_cache", "platform_key_id") {
+			t.Fatalf("run %d: token_cache has wrong primary-key column", run)
+		}
+		var platforms int
+		if err := conn.QueryRow(`SELECT COUNT(*) FROM platform`).Scan(&platforms); err != nil {
+			t.Fatalf("count platforms: %v", err)
+		}
+		if platforms != 1 { // only the seeded Google Gemini preset
+			t.Fatalf("run %d: platform count = %d, want 1", run, platforms)
+		}
+		if err := conn.Close(); err != nil {
+			t.Fatalf("close run %d: %v", run, err)
+		}
+		instance = nil
+	}
+}
+
+func TestInitAtPathLegacyUpgradeAndRestart(t *testing.T) {
+	initTestCrypto(t)
+	dbPath := filepath.Join(t.TempDir(), "legacy.db")
+	conn, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open legacy: %v", err)
+	}
+	instance = &DB{conn: conn}
+	if _, err := conn.Exec(`
+		CREATE TABLE platform (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL UNIQUE,
+			base_url TEXT NOT NULL,
+			token TEXT NOT NULL DEFAULT ''
+		);
+		CREATE TABLE rapi (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			alias TEXT NOT NULL UNIQUE,
+			model TEXT NOT NULL DEFAULT '',
+			platform_id INTEGER NOT NULL DEFAULT 0,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			available INTEGER NOT NULL DEFAULT 1,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE TABLE lapi (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			alias TEXT NOT NULL UNIQUE,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE TABLE platform_keys (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			platform_id INTEGER NOT NULL,
+			key_index INTEGER NOT NULL DEFAULT 0,
+			token TEXT NOT NULL DEFAULT '',
+			label TEXT NOT NULL DEFAULT '',
+			enabled INTEGER NOT NULL DEFAULT 1,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(platform_id, key_index)
+		);
+		CREATE TABLE token_cache (
+			platform_key_id INTEGER PRIMARY KEY,
+			token TEXT NOT NULL,
+			expires_at DATETIME,
+			fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+		INSERT INTO platform (id, name, base_url, token)
+			VALUES (1, 'legacy', 'https://legacy.example/v1', 'sk-legacy');
+		INSERT INTO platform_keys (id, platform_id, key_index, token, label)
+			VALUES (7, 1, 0, 'sk-legacy', 'primary');
+		INSERT INTO token_cache (platform_key_id, token) VALUES (7, 'sk-legacy');
+		INSERT INTO rapi (id, alias, model, platform_id) VALUES (9, 'legacy-model', 'legacy-model', 1);
+	`); err != nil {
+		conn.Close()
+		t.Fatalf("seed legacy: %v", err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("close seed db: %v", err)
+	}
+	instance = nil
+
+	for run := 1; run <= 2; run++ {
+		if err := initAtPath(dbPath); err != nil {
+			t.Fatalf("init legacy run %d: %v", run, err)
+		}
+		conn = instance.conn
+		var token string
+		if err := conn.QueryRow(`SELECT token FROM credential WHERE id = 7`).Scan(&token); err != nil {
+			t.Fatalf("run %d: credential 7: %v", run, err)
+		}
+		plain, err := crypto.Decrypt(token)
+		if err != nil || plain != "sk-legacy" {
+			t.Fatalf("run %d: credential token decrypt = %q, %v", run, plain, err)
+		}
+		if tableExists(conn, "platform_keys") {
+			t.Fatalf("run %d: platform_keys still exists", run)
+		}
+		if !columnExists(conn, "token_cache", "credential_id") {
+			t.Fatalf("run %d: token_cache not rebuilt", run)
+		}
+		var keyIDs string
+		if err := conn.QueryRow(`SELECT key_ids FROM rapi WHERE id = 9`).Scan(&keyIDs); err != nil || keyIDs != "7" {
+			t.Fatalf("run %d: key_ids = %q, %v; want 7", run, keyIDs, err)
+		}
+		if err := conn.Close(); err != nil {
+			t.Fatalf("close legacy run %d: %v", run, err)
+		}
+		instance = nil
+	}
 }
 
 // TestMigrateRAPIUniqueAliasPreservesColumns reproduces the upgrade regression where
@@ -862,9 +993,9 @@ func TestRequestTrends(t *testing.T) {
 	}
 }
 
-// TestRAPISameAliasOnDifferentPlatforms verifies that two platforms can each have a RAPI
-// with the same alias (e.g. "glm-5.2" on JD and on ZhipuAI) now that the uniqueness
-// constraint is UNIQUE(platform_id, alias) rather than UNIQUE(alias).
+// TestRAPISameAliasOnDifferentPlatforms 自然键身份模型下 alias 已降级为显示名
+// （无唯一约束）：两平台可以有同名 alias，同平台同 alias 不同 model 也允许；
+// 身份冲突 = 同平台同 model，由 idx_rapi_platform_model 部分唯一索引拒绝。
 func TestRAPISameAliasOnDifferentPlatforms(t *testing.T) {
 	db := setupTestDB(t)
 
@@ -890,10 +1021,16 @@ func TestRAPISameAliasOnDifferentPlatforms(t *testing.T) {
 		t.Errorf("both RAPIs got same ID %d", r1.ID)
 	}
 
-	// Same alias on same platform must still be rejected.
+	// alias 只是显示名：同平台同 alias 不同 model 允许。
 	r3 := &models.RAPI{Alias: "glm-5.2", Model: "glm-5.2-dup", PlatformID: p1.ID}
-	if err := db.CreateRAPI(r3); err == nil {
-		t.Error("CreateRAPI with duplicate (platform_id, alias) should have failed but did not")
+	if err := db.CreateRAPI(r3); err != nil {
+		t.Errorf("CreateRAPI same alias but different model should succeed (alias is display-only): %v", err)
+	}
+
+	// 同平台同 model 才是身份冲突，必须被部分唯一索引拒绝。
+	r4 := &models.RAPI{Alias: "another-name", Model: "glm-5.2", PlatformID: p1.ID}
+	if err := db.CreateRAPI(r4); err == nil {
+		t.Error("CreateRAPI with duplicate (platform_id, model) should have failed but did not")
 	}
 }
 
@@ -1026,15 +1163,26 @@ func TestGetEnabledRAPIsIgnoresPlatformAvailable(t *testing.T) {
 
 // TestRAPIKeyIDsRoundTrip verifies the model→key whitelist column persists
 // through Create/Get/Update and flows into every RAPI read path (including the
-// LAPI chain loader used by the gateway hot path).
+// LAPI chain loader used by the gateway hot path). 自然键模型下 key_ids 是
+// endpoint_credential 绑定的派生投影：白名单 id 必须是本平台真实 credential，
+// 悬空 id 写入时丢弃。
 func TestRAPIKeyIDsRoundTrip(t *testing.T) {
 	db := setupTestDB(t)
 	p := &models.Platform{Name: "test", BaseURL: "https://api.test.com/v1", Token: "sk-orig", Enabled: true, Available: true}
 	if err := db.CreatePlatform(p); err != nil {
 		t.Fatalf("CreatePlatform: %v", err)
 	}
+	k1 := models.PlatformKey{PlatformID: p.ID, Token: "k1-token", Enabled: true}
+	k2 := models.PlatformKey{PlatformID: p.ID, Token: "k2-token", Enabled: true}
+	if err := db.AddPlatformKey(&k1); err != nil {
+		t.Fatalf("AddPlatformKey k1: %v", err)
+	}
+	if err := db.AddPlatformKey(&k2); err != nil {
+		t.Fatalf("AddPlatformKey k2: %v", err)
+	}
+	wl := fmt.Sprintf("%d,%d", k1.ID, k2.ID)
 
-	r := &models.RAPI{Alias: "m2-restricted", Model: "M2", PlatformID: p.ID, KeyIDs: "7,11", Enabled: true, Available: true}
+	r := &models.RAPI{Alias: "m2-restricted", Model: "M2", PlatformID: p.ID, KeyIDs: wl, Enabled: true, Available: true}
 	if err := db.CreateRAPI(r); err != nil {
 		t.Fatalf("CreateRAPI: %v", err)
 	}
@@ -1044,8 +1192,8 @@ func TestRAPIKeyIDsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetRAPIByID: %v", err)
 	}
-	if got.KeyIDs != "7,11" {
-		t.Errorf("GetRAPIByID KeyIDs = %q, want \"7,11\"", got.KeyIDs)
+	if got.KeyIDs != wl {
+		t.Errorf("GetRAPIByID KeyIDs = %q, want %q", got.KeyIDs, wl)
 	}
 
 	// Read back via the chain loader (hot path).
@@ -1060,27 +1208,40 @@ func TestRAPIKeyIDsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetEnabledRAPIsForLAPI: %v", err)
 	}
-	if len(chain) != 1 || chain[0].KeyIDs != "7,11" {
-		t.Fatalf("chain loader KeyIDs = %+v, want [\"7,11\"]", chain)
+	if len(chain) != 1 || chain[0].KeyIDs != wl {
+		t.Fatalf("chain loader KeyIDs = %+v, want [%q]", chain, wl)
 	}
 
 	// Update changes the whitelist.
-	if err := db.UpdateRAPI(&models.RAPI{ID: r.ID, Alias: "m2-restricted", Model: "M2", PlatformID: p.ID, KeyIDs: "9"}); err != nil {
+	wl2 := fmt.Sprintf("%d", k2.ID)
+	if err := db.UpdateRAPI(&models.RAPI{ID: r.ID, Alias: "m2-restricted", Model: "M2", PlatformID: p.ID, KeyIDs: wl2}); err != nil {
 		t.Fatalf("UpdateRAPI: %v", err)
 	}
 	got2, _ := db.GetRAPIByID(r.ID)
-	if got2.KeyIDs != "9" {
-		t.Errorf("UpdateRAPI KeyIDs = %q, want \"9\"", got2.KeyIDs)
+	if got2.KeyIDs != wl2 {
+		t.Errorf("UpdateRAPI KeyIDs = %q, want %q", got2.KeyIDs, wl2)
 	}
 
-	// Default is empty = all keys.
+	// Default empty whitelist binds every platform credential (materialized).
 	r2 := &models.RAPI{Alias: "m1-default", Model: "M1", PlatformID: p.ID, Enabled: true, Available: true}
 	if err := db.CreateRAPI(r2); err != nil {
 		t.Fatalf("CreateRAPI r2: %v", err)
 	}
 	got3, _ := db.GetRAPIByID(r2.ID)
-	if got3.KeyIDs != "" {
-		t.Errorf("default KeyIDs = %q, want \"\" (all keys)", got3.KeyIDs)
+	if got3.KeyIDs != wl {
+		t.Errorf("default KeyIDs = %q, want %q (all keys materialized)", got3.KeyIDs, wl)
+	}
+
+	// 悬空/垃圾 id 写入时丢弃（运行时本来就静默忽略未知 id；FK 也不允许
+	// 真绑上去）。只剩悬空 id 的白名单 → 派生空串（运行时语义 = 全部 key，
+	// 与旧"detach 到最后一个 key"的边界行为一致）。
+	r3 := &models.RAPI{Alias: "m3-dangling", Model: "M3", PlatformID: p.ID, KeyIDs: "999,abc", Enabled: true, Available: true}
+	if err := db.CreateRAPI(r3); err != nil {
+		t.Fatalf("CreateRAPI r3: %v", err)
+	}
+	got4, _ := db.GetRAPIByID(r3.ID)
+	if got4.KeyIDs != "" {
+		t.Errorf("dangling-whitelist KeyIDs = %q, want \"\" (dangling ids dropped)", got4.KeyIDs)
 	}
 }
 
@@ -1118,8 +1279,9 @@ func TestDetachKeyFromRAPIs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DetachKeyFromRAPIs: %v", err)
 	}
-	if len(affected) != 2 || affected[0] != "m-both" || affected[1] != "m-only-k1" {
-		t.Fatalf("affected = %v, want [m-both m-only-k1]", affected)
+	// m-all 的"全部 key"已物化为显式绑定（含 k1），因此也在受影响列表里。
+	if len(affected) != 3 || affected[0] != "m-both" || affected[1] != "m-only-k1" || affected[2] != "m-all" {
+		t.Fatalf("affected = %v, want [m-both m-only-k1 m-all]", affected)
 	}
 
 	gotBoth, _ := db.GetRAPIByID(refs[0].ID)
@@ -1135,8 +1297,8 @@ func TestDetachKeyFromRAPIs(t *testing.T) {
 		t.Errorf("m-only-k2 KeyIDs = %q, want %q (unrelated untouched)", gotOnlyK2.KeyIDs, fmt.Sprintf("%d", k2.ID))
 	}
 	gotAll, _ := db.GetRAPIByID(refs[3].ID)
-	if gotAll.KeyIDs != "" {
-		t.Errorf("m-all KeyIDs = %q, want \"\"", gotAll.KeyIDs)
+	if gotAll.KeyIDs != fmt.Sprintf("%d", k2.ID) {
+		t.Errorf("m-all KeyIDs = %q, want %q (all-binding was materialized)", gotAll.KeyIDs, fmt.Sprintf("%d", k2.ID))
 	}
 
 	// Re-running is a no-op (id already gone).
@@ -1151,10 +1313,29 @@ func TestKeyModelBlocksRoundTrip(t *testing.T) {
 	db := setupTestDB(t)
 	exp := time.Now().Add(24 * time.Hour)
 
-	if err := db.BlockKeyForModel(1, 10, "model not found: foo", exp); err != nil {
+	// key_model_blocks 的 key_id / rapi_id 现在是 FK（→ credential / rapi），
+	// 需要真实行。
+	p := &models.Platform{Name: "blk-test", BaseURL: "https://api.blk.com/v1", Enabled: true, Available: true}
+	if err := db.CreatePlatform(p); err != nil {
+		t.Fatalf("CreatePlatform: %v", err)
+	}
+	k1 := models.PlatformKey{PlatformID: p.ID, Token: "blk-k1-token", Enabled: true}
+	k2 := models.PlatformKey{PlatformID: p.ID, Token: "blk-k2-token", Enabled: true}
+	if err := db.AddPlatformKey(&k1); err != nil {
+		t.Fatalf("AddPlatformKey k1: %v", err)
+	}
+	if err := db.AddPlatformKey(&k2); err != nil {
+		t.Fatalf("AddPlatformKey k2: %v", err)
+	}
+	rm := &models.RAPI{Alias: "blk-model", Model: "M-BLK", PlatformID: p.ID, Enabled: true, Available: true}
+	if err := db.CreateRAPI(rm); err != nil {
+		t.Fatalf("CreateRAPI: %v", err)
+	}
+
+	if err := db.BlockKeyForModel(k1.ID, rm.ID, "model not found: foo", exp); err != nil {
 		t.Fatalf("BlockKeyForModel: %v", err)
 	}
-	if err := db.BlockKeyForModel(2, 10, "模型不存在", exp); err != nil {
+	if err := db.BlockKeyForModel(k2.ID, rm.ID, "模型不存在", exp); err != nil {
 		t.Fatalf("BlockKeyForModel 2: %v", err)
 	}
 
@@ -1167,25 +1348,25 @@ func TestKeyModelBlocksRoundTrip(t *testing.T) {
 	}
 
 	// Refresh (upsert) an existing pair.
-	if err := db.BlockKeyForModel(1, 10, "updated reason", exp); err != nil {
+	if err := db.BlockKeyForModel(k1.ID, rm.ID, "updated reason", exp); err != nil {
 		t.Fatalf("BlockKeyForModel upsert: %v", err)
 	}
 	got, _ = db.GetKeyModelBlocks()
 	for _, b := range got {
-		if b.KeyID == 1 && b.Reason != "updated reason" {
+		if b.KeyID == k1.ID && b.Reason != "updated reason" {
 			t.Errorf("upsert reason = %q, want %q", b.Reason, "updated reason")
 		}
 	}
 
-	if err := db.UnblockKeyForModel(1, 10); err != nil {
+	if err := db.UnblockKeyForModel(k1.ID, rm.ID); err != nil {
 		t.Fatalf("UnblockKeyForModel: %v", err)
 	}
 	got, _ = db.GetKeyModelBlocks()
-	if len(got) != 1 || got[0].KeyID != 2 {
-		t.Fatalf("after unblock = %+v, want only key 2", got)
+	if len(got) != 1 || got[0].KeyID != k2.ID {
+		t.Fatalf("after unblock = %+v, want only key k2", got)
 	}
 
-	if err := db.ClearKeyModelBlocksForKey(2); err != nil {
+	if err := db.ClearKeyModelBlocksForKey(k2.ID); err != nil {
 		t.Fatalf("ClearKeyModelBlocksForKey: %v", err)
 	}
 	got, _ = db.GetKeyModelBlocks()

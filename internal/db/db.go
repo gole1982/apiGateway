@@ -35,7 +35,13 @@ func Init() error {
 		return err
 	}
 	dbPath := filepath.Join(exePath, "gateway.db")
+	return initAtPath(dbPath)
+}
 
+// initAtPath runs the complete schema/migration/startup-maintenance chain for
+// dbPath. Init owns key initialization and executable-path discovery; tests call
+// this helper directly so they exercise the same ordering as production.
+func initAtPath(dbPath string) error {
 	// _busy_timeout=5000: wait up to 5 s before returning SQLITE_BUSY instead of
 	// failing immediately. This prevents log writes from being silently dropped when
 	// the gateway goroutines (logger worker, request handler, scheduler) contend on
@@ -50,6 +56,15 @@ func Init() error {
 	if err != nil {
 		return err
 	}
+	keepConn := false
+	defer func() {
+		if !keepConn {
+			if instance != nil && instance.conn == conn {
+				instance = nil
+			}
+			_ = conn.Close()
+		}
+	}()
 	// Single writer: SQLite supports only one concurrent writer. With the default
 	// pool (MaxOpenConns=unlimited) multiple goroutines can queue concurrent writes
 	// that all hit the busy lock. Limiting to 1 open connection serialises all DB
@@ -85,23 +100,11 @@ func Init() error {
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);
 
-		CREATE TABLE IF NOT EXISTS platform_keys (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			platform_id INTEGER NOT NULL,
-			key_index INTEGER NOT NULL DEFAULT 0,
-			token TEXT NOT NULL DEFAULT '',
-			label TEXT NOT NULL DEFAULT '',
-			enabled INTEGER NOT NULL DEFAULT 1,
-			failure_type INTEGER NOT NULL DEFAULT 0,
-			failure_reason TEXT NOT NULL DEFAULT '',
-			failed_at DATETIME,
-			expires_at DATETIME,
-			is_free INTEGER NOT NULL DEFAULT 0,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			FOREIGN KEY (platform_id) REFERENCES platform(id) ON DELETE CASCADE,
-			UNIQUE(platform_id, key_index)
-		);
+		-- 注意：platform_keys 是自然键迁移前的旧凭据表，故意不在此处建表。
+		-- 自然键迁移（migrateNaturalKeys）的终态是 credential + DROP platform_keys；
+		-- 若在这里无条件 CREATE，每次启动都会把已删除的旧表复活，导致
+		-- migrateEncryptTokens / migrateNaturalKeys 在终态库上反复失败。
+		-- 需要它的旧路径由 migrateAddPlatformKeys 按需创建（仅当 credential 尚不存在）。
 
 		CREATE TABLE IF NOT EXISTS rapi (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -285,6 +288,14 @@ func Init() error {
 	// login_account, login_password — the latter stored encrypted, write-only).
 	instance.migrateAddPlatformAccountColumns()
 
+	// Migration: 自然键身份模型（platform_keys→credential 平移、key_ids→
+	// endpoint_credential 绑定物化、platform.name/rapi.alias 唯一约束降级为
+	// 显示名、base_url/(platform,model) 自然键唯一索引）。必须位于全部历史
+	// 迁移之后、seed 之前。设计：docs/superpowers/specs/2026-09-23-natural-key-identity-design.md
+	if err := instance.migrateNaturalKeys(); err != nil {
+		return fmt.Errorf("migrateNaturalKeys: %w", err)
+	}
+
 	// Cleanup: remove orphan RAPIs whose platform no longer exists
 	instance.cleanupOrphanedRAPIs()
 
@@ -309,6 +320,7 @@ func Init() error {
 		slog.Warn("[WARN] fail_other dedup migration failed", "component", "db", "error", err.Error())
 	}
 
+	keepConn = true
 	return nil
 }
 
@@ -337,13 +349,22 @@ func (db *DB) seedDefaultPlatforms() error {
 	}
 
 	for _, p := range presets {
+		// 身份 = 归一化 base_url（name 只是显示名，允许重名/改名）。
+		nb := models.NormalizeBaseURL(p.baseURL)
+		var cnt int
+		if err := db.conn.QueryRow(`SELECT COUNT(*) FROM platform WHERE base_url = ?`, nb).Scan(&cnt); err != nil {
+			return fmt.Errorf("seed check %s: %w", p.name, err)
+		}
+		if cnt > 0 {
+			continue
+		}
 		// token 为空 → crypto.Encrypt 返回 ""，available=0 表示填 key 前不可用
 		if _, err := db.conn.Exec(`
-			INSERT OR IGNORE INTO platform
+			INSERT INTO platform
 				(name, base_url, token, last_token_fetch,
 				 enabled, available, notes, custom_headers, supported_formats)
 			VALUES (?, ?, '', NULL, 1, 0, ?, '', ?)
-		`, p.name, p.baseURL, p.notes, p.supportedFormats); err != nil {
+		`, p.name, nb, p.notes, p.supportedFormats); err != nil {
 			return fmt.Errorf("seed %s: %w", p.name, err)
 		}
 	}
@@ -723,9 +744,27 @@ func (db *DB) migrateDropURLAutoCompleteColumn() {
 
 // migrateAddPlatformKeys creates the platform_keys table if not present, then copies
 // existing platform.token values as key_index=0 entries (idempotent).
+//
+// 一旦自然键迁移已生效（credential 表存在），platform_keys 就是已废弃的旧表：
+// 此处必须整体跳过，否则每次启动都会从 platform.token 回填出一个全新的
+// platform_keys（id 重新从 1 开始，与 credential.id 冲突），进而让后续的
+// migrateEncryptTokens / migrateNaturalKeys 在终态库上失败。
 func (db *DB) migrateAddPlatformKeys() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
+
+	// credential 非空才代表自然键终态。空 credential 可能是一次失败迁移在旧
+	// 实现中留下的 DDL 残影；若就此跳过旧表创建，数据库将永久无法恢复。
+	// 表存在性探测必须在 Begin 之前完成（单连接池下事务中查询 db.conn 会死锁）。
+	if tableExists(db.conn, "credential") {
+		var count int
+		if err := db.conn.QueryRow(`SELECT COUNT(*) FROM credential`).Scan(&count); err != nil {
+			return fmt.Errorf("count credential: %w", err)
+		}
+		if count > 0 {
+			return nil // 自然键终态：credential 已是唯一凭据表
+		}
+	}
 
 	// Check whether platform_keys table already exists.
 	var cnt int
@@ -998,6 +1037,17 @@ func (db *DB) CreatePlatform(p *models.Platform) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
+	// 身份 = 归一化 base_url：同一地址只允许登记一次（name 仅为显示名）。
+	p.BaseURL = models.NormalizeBaseURL(p.BaseURL)
+	if p.BaseURL != "" {
+		var cnt int
+		if err := db.conn.QueryRow(`SELECT COUNT(*) FROM platform WHERE base_url = ?`, p.BaseURL).Scan(&cnt); err != nil {
+			return err
+		} else if cnt > 0 {
+			return fmt.Errorf("base_url %s 已存在：平台身份即接入地址，同一地址只需登记一次", p.BaseURL)
+		}
+	}
+
 	encToken, err := crypto.Encrypt(p.Token)
 	if err != nil {
 		return fmt.Errorf("encrypt token: %w", err)
@@ -1035,6 +1085,17 @@ func (db *DB) CreatePlatform(p *models.Platform) error {
 func (db *DB) UpdatePlatform(p *models.Platform) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
+
+	// 身份 = 归一化 base_url：改名随意，改地址不得撞到其他平台。
+	p.BaseURL = models.NormalizeBaseURL(p.BaseURL)
+	if p.BaseURL != "" {
+		var cnt int
+		if err := db.conn.QueryRow(`SELECT COUNT(*) FROM platform WHERE base_url = ? AND id != ?`, p.BaseURL, p.ID).Scan(&cnt); err != nil {
+			return err
+		} else if cnt > 0 {
+			return fmt.Errorf("base_url %s 已被其他平台占用：平台身份即接入地址", p.BaseURL)
+		}
+	}
 
 	encToken, err := crypto.Encrypt(p.Token)
 	if err != nil {
@@ -1215,10 +1276,17 @@ func (db *DB) CreateRAPI(r *models.RAPI) error {
 		source = "manual"
 	}
 
-	result, err := db.conn.Exec(`
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// key_ids 是绑定派生列：先占位空串，绑定物化后由 syncBindingsTx 重建。
+	result, err := tx.Exec(`
 		INSERT INTO rapi (alias, model, notes, vendor, series, model_name, version, suffix, platform_id, enabled, available, base_cost, high_cost, rpm_limit, rph_limit, rpd_limit, tpm_limit, tph_limit, tpd_limit, time_period_rules, supported_formats, custom_headers, key_ids, source)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, r.Alias, r.Model, r.Notes, r.Vendor, r.Series, r.ModelName, r.Version, r.Suffix, r.PlatformID, boolToInt(r.Enabled), boolToInt(r.Available), r.BaseCost, r.HighCost, r.RPMLimit, r.RPHLimit, r.RPDLimit, r.TPMLimit, r.TPHLimit, r.TPDLimit, r.TimePeriodRules, formats, r.CustomHeaders, r.KeyIDs, source)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?)
+	`, r.Alias, r.Model, r.Notes, r.Vendor, r.Series, r.ModelName, r.Version, r.Suffix, r.PlatformID, boolToInt(r.Enabled), boolToInt(r.Available), r.BaseCost, r.HighCost, r.RPMLimit, r.RPHLimit, r.RPDLimit, r.TPMLimit, r.TPHLimit, r.TPDLimit, r.TimePeriodRules, formats, r.CustomHeaders, source)
 
 	if err != nil {
 		return err
@@ -1229,6 +1297,14 @@ func (db *DB) CreateRAPI(r *models.RAPI) error {
 		return err
 	}
 	r.ID = id
+	// 绑定物化：KeyIDs 空 = 归属平台全部凭据（旧默认语义）；非空 = 白名单。
+	if err := syncBindingsTx(tx, id, r.PlatformID, r.KeyIDs); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	r.KeyIDs = db.derivedKeyIDs(id)
 	r.SupportedFormats = formats
 	r.Source = source
 	return nil
@@ -1238,26 +1314,46 @@ func (db *DB) UpdateRAPI(r *models.RAPI) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	_, err := db.conn.Exec(`
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// key_ids 不入列：它是 endpoint_credential 的派生投影，由 syncBindingsTx 重建。
+	_, err = tx.Exec(`
 		UPDATE rapi SET alias = ?, model = ?, notes = ?, vendor = ?, series = ?, model_name = ?, version = ?, suffix = ?, platform_id = ?, enabled = ?, available = ?,
-			base_cost = ?, high_cost = ?, rpm_limit = ?, rph_limit = ?, rpd_limit = ?, tpm_limit = ?, tph_limit = ?, tpd_limit = ?, time_period_rules = ?, supported_formats = ?, custom_headers = ?, key_ids = ?, source = ?, updated_at = CURRENT_TIMESTAMP
+			base_cost = ?, high_cost = ?, rpm_limit = ?, rph_limit = ?, rpd_limit = ?, tpm_limit = ?, tph_limit = ?, tpd_limit = ?, time_period_rules = ?, supported_formats = ?, custom_headers = ?, source = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?
 	`, r.Alias, r.Model, r.Notes, r.Vendor, r.Series, r.ModelName, r.Version, r.Suffix, r.PlatformID, boolToInt(r.Enabled), boolToInt(r.Available),
-		r.BaseCost, r.HighCost, r.RPMLimit, r.RPHLimit, r.RPDLimit, r.TPMLimit, r.TPHLimit, r.TPDLimit, r.TimePeriodRules, r.SupportedFormats, r.CustomHeaders, r.KeyIDs, r.Source, r.ID)
-
-	return err
+		r.BaseCost, r.HighCost, r.RPMLimit, r.RPHLimit, r.RPDLimit, r.TPMLimit, r.TPHLimit, r.TPDLimit, r.TimePeriodRules, r.SupportedFormats, r.CustomHeaders, r.Source, r.ID)
+	if err != nil {
+		return err
+	}
+	if err := syncBindingsTx(tx, r.ID, r.PlatformID, r.KeyIDs); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	r.KeyIDs = db.derivedKeyIDs(r.ID)
+	return nil
 }
 
-// RAPIAliasExists reports whether a rapi alias is already taken within a
-// platform. excludeID lets updates ignore the row itself (0 = no exclusion).
-func (db *DB) RAPIAliasExists(platformID int64, alias string, excludeID int64) (bool, error) {
+// RAPIModelExists 报告同平台（=同 base_url）下 model 是否已存在 —— 端点身份
+// 即 (base_url, model)，重复即冲突。model 为空不查（历史空 model 行不参与身份）。
+// excludeID 让更新路径忽略自身（0 = 不排除）。
+func (db *DB) RAPIModelExists(platformID int64, model string, excludeID int64) (bool, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
+	if strings.TrimSpace(model) == "" {
+		return false, nil
+	}
 	var cnt int
 	err := db.conn.QueryRow(
-		`SELECT COUNT(*) FROM rapi WHERE platform_id = ? AND LOWER(alias) = LOWER(?) AND id != ?`,
-		platformID, alias, excludeID,
+		`SELECT COUNT(*) FROM rapi WHERE platform_id = ? AND model = ? AND id != ?`,
+		platformID, model, excludeID,
 	).Scan(&cnt)
 	return cnt > 0, err
 }
@@ -1485,9 +1581,9 @@ func (db *DB) DeletePlatformCascade(id int64) error {
 	if _, err := tx.Exec("DELETE FROM rapi WHERE platform_id = ?", id); err != nil {
 		return fmt.Errorf("删除子模型失败: %w", err)
 	}
-	// Delete platform keys
-	if _, err := tx.Exec("DELETE FROM platform_keys WHERE platform_id = ?", id); err != nil {
-		return fmt.Errorf("删除平台密钥失败: %w", err)
+	// Delete platform credentials（绑定/封锁/令牌缓存由 FK ON DELETE CASCADE 清理）
+	if _, err := tx.Exec("DELETE FROM credential WHERE platform_id = ?", id); err != nil {
+		return fmt.Errorf("删除平台凭据失败: %w", err)
 	}
 	// Delete the platform itself
 	if _, err := tx.Exec("DELETE FROM platform WHERE id = ?", id); err != nil {
@@ -1795,442 +1891,6 @@ func expiresArg(t *time.Time) interface{} {
 		return nil
 	}
 	return *t
-}
-
-// GetPlatformKeys returns all keys for a platform, ordered by key_index.
-func (db *DB) GetPlatformKeys(platformID int64) ([]models.PlatformKey, error) {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
-
-	rows, err := db.conn.Query(`
-		SELECT id, platform_id, key_index, token, label, enabled,
-		       failure_type, failure_reason, failed_at, created_at, updated_at,
-		       expires_at, is_free
-		FROM platform_keys WHERE platform_id = ? ORDER BY key_index ASC
-	`, platformID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	keys := make([]models.PlatformKey, 0)
-	for rows.Next() {
-		var k models.PlatformKey
-		var encToken string
-		var enabled sql.NullInt64
-		var failedAt sql.NullTime
-		var expiresAt sql.NullTime
-		var created, updated sql.NullTime
-		var isFree int
-		if err := rows.Scan(&k.ID, &k.PlatformID, &k.KeyIndex, &encToken, &k.Label, &enabled,
-			&k.FailureType, &k.FailureReason, &failedAt, &created, &updated,
-			&expiresAt, &isFree); err != nil {
-			return nil, err
-		}
-		var decErr error
-		if k.Token, decErr = crypto.Decrypt(encToken); decErr != nil {
-			return nil, fmt.Errorf("decrypt platform_key %d: %w", k.ID, decErr)
-		}
-		k.Enabled = enabled.Int64 != 0
-		k.IsFree = isFree != 0
-		if failedAt.Valid {
-			k.FailedAt = &failedAt.Time
-		}
-		if expiresAt.Valid {
-			k.ExpiresAt = &expiresAt.Time
-		}
-		if created.Valid {
-			k.CreatedAt = created.Time
-		}
-		if updated.Valid {
-			k.UpdatedAt = updated.Time
-		}
-		keys = append(keys, k)
-	}
-	return keys, nil
-}
-
-// GetAllPlatformKeys returns every platform key across all platforms.
-// Used by insights/health aggregation to avoid N+1 per-platform queries.
-func (db *DB) GetAllPlatformKeys() ([]models.PlatformKey, error) {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
-
-	rows, err := db.conn.Query(`
-		SELECT id, platform_id, key_index, token, label, enabled,
-		       failure_type, failure_reason, failed_at, created_at, updated_at,
-		       expires_at, is_free
-		FROM platform_keys ORDER BY platform_id ASC, key_index ASC
-	`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	keys := make([]models.PlatformKey, 0)
-	for rows.Next() {
-		var k models.PlatformKey
-		var encToken string
-		var enabled sql.NullInt64
-		var failedAt sql.NullTime
-		var expiresAt sql.NullTime
-		var created, updated sql.NullTime
-		var isFree int
-		if err := rows.Scan(&k.ID, &k.PlatformID, &k.KeyIndex, &encToken, &k.Label, &enabled,
-			&k.FailureType, &k.FailureReason, &failedAt, &created, &updated,
-			&expiresAt, &isFree); err != nil {
-			return nil, err
-		}
-		var decErr error
-		if k.Token, decErr = crypto.Decrypt(encToken); decErr != nil {
-			return nil, fmt.Errorf("decrypt platform_key %d: %w", k.ID, decErr)
-		}
-		k.Enabled = enabled.Int64 != 0
-		k.IsFree = isFree != 0
-		if failedAt.Valid {
-			k.FailedAt = &failedAt.Time
-		}
-		if expiresAt.Valid {
-			k.ExpiresAt = &expiresAt.Time
-		}
-		if created.Valid {
-			k.CreatedAt = created.Time
-		}
-		if updated.Valid {
-			k.UpdatedAt = updated.Time
-		}
-		keys = append(keys, k)
-	}
-	return keys, nil
-}
-
-// EnsureDynamicPlatformKey guarantees that a platform_keys row with key_index=0 exists
-// for the given platform. Used by API-push dynamic platforms which have no static keys.
-// Returns the key ID of the upserted row.
-func (db *DB) EnsureDynamicPlatformKey(platformID int64) (int64, error) {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
-	_, err := db.conn.Exec(`
-		INSERT INTO platform_keys (platform_id, key_index, token, label, enabled)
-		VALUES (?, 0, '', 'dynamic', 1)
-		ON CONFLICT(platform_id, key_index) DO NOTHING
-	`, platformID)
-	if err != nil {
-		return 0, fmt.Errorf("ensure dynamic platform key failed: %w", err)
-	}
-
-	var keyID int64
-	err = db.conn.QueryRow(
-		"SELECT id FROM platform_keys WHERE platform_id = ? AND key_index = 0", platformID,
-	).Scan(&keyID)
-	return keyID, err
-}
-
-// SetPlatformKeys replaces all keys for a platform with the provided list.
-// key_index values are assigned sequentially (0, 1, 2, …) in the given order.
-func (db *DB) SetPlatformKeys(platformID int64, keys []models.PlatformKey) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
-	tx, err := db.conn.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	_, err = tx.Exec("DELETE FROM platform_keys WHERE platform_id = ?", platformID)
-	if err != nil {
-		return err
-	}
-
-	for i, k := range keys {
-		encToken, encErr := crypto.Encrypt(k.Token)
-		if encErr != nil {
-			return fmt.Errorf("encrypt key %d: %w", i, encErr)
-		}
-		var expiresAt interface{}
-		if k.ExpiresAt != nil && !k.ExpiresAt.IsZero() {
-			expiresAt = k.ExpiresAt
-		}
-		// Preserve the caller-provided id when present (whole-list replace from the
-		// platform edit form keeps existing key ids so RAPI key_ids whitelists stay
-		// valid). id=0 lets SQLite auto-assign.
-		if k.ID > 0 {
-			_, err = tx.Exec(`
-				INSERT INTO platform_keys (id, platform_id, key_index, token, label, enabled, expires_at, is_free, failure_type, failure_reason, failed_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			`, k.ID, platformID, i, encToken, k.Label, boolToInt(k.Enabled), expiresAt, boolToInt(k.IsFree), k.FailureType, k.FailureReason, expiresArg(k.FailedAt))
-		} else {
-			_, err = tx.Exec(`
-				INSERT INTO platform_keys (platform_id, key_index, token, label, enabled, expires_at, is_free, failure_type, failure_reason, failed_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			`, platformID, i, encToken, k.Label, boolToInt(k.Enabled), expiresAt, boolToInt(k.IsFree), k.FailureType, k.FailureReason, expiresArg(k.FailedAt))
-		}
-		if err != nil {
-			return err
-		}
-	}
-
-	return tx.Commit()
-}
-
-// AddPlatformKey appends a new key to a platform (key_index = max+1).
-func (db *DB) AddPlatformKey(k *models.PlatformKey) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
-	encToken, err := crypto.Encrypt(k.Token)
-	if err != nil {
-		return fmt.Errorf("encrypt token: %w", err)
-	}
-
-	var maxIdx int
-	db.conn.QueryRow("SELECT COALESCE(MAX(key_index), -1) FROM platform_keys WHERE platform_id = ?", k.PlatformID).Scan(&maxIdx)
-	k.KeyIndex = maxIdx + 1
-
-	result, err := db.conn.Exec(`
-		INSERT INTO platform_keys (platform_id, key_index, token, label, enabled, expires_at, is_free)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, k.PlatformID, k.KeyIndex, encToken, k.Label, boolToInt(k.Enabled), expiresArg(k.ExpiresAt), boolToInt(k.IsFree))
-	if err != nil {
-		return err
-	}
-	id, _ := result.LastInsertId()
-	k.ID = id
-	return nil
-}
-
-// UpdatePlatformKey updates token/label/enabled for an existing key.
-func (db *DB) UpdatePlatformKey(k *models.PlatformKey) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
-	encToken, err := crypto.Encrypt(k.Token)
-	if err != nil {
-		return fmt.Errorf("encrypt token: %w", err)
-	}
-
-	_, err = db.conn.Exec(`
-		UPDATE platform_keys
-		SET token = ?, label = ?, enabled = ?, expires_at = ?, is_free = ?, updated_at = CURRENT_TIMESTAMP
-		WHERE id = ?
-	`, encToken, k.Label, boolToInt(k.Enabled), expiresArg(k.ExpiresAt), boolToInt(k.IsFree), k.ID)
-	return err
-}
-
-// DisablePlatformKey sets enabled=false for a single key (auth failure, e.g. 401).
-func (db *DB) DisablePlatformKey(keyID int64) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	_, err := db.conn.Exec(`
-		UPDATE platform_keys SET enabled = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-	`, keyID)
-	return err
-}
-
-// MarkKeyPermanentFailure sets failure_type=2 with reason and timestamp.
-// Used for 401/402/403/409/423/451 — key is permanently failed, needs user action.
-// Does NOT touch enabled (decoupled from user intent).
-func (db *DB) MarkKeyPermanentFailure(keyID int64, reason string) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	_, err := db.conn.Exec(`
-		UPDATE platform_keys
-		SET failure_type = 2, failure_reason = ?, failed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-		WHERE id = ?
-	`, reason, keyID)
-	return err
-}
-
-// MarkKeyTemporaryFailure sets failure_type=1 with reason and timestamp.
-// Used for 429/5xx/timeout — key is temporarily failing, auto-recovering.
-func (db *DB) MarkKeyTemporaryFailure(keyID int64, reason string) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	_, err := db.conn.Exec(`
-		UPDATE platform_keys
-		SET failure_type = 1, failure_reason = ?, failed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-		WHERE id = ?
-	`, reason, keyID)
-	return err
-}
-
-// ClearKeyFailure resets failure_type=0, reason=”, failed_at=NULL.
-// Called on successful request, or after successful probe.
-func (db *DB) ClearKeyFailure(keyID int64) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	_, err := db.conn.Exec(`
-		UPDATE platform_keys
-		SET failure_type = 0, failure_reason = '', failed_at = NULL, updated_at = CURRENT_TIMESTAMP
-		WHERE id = ?
-	`, keyID)
-	return err
-}
-
-// DeletePlatformKey removes a single key and re-sequences remaining keys.
-// DetachKeyFromRAPIs removes keyID from every RAPI key_ids whitelist and
-// returns the alias of each affected model. Unknown ids are a no-op. Called on
-// key deletion so whitelists never keep dangling references (a dead id would
-// silently shrink a model's key pool and could leave it without any key).
-func (db *DB) DetachKeyFromRAPIs(keyID int64) ([]string, error) {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
-	rows, err := db.conn.Query(`SELECT id, alias, key_ids FROM rapi WHERE key_ids != ''`)
-	if err != nil {
-		return nil, err
-	}
-	type rapiRef struct {
-		id     int64
-		alias  string
-		keyIDs string
-	}
-	var refs []rapiRef
-	for rows.Next() {
-		var r rapiRef
-		if err := rows.Scan(&r.id, &r.alias, &r.keyIDs); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		refs = append(refs, r)
-	}
-	rows.Close()
-
-	target := fmt.Sprintf("%d", keyID)
-	var affected []string
-	for _, r := range refs {
-		parts := strings.Split(r.keyIDs, ",")
-		kept := make([]string, 0, len(parts))
-		removed := false
-		for _, p := range parts {
-			p = strings.TrimSpace(p)
-			if p == "" {
-				continue
-			}
-			if p == target {
-				removed = true
-				continue
-			}
-			kept = append(kept, p)
-		}
-		if !removed {
-			continue
-		}
-		if _, err := db.conn.Exec(`UPDATE rapi SET key_ids = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, strings.Join(kept, ","), r.id); err != nil {
-			return affected, err
-		}
-		affected = append(affected, r.alias)
-	}
-	return affected, nil
-}
-
-func (db *DB) DeletePlatformKey(keyID int64) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
-	tx, err := db.conn.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	var platformID int64
-	if err := tx.QueryRow("SELECT platform_id FROM platform_keys WHERE id = ?", keyID).Scan(&platformID); err != nil {
-		return err
-	}
-	if _, err := tx.Exec("DELETE FROM platform_keys WHERE id = ?", keyID); err != nil {
-		return err
-	}
-	// Re-sequence key_index values to keep them contiguous.
-	rows, err := tx.Query("SELECT id FROM platform_keys WHERE platform_id = ? ORDER BY key_index ASC", platformID)
-	if err != nil {
-		return err
-	}
-	var ids []int64
-	for rows.Next() {
-		var id int64
-		rows.Scan(&id)
-		ids = append(ids, id)
-	}
-	rows.Close()
-	for i, id := range ids {
-		if _, err := tx.Exec("UPDATE platform_keys SET key_index = ? WHERE id = ?", i, id); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
-}
-
-// ============ Token Cache (legacy / unused at runtime) ============
-//
-// NOTE: These accessors are retained for backward compatibility but are NOT
-// called by any runtime code path. The "dynamic token / browser-extension
-// push" feature described in older READMEs is not implemented: token_cache
-// rows are only ever written by these accessors (exercised solely by tests).
-// The table itself and its migrations are kept to avoid touching the DB
-// schema. Safe to remove together with the feature if it is reintroduced.
-
-func (db *DB) GetCachedTokenForKey(platformKeyID int64) (string, error) {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
-
-	var encToken string
-	var expiresAt sql.NullTime
-
-	err := db.conn.QueryRow("SELECT token, expires_at FROM token_cache WHERE platform_key_id = ?", platformKeyID).Scan(&encToken, &expiresAt)
-	if err != nil {
-		return "", err
-	}
-
-	if expiresAt.Valid && time.Now().After(expiresAt.Time) {
-		return "", sql.ErrNoRows
-	}
-
-	return crypto.Decrypt(encToken)
-}
-
-func (db *DB) SetCachedTokenForKey(platformKeyID int64, token string, ttl time.Duration) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
-	encToken, err := crypto.Encrypt(token)
-	if err != nil {
-		return fmt.Errorf("encrypt cached token: %w", err)
-	}
-
-	expiresAt := time.Now().Add(ttl)
-	_, err = db.conn.Exec(`
-		INSERT OR REPLACE INTO token_cache (platform_key_id, token, expires_at, fetched_at)
-		VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-	`, platformKeyID, encToken, expiresAt)
-
-	return err
-}
-
-// GetCachedToken is kept for backward compatibility; it delegates to the first key of the platform.
-func (db *DB) GetCachedToken(platformID int64) (string, error) {
-	db.mu.RLock()
-	var keyID int64
-	err := db.conn.QueryRow("SELECT id FROM platform_keys WHERE platform_id = ? AND key_index = 0", platformID).Scan(&keyID)
-	db.mu.RUnlock()
-	if err != nil {
-		return "", err
-	}
-	return db.GetCachedTokenForKey(keyID)
-}
-
-// SetCachedToken is kept for backward compatibility; it sets the cache for the first key.
-func (db *DB) SetCachedToken(platformID int64, token string, ttl time.Duration) error {
-	db.mu.RLock()
-	var keyID int64
-	err := db.conn.QueryRow("SELECT id FROM platform_keys WHERE platform_id = ? AND key_index = 0", platformID).Scan(&keyID)
-	db.mu.RUnlock()
-	if err != nil {
-		return err
-	}
-	return db.SetCachedTokenForKey(keyID, token, ttl)
 }
 
 // ============ Metrics Operations ============
@@ -2662,26 +2322,6 @@ func (db *DB) migrateAddPlatformKeyExpiryColumns() {
 	addIfMissing("is_free", `ALTER TABLE platform_keys ADD COLUMN is_free INTEGER NOT NULL DEFAULT 0`)
 }
 
-// DisableExpiredKeys sets enabled=0 on every platform key whose ExpiresAt has
-// passed. Returns the number of keys disabled. Called at startup; also safe to
-// invoke manually (e.g. from admin endpoints). Idempotent for already-disabled keys.
-func (db *DB) DisableExpiredKeys() (int64, error) {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	res, err := db.conn.Exec(`
-		UPDATE platform_keys
-		SET enabled = 0, updated_at = CURRENT_TIMESTAMP
-		WHERE enabled = 1
-		  AND expires_at IS NOT NULL
-		  AND expires_at < CURRENT_TIMESTAMP
-	`)
-	if err != nil {
-		return 0, err
-	}
-	n, _ := res.RowsAffected()
-	return n, nil
-}
-
 func (db *DB) migrateAddLAPINotesColumn() {
 	var count int
 	row := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('lapi') WHERE name='notes'`)
@@ -2743,6 +2383,14 @@ func (db *DB) migrateUnifiedModelNaming() {
 func (db *DB) migrateRAPIUniqueAliasToPerPlatform() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
+
+	// 自然键终态（credential 已存在）：rapi.alias 已降级为显示名，身份唯一性由
+	// idx_rapi_platform_model 承担。若继续执行本迁移，会在每次启动时把
+	// UNIQUE(platform_id, alias) 加回来，随后被 migrateNaturalKeys 的表重建拆掉，
+	// 形成"每次启动重建一次 rapi 表"的无谓抖动。
+	if tableExists(db.conn, "credential") {
+		return nil
+	}
 
 	// Check whether the per-platform index already exists.
 	var cnt int
@@ -2830,12 +2478,45 @@ func (db *DB) migrateRAPIUniqueAliasToPerPlatform() error {
 	return tx.Commit()
 }
 
-// migrateEncryptTokens encrypts all existing plaintext tokens in platform_keys and platform
-// tables using AES-256-GCM. Rows that already carry the "enc:" prefix are skipped.
+// migrateEncryptTokens encrypts all existing plaintext tokens in the credential
+// (or, pre-natural-key, platform_keys), platform and token_cache tables using
+// AES-256-GCM. Rows that are empty or already carry the "enc:" prefix are skipped.
+//
+// 该迁移必须对表结构演进免疫：token_cache 的主键列在自然键迁移前是
+// platform_key_id、迁移后是 credential_id；platform_keys 在自然键终态下已被
+// DROP。早期版本写死列名/表名，导致已迁移完成的库每次启动都报
+// "no such column: platform_key_id" 而无法启动。现在按实际存在的表与列处理。
+//
 // This migration is idempotent.
 func (db *DB) migrateEncryptTokens() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
+
+	// token_cache 主键列名随 schema 演进（platform_key_id → credential_id）。
+	cachePK := "platform_key_id"
+	if columnExists(db.conn, "token_cache", "credential_id") {
+		cachePK = "credential_id"
+	}
+
+	// (表名, 主键列)：仅在表存在时处理。platform_keys 与 credential 是同一
+	// 语义的前后两代表，自然键迁移后只有后者存在。
+	//
+	// 注意：这些探测必须在 Begin 之前完成。连接池被限制为单连接
+	// （SetMaxOpenConns(1)），事务会独占该连接，此时再用 db.conn 查询会永久
+	// 阻塞（死锁）。
+	type tokenTable struct{ table, pk string }
+	var targets []tokenTable
+	for _, t := range []tokenTable{
+		{"platform_keys", "id"},
+		{"credential", "id"},
+		{"token_cache", cachePK},
+	} {
+		// 表存在还不够：中途迁移/手工恢复可能留下未知列形态。逐项验证
+		// 固定字面量主键列存在，未知形态安全跳过而不是让启动因 no such column 退出。
+		if tableExists(db.conn, t.table) && columnExists(db.conn, t.table, t.pk) {
+			targets = append(targets, t)
+		}
+	}
 
 	tx, err := db.conn.Begin()
 	if err != nil {
@@ -2843,36 +2524,9 @@ func (db *DB) migrateEncryptTokens() error {
 	}
 	defer tx.Rollback()
 
-	// Encrypt platform_keys.token
-	rows, err := tx.Query(`SELECT id, token FROM platform_keys`)
-	if err != nil {
-		return err
-	}
-	type tokenRow struct {
-		id    int64
-		token string
-	}
-	var keyRows []tokenRow
-	for rows.Next() {
-		var r tokenRow
-		if err := rows.Scan(&r.id, &r.token); err != nil {
-			rows.Close()
+	for _, t := range targets {
+		if err := encryptTokenColumn(tx, t.table, t.pk); err != nil {
 			return err
-		}
-		keyRows = append(keyRows, r)
-	}
-	rows.Close()
-
-	for _, r := range keyRows {
-		if strings.HasPrefix(r.token, "enc:") {
-			continue // Already encrypted.
-		}
-		enc, err := crypto.Encrypt(r.token)
-		if err != nil {
-			return fmt.Errorf("encrypt platform_keys id=%d: %w", r.id, err)
-		}
-		if _, err = tx.Exec(`UPDATE platform_keys SET token = ? WHERE id = ?`, enc, r.id); err != nil {
-			return fmt.Errorf("update platform_keys id=%d: %w", r.id, err)
 		}
 	}
 
@@ -2880,6 +2534,10 @@ func (db *DB) migrateEncryptTokens() error {
 	platRows2, err := tx.Query(`SELECT id, token FROM platform`)
 	if err != nil {
 		return err
+	}
+	type tokenRow struct {
+		id    int64
+		token string
 	}
 	var platRows []tokenRow
 	for platRows2.Next() {
@@ -2905,40 +2563,47 @@ func (db *DB) migrateEncryptTokens() error {
 		}
 	}
 
-	// Encrypt token_cache.token
-	cacheRows2, err := tx.Query(`SELECT platform_key_id, token FROM token_cache`)
+	return tx.Commit()
+}
+
+// encryptTokenColumn 把 table.pkCol/token 中尚未加密的明文令牌就地加密。
+// table 与 pkCol 只来自 migrateEncryptTokens 内的固定字面量集合，不接受外部输入。
+func encryptTokenColumn(tx *sql.Tx, table, pkCol string) error {
+	rows, err := tx.Query(fmt.Sprintf(`SELECT %s, token FROM %s`, pkCol, table))
 	if err != nil {
-		return err
+		return fmt.Errorf("scan %s: %w", table, err)
 	}
-	type cacheRow struct {
-		keyID int64
+	type tokenRow struct {
+		id    int64
 		token string
 	}
-	var cacheRows []cacheRow
-	for cacheRows2.Next() {
-		var r cacheRow
-		if err := cacheRows2.Scan(&r.keyID, &r.token); err != nil {
-			cacheRows2.Close()
-			return err
+	var all []tokenRow
+	for rows.Next() {
+		var r tokenRow
+		if err := rows.Scan(&r.id, &r.token); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan %s: %w", table, err)
 		}
-		cacheRows = append(cacheRows, r)
+		all = append(all, r)
 	}
-	cacheRows2.Close()
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("scan %s: %w", table, err)
+	}
 
-	for _, r := range cacheRows {
+	for _, r := range all {
 		if r.token == "" || strings.HasPrefix(r.token, "enc:") {
-			continue
+			continue // 空值或已加密，跳过。
 		}
 		enc, err := crypto.Encrypt(r.token)
 		if err != nil {
-			return fmt.Errorf("encrypt token_cache key_id=%d: %w", r.keyID, err)
+			return fmt.Errorf("encrypt %s id=%d: %w", table, r.id, err)
 		}
-		if _, err = tx.Exec(`UPDATE token_cache SET token = ? WHERE platform_key_id = ?`, enc, r.keyID); err != nil {
-			return fmt.Errorf("update token_cache key_id=%d: %w", r.keyID, err)
+		if _, err = tx.Exec(fmt.Sprintf(`UPDATE %s SET token = ? WHERE %s = ?`, table, pkCol), enc, r.id); err != nil {
+			return fmt.Errorf("update %s id=%d: %w", table, r.id, err)
 		}
 	}
-
-	return tx.Commit()
+	return nil
 }
 
 // migrateAddSortOrderColumns adds sort_order column to platform, rapi and lapi tables if missing,
@@ -3018,84 +2683,6 @@ func (db *DB) SetLAPISortOrder(ids []int64) error {
 	for i, id := range ids {
 		if _, err := tx.Exec(`UPDATE lapi SET sort_order = ? WHERE id = ?`, i, id); err != nil {
 			return err
-		}
-	}
-	return tx.Commit()
-}
-
-// ReorderKeysByGlobalOrder persists the given global key order by re-deriving each
-// platform's key_index from the positions of its keys in ids. Keys not listed keep
-// their relative order after the listed ones. key_index is renumbered per platform
-// in two phases (offset by +100000, then final 0..n) because the UNIQUE(platform_id,
-// key_index) constraint would otherwise fail on transient collisions mid-update.
-func (db *DB) ReorderKeysByGlobalOrder(ids []int64) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
-	tx, err := db.conn.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	// Current per-platform order (id ASC position) as the fallback tail.
-	rows, err := tx.Query(`SELECT id, platform_id FROM platform_keys ORDER BY platform_id ASC, key_index ASC`)
-	if err != nil {
-		return err
-	}
-	type keyRef struct {
-		id         int64
-		platformID int64
-	}
-	var all []keyRef
-	platformOf := make(map[int64]int64)
-	for rows.Next() {
-		var kr keyRef
-		if err := rows.Scan(&kr.id, &kr.platformID); err != nil {
-			rows.Close()
-			return err
-		}
-		all = append(all, kr)
-		platformOf[kr.id] = kr.platformID
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return err
-	}
-
-	posInReq := make(map[int64]int, len(ids))
-	for i, id := range ids {
-		posInReq[id] = i
-	}
-	// Final per-platform id sequences: requested ids first (in request order),
-	// then any remaining ids in their current order.
-	perPlatform := make(map[int64][]int64)
-	for _, id := range ids {
-		pid, ok := platformOf[id]
-		if !ok {
-			continue // unknown id — ignore
-		}
-		perPlatform[pid] = append(perPlatform[pid], id)
-	}
-	for _, kr := range all {
-		if _, listed := posInReq[kr.id]; listed {
-			continue
-		}
-		perPlatform[kr.platformID] = append(perPlatform[kr.platformID], kr.id)
-	}
-
-	// Phase 1: move every key_index out of the way.
-	for _, kr := range all {
-		if _, err := tx.Exec(`UPDATE platform_keys SET key_index = key_index + 100000 WHERE id = ?`, kr.id); err != nil {
-			return err
-		}
-	}
-	// Phase 2: write final contiguous indices.
-	for _, seq := range perPlatform {
-		for i, id := range seq {
-			if _, err := tx.Exec(`UPDATE platform_keys SET key_index = ? WHERE id = ?`, i, id); err != nil {
-				return err
-			}
 		}
 	}
 	return tx.Commit()

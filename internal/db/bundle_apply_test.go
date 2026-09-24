@@ -91,12 +91,12 @@ func TestApplyBundle_InsertUpdateDelete(t *testing.T) {
 		t.Fatalf("platform token decrypt = %q, want sk-aaa", dec)
 	}
 
-	// rapi.key_ids：bundle 里是 key_index "0" → 应解析成本地 platform_keys.id
+	// rapi.key_ids：bundle 里是 key_index "0" → 应解析成本地 credential.id
 	var keyIDs string
 	if err := db.conn.QueryRow(`SELECT key_ids FROM rapi WHERE alias=?`, "gpt-4").Scan(&keyIDs); err != nil {
 		t.Fatalf("read rapi key_ids: %v", err)
 	}
-	if keyIDs != "1" { // 第一条 platform_keys 的自增 id = 1
+	if keyIDs != "1" { // 第一条 credential 的自增 id = 1
 		t.Fatalf("rapi key_ids = %q, want \"1\" (resolved local id)", keyIDs)
 	}
 
@@ -120,8 +120,8 @@ func TestApplyBundle_InsertUpdateDelete(t *testing.T) {
 		t.Fatalf("apply v2: %v", err)
 	}
 
-	if n := countRows(t, db.conn, `SELECT count(*) FROM platform_keys`); n != 0 {
-		t.Fatalf("after v2, platform_keys count = %d, want 0 (cascade)", n)
+	if n := countRows(t, db.conn, `SELECT count(*) FROM credential`); n != 0 {
+		t.Fatalf("after v2, credential count = %d, want 0 (stale key deleted)", n)
 	}
 	if n := countRows(t, db.conn, `SELECT count(*) FROM rapi`); n != 0 {
 		t.Fatalf("after v2, rapi count = %d, want 0", n)
@@ -173,8 +173,8 @@ func TestApplyBundle_IdempotentReapply(t *testing.T) {
 	if n := countRows(t, db.conn, `SELECT count(*) FROM platform WHERE name=?`, "p1"); n != 1 {
 		t.Fatalf("platform count after re-apply = %d, want 1", n)
 	}
-	if n := countRows(t, db.conn, `SELECT count(*) FROM platform_keys`); n != 1 {
-		t.Fatalf("platform_keys count after re-apply = %d, want 1", n)
+	if n := countRows(t, db.conn, `SELECT count(*) FROM credential`); n != 1 {
+		t.Fatalf("credential count after re-apply = %d, want 1", n)
 	}
 }
 

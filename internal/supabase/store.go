@@ -711,9 +711,14 @@ func (s *Store) UpdateRAPIHeaders(id int64, headersJSON string) error {
 	return nil
 }
 
-func (s *Store) RAPIAliasExists(platformID int64, alias string, excludeID int64) (bool, error) {
+// RAPIModelExists 报告同平台（=同 base_url）下 model 是否已存在 —— 端点身份
+// 即 (base_url, model)，重复即冲突。model 为空不查（空 model 行不参与身份）。
+func (s *Store) RAPIModelExists(platformID int64, model string, excludeID int64) (bool, error) {
+	if strings.TrimSpace(model) == "" {
+		return false, nil
+	}
 	q := "select=id&platform_id=eq." + strconv.FormatInt(platformID, 10) +
-		"&alias=eq." + url.QueryEscape(alias)
+		"&model=eq." + url.QueryEscape(model)
 	if excludeID > 0 {
 		q += "&id=neq." + strconv.FormatInt(excludeID, 10)
 	}

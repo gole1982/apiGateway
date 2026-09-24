@@ -70,7 +70,8 @@ func (db *DB) GetSyncState() (SyncState, error) {
 //   - bundle 的 token / login_password 是 center_key 密文：解出明文后用本地
 //     ~/.apiGateway.key 重新加密入库（与本地录入同路，热路径零改动）。
 //   - rapi.key_ids 是"平台内 key_index CSV"（跨实例业务键）：解析回本地
-//     platform_keys.id CSV 存储，本地消费方无需改动。
+//     credential.id 后经 syncBindingsTx 物化为 endpoint_credential 绑定并
+//     重建派生 key_ids 列，本地消费方无需改动。
 //   - 全部成功才 COMMIT 并写 sync_state（current=last_good=env.Version）；
 //     任何一步失败整体 rollback、保留 last_good（fail-open 由调用方保证）。
 //
@@ -185,8 +186,9 @@ func (db *DB) ApplyBundle(env *bundle.Envelope, centerKey []byte, sourceURL stri
 		}
 	}
 
-	// ---- 2. platform_keys：按 (platform_id, key_index) upsert ----
-	// 业务键统一用包级 keyRef（见文件末定义），与 resolveKeyIDs 共用同一类型。
+	// ---- 2. credential：按 (platform_id, sort_order) upsert ----
+	// bundle 业务键仍是 (platform_name, key_index)；本地落到 credential.sort_order，
+	// 行 id 即 credential.id（下游 resolveKeyIDs / 绑定同步共用）。
 	keyLocalID := make(map[keyRef]int64, len(b.PlatformKeys))
 	keySeen := make(map[keyRef]struct{}, len(b.PlatformKeys))
 	for _, k := range b.PlatformKeys {
@@ -194,50 +196,51 @@ func (db *DB) ApplyBundle(env *bundle.Envelope, centerKey []byte, sourceURL stri
 		if !ok {
 			return fmt.Errorf("platform_key: platform %q missing (validate should have caught)", k.PlatformName)
 		}
-		encToken, err := reencrypt(k.Token, centerKey)
+		encToken, plainToken, err := reencryptPlain(k.Token, centerKey)
 		if err != nil {
 			return fmt.Errorf("platform %q key %d token: %w", k.PlatformName, k.KeyIndex, err)
 		}
+		hashArg := tokenHashArg(plainToken)
 		bk := keyRef{k.PlatformName, k.KeyIndex}
 
 		var id int64
-		err = tx.QueryRow(`SELECT id FROM platform_keys WHERE platform_id=? AND key_index=?`, pid, k.KeyIndex).Scan(&id)
+		err = tx.QueryRow(`SELECT id FROM credential WHERE platform_id=? AND sort_order=?`, pid, k.KeyIndex).Scan(&id)
 		switch {
 		case err == nil:
-			if _, err = tx.Exec(`UPDATE platform_keys SET
-					token=?, label=?, enabled=?,
+			if _, err = tx.Exec(`UPDATE credential SET
+					token=?, token_hash=?, label=?, enabled=?,
 					failure_type=0, failure_reason='', failed_at=NULL,
 					expires_at=?, is_free=?, updated_at=?
 				WHERE id=?`,
-				encToken, k.Label, b2i(k.Enabled),
+				encToken, hashArg, k.Label, b2i(k.Enabled),
 				k.ExpiresAt, b2i(k.IsFree), now, id); err != nil {
-				return fmt.Errorf("update platform_key (%s,%d): %w", k.PlatformName, k.KeyIndex, err)
+				return wrapCredErr(fmt.Errorf("update credential (%s,%d): %w", k.PlatformName, k.KeyIndex, err))
 			}
 		case errors.Is(err, sql.ErrNoRows):
-			res, err := tx.Exec(`INSERT INTO platform_keys
-					(platform_id, key_index, token, label, enabled,
-					 failure_type, failure_reason, failed_at, expires_at, is_free,
-					 created_at, updated_at)
-				VALUES (?,?,?,?,?, 0,'',NULL,?,?, ?,?)`,
-				pid, k.KeyIndex, encToken, k.Label, b2i(k.Enabled),
+			res, err := tx.Exec(`INSERT INTO credential
+					(platform_id, sort_order, token_hash, token, label, enabled,
+					 expires_at, is_free, created_at, updated_at)
+				VALUES (?,?,?,?,?,?, ?,?,?,?)`,
+				pid, k.KeyIndex, hashArg, encToken, k.Label, b2i(k.Enabled),
 				k.ExpiresAt, b2i(k.IsFree), now, now)
 			if err != nil {
-				return fmt.Errorf("insert platform_key (%s,%d): %w", k.PlatformName, k.KeyIndex, err)
+				return wrapCredErr(fmt.Errorf("insert credential (%s,%d): %w", k.PlatformName, k.KeyIndex, err))
 			}
 			if id, err = res.LastInsertId(); err != nil {
-				return fmt.Errorf("insert platform_key (%s,%d): last id: %w", k.PlatformName, k.KeyIndex, err)
+				return fmt.Errorf("insert credential (%s,%d): last id: %w", k.PlatformName, k.KeyIndex, err)
 			}
 		default:
-			return fmt.Errorf("lookup platform_key (%s,%d): %w", k.PlatformName, k.KeyIndex, err)
+			return fmt.Errorf("lookup credential (%s,%d): %w", k.PlatformName, k.KeyIndex, err)
 		}
 		keyLocalID[bk] = id
 		keySeen[bk] = struct{}{}
 	}
 
-	// 删除中心已不存在的 key（仅限仍存在的平台下的多余 key）
-	rows, err = tx.Query(`SELECT k.id, k.platform_id, k.key_index FROM platform_keys k`)
+	// 删除中心已不存在的 key（仅限仍存在的平台下的多余 key；FK 级联清绑定/缓存，
+	// 幸存 rapi 的派生 key_ids 由第 3 步 syncBindingsTx 重建）
+	rows, err = tx.Query(`SELECT k.id, k.platform_id, k.sort_order FROM credential k`)
 	if err != nil {
-		return fmt.Errorf("scan platform_keys: %w", err)
+		return fmt.Errorf("scan credentials: %w", err)
 	}
 	var staleKeys []int64
 	for rows.Next() {
@@ -247,7 +250,7 @@ func (db *DB) ApplyBundle(env *bundle.Envelope, centerKey []byte, sourceURL stri
 		)
 		if err = rows.Scan(&id, &pid, &idx); err != nil {
 			rows.Close()
-			return fmt.Errorf("scan platform_keys: %w", err)
+			return fmt.Errorf("scan credentials: %w", err)
 		}
 		if _, keep := keySeen[keyRef{id2Name[pid], idx}]; !keep {
 			staleKeys = append(staleKeys, id)
@@ -255,12 +258,14 @@ func (db *DB) ApplyBundle(env *bundle.Envelope, centerKey []byte, sourceURL stri
 	}
 	rows.Close()
 	for _, id := range staleKeys {
-		if _, err = tx.Exec(`DELETE FROM platform_keys WHERE id=?`, id); err != nil {
-			return fmt.Errorf("delete stale platform_key %d: %w", id, err)
+		if _, err = tx.Exec(`DELETE FROM credential WHERE id=?`, id); err != nil {
+			return fmt.Errorf("delete stale credential %d: %w", id, err)
 		}
 	}
 
 	// ---- 3. rapi：按 (platform_id, alias) upsert；key_ids 业务键解析回本地 id ----
+	// key_ids 是 endpoint_credential 的派生投影：不直写，upsert 后用 syncBindingsTx
+	// 重建绑定集合并由它刷新派生列。
 	type rapiBK struct {
 		plat, alias string
 	}
@@ -284,19 +289,19 @@ func (db *DB) ApplyBundle(env *bundle.Envelope, centerKey []byte, sourceURL stri
 					base_cost=?, high_cost=?,
 					rpm_limit=?, rph_limit=?, rpd_limit=?, tpm_limit=?, tph_limit=?, tpd_limit=?,
 					time_period_rules=?, supported_formats=?, custom_headers=?,
-					key_ids=?, source=?, series=?, model_name=?, version=?, vendor=?, suffix=?,
+					source=?, series=?, model_name=?, version=?, vendor=?, suffix=?,
 					notes=?, sort_order=?, updated_at=?
 				WHERE id=?`,
 				r.Model, b2i(r.Enabled),
 				r.BaseCost, r.HighCost,
 				r.RPMLimit, r.RPHLimit, r.RPDLimit, r.TPMLimit, r.TPHLimit, r.TPDLimit,
 				r.TimePeriodRules, r.SupportedFormats, r.CustomHeaders,
-				localKeyIDs, r.Source, r.Series, r.ModelName, r.Version, r.Vendor, r.Suffix,
+				r.Source, r.Series, r.ModelName, r.Version, r.Vendor, r.Suffix,
 				r.Notes, r.SortOrder, now, id); err != nil {
 				return fmt.Errorf("update rapi (%s,%s): %w", r.PlatformName, r.Alias, err)
 			}
 		case errors.Is(err, sql.ErrNoRows):
-			if _, err = tx.Exec(`INSERT INTO rapi
+			res, err := tx.Exec(`INSERT INTO rapi
 						(alias, model, platform_id, enabled, available, unavailable_reason,
 						 base_cost, high_cost,
 						 rpm_limit, rph_limit, rpd_limit, tpm_limit, tph_limit, tpd_limit,
@@ -316,11 +321,19 @@ func (db *DB) ApplyBundle(env *bundle.Envelope, centerKey []byte, sourceURL stri
 				r.RPMLimit, r.RPHLimit, r.RPDLimit, r.TPMLimit, r.TPHLimit, r.TPDLimit,
 				r.TimePeriodRules, r.SupportedFormats, r.CustomHeaders, localKeyIDs, r.Source,
 				r.Series, r.ModelName, r.Version, r.Vendor, r.Suffix, r.Notes, r.SortOrder,
-				now, now); err != nil {
+				now, now)
+			if err != nil {
 				return fmt.Errorf("insert rapi (%s,%s): %w", r.PlatformName, r.Alias, err)
+			}
+			if id, err = res.LastInsertId(); err != nil {
+				return fmt.Errorf("insert rapi (%s,%s): last id: %w", r.PlatformName, r.Alias, err)
 			}
 		default:
 			return fmt.Errorf("lookup rapi (%s,%s): %w", r.PlatformName, r.Alias, err)
+		}
+		// key_ids 派生列：按解析后的本地 credential id CSV 重建绑定并刷新投影。
+		if err := syncBindingsTx(tx, id, pid, localKeyIDs); err != nil {
+			return fmt.Errorf("rapi (%s,%s) sync bindings: %w", r.PlatformName, r.Alias, err)
 		}
 		rapiSeen[rapiBK{r.PlatformName, r.Alias}] = struct{}{}
 	}
@@ -431,8 +444,8 @@ func (db *DB) ApplyBundle(env *bundle.Envelope, centerKey []byte, sourceURL stri
 	if _, err = tx.Exec(`UPDATE rapi SET available=1, unavailable_reason=''`); err != nil {
 		return fmt.Errorf("reset rapi available: %w", err)
 	}
-	if _, err = tx.Exec(`UPDATE platform_keys SET failure_type=0, failure_reason='', failed_at=NULL`); err != nil {
-		return fmt.Errorf("reset key failure: %w", err)
+	if _, err = tx.Exec(`UPDATE credential SET failure_type=0, failure_reason='', failed_at=NULL`); err != nil {
+		return fmt.Errorf("reset credential failure: %w", err)
 	}
 	if _, err = tx.Exec(`DELETE FROM key_model_blocks`); err != nil {
 		return fmt.Errorf("clear key_model_blocks: %w", err)
@@ -456,10 +469,33 @@ func (db *DB) ApplyBundle(env *bundle.Envelope, centerKey []byte, sourceURL stri
 	return nil
 }
 
-// keyRef 是 platform_key 的业务键（平台名 + 平台内序号），跨实例稳定。
+// keyRef 是凭据的业务键（平台名 + 平台内序号，本地落 credential.sort_order），跨实例稳定。
 type keyRef struct {
 	plat string
 	idx  int
+}
+
+// reencryptPlain 同 reencrypt，但额外返回明文（调用方算 token_hash 用）。
+func reencryptPlain(centerCiphertext string, centerKey []byte) (enc string, plain string, err error) {
+	if centerCiphertext == "" {
+		return "", "", nil
+	}
+	if len(centerKey) == 0 && strings.HasPrefix(centerCiphertext, "enc:") {
+		return "", "", errors.New("中心存储为密文但本地未配置 center_key，无法解密；" +
+			"请在中心配置页填入当时的 center_key，或用「本地到中心」整体覆盖推送把中心改写为明文")
+	}
+	plain, err = crypto.DecryptWithKey(centerCiphertext, centerKey)
+	if err != nil {
+		return "", "", err
+	}
+	if plain == "" {
+		return "", "", nil
+	}
+	enc, err = crypto.Encrypt(plain)
+	if err != nil {
+		return "", "", err
+	}
+	return enc, plain, nil
 }
 
 // reencrypt 把中心值转存为本地密文。空串原样返回；中心存了无 enc: 前缀的明文
@@ -467,25 +503,12 @@ type keyRef struct {
 // centerKey 为空而中心值却带 enc: 前缀（历史加密残留）：无法解密，给出明确指引
 // 而不是返回 "key not initialised" 这种误导性错误。
 func reencrypt(centerCiphertext string, centerKey []byte) (string, error) {
-	if centerCiphertext == "" {
-		return "", nil
-	}
-	if len(centerKey) == 0 && strings.HasPrefix(centerCiphertext, "enc:") {
-		return "", errors.New("中心存储为密文但本地未配置 center_key，无法解密；" +
-			"请在中心配置页填入当时的 center_key，或用「本地到中心」整体覆盖推送把中心改写为明文")
-	}
-	plain, err := crypto.DecryptWithKey(centerCiphertext, centerKey)
-	if err != nil {
-		return "", err
-	}
-	if plain == "" {
-		return "", nil
-	}
-	return crypto.Encrypt(plain)
+	enc, _, err := reencryptPlain(centerCiphertext, centerKey)
+	return enc, err
 }
 
 // resolveKeyIDs 把 bundle 的 key_ids（平台内 key_index CSV）解析成本地
-// platform_keys.id CSV。空输入返回空串（= 该平台全部 key 可用，本地语义一致）。
+// credential.id CSV。空输入返回空串（= 该平台全部 key 可用，本地语义一致）。
 func resolveKeyIDs(keyIndexCSV, platformName string, keyLocalID map[keyRef]int64) (string, error) {
 	s := strings.TrimSpace(keyIndexCSV)
 	if s == "" {

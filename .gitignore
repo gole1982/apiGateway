@@ -16,6 +16,7 @@ glm_verify.txt
 
 # DB backups
 *.db.bak*
+.backup/
 
 # CI build output
 bin/
@@ -23,4 +24,6 @@ bin/
 # local tooling data/config (never commit)
 .freebuff/
 .workbuddy/
+.workbuddy-ai/
+*.exe~
 opencode.json

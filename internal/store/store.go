@@ -50,7 +50,7 @@ type Store interface {
 	SetRAPISortOrder(ids []int64) error
 	UpdateRAPIFormats(id int64, formatsJSON string) error
 	UpdateRAPIHeaders(id int64, headersJSON string) error
-	RAPIAliasExists(platformID int64, alias string, excludeID int64) (bool, error)
+	RAPIModelExists(platformID int64, model string, excludeID int64) (bool, error)
 
 	// ---- lapi / 路由链 ----
 	GetLAPIs() ([]models.LAPI, error)

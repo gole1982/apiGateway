@@ -2155,7 +2155,7 @@
                     <div class="glass-card" style="padding:18px;margin-bottom:16px;">
                         <div class="card-header-row u-mb12"><span class="card-title">基本信息</span></div>
                         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px 28px;font-size:0.85rem;">
-                            <div><div class="u-muted-sm u-mb3">模型名称（自动生成）</div>
+                            <div><div class="u-muted-sm u-mb3">模型名称</div>
                                 <div style="font-family:var(--font-mono);font-weight:600;color:var(--color-primary);">{{ rapiDisplayName(rapiDetail) }}</div></div>
                             <div><div class="u-muted-sm u-mb3">模型备注</div>
                                 <div class="u-primary">{{ rapiDetail.notes || '—' }}</div></div>
@@ -3063,6 +3063,10 @@
                     </div>
                     <div class="modal-body">
                         <div class="form-group">
+                            <label>名称（显示名，可随便改；留空则按下方命名规则自动生成）</label>
+                            <input type="text" class="form-control" placeholder="例如：生产 GPT-4o 主通道" v-model="rapiModal.form.alias" autocomplete="off">
+                        </div>
+                        <div class="form-group">
                             <label>所属平台</label>
                             <select class="form-control" v-model="rapiModal.form.platform_id">
                                 <option v-for="p in platforms" :value="p.id">{{ p.name }}</option>
@@ -3115,7 +3119,7 @@
                         </div>
                         <div class="form-group">
                             <div style="padding:8px 12px;border-radius:8px;background:rgba(56,189,248,0.06);border:1px dashed rgba(56,189,248,0.25);font-size:0.84rem;">
-                                模型名称（按 厂商/系列-版本-后缀 自动生成）：
+                                名称留空时将自动生成（厂商/系列-版本-后缀 → 备注 → 上游模型名）：
                                 <span style="font-family:var(--font-mono);font-weight:700;color:var(--color-primary);">{{ computeModelName(rapiModal.form.vendor, rapiModal.form.series, rapiModal.form.version, rapiModal.form.suffix, rapiModal.form.notes, rapiModal.form.model) || '（待填写）' }}</span>
                             </div>
                         </div>
@@ -3952,7 +3956,7 @@
                     pwVisible: false // login password eye toggle
                 });
                 const addToLapiModal = reactive({ show: false, rapi: null, selectedLapiId: null });
-                const rapiModal = reactive({ show: false, item: null, form: { platform_id: '', model: '', vendor: '', series: '', version: '', suffix: '', notes: '' }, headers: [], keyIDs: [] });
+                const rapiModal = reactive({ show: false, item: null, form: { platform_id: '', alias: '', model: '', vendor: '', series: '', version: '', suffix: '', notes: '' }, headers: [], keyIDs: [] });
                 // Key-model direct test modal (per-RAPI 测试 button).
                 const rapiTestModal = reactive({ show: false, rapi: null, keyId: 0, body: '', sending: false, status: 0, latency: 0, response: '', clearOnSuccess: true });
                 // Keys this RAPI may use (its filtered pool), for the test-key selector.
@@ -5803,7 +5807,7 @@
                         // key_ids is a CSV string on the model; expose as a number array.
                         rapiModal.keyIDs = (item.key_ids || '').split(',').map(s => s.trim()).filter(Boolean).map(Number);
                     } else {
-                        rapiModal.form = { platform_id: platforms.value[0]?.id || '', model: '', vendor: '', series: '', version: '', suffix: '', notes: '' };
+                        rapiModal.form = { platform_id: platforms.value[0]?.id || '', alias: '', model: '', vendor: '', series: '', version: '', suffix: '', notes: '' };
                         rapiModal.headers = [];
                         rapiModal.keyIDs = [];
                     }
