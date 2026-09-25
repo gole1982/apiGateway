@@ -226,6 +226,12 @@ func (s *Service) Run() error {
 	// so every subsequent line (DB init, scheduler, gateway runtime) lands as
 	// JSON Lines with consistent component/level fields. Until this call, early
 	// loggers fall back to the stderr-only default via DefaultConsole().
+	// Structured console logger settings may be overridden from the dashboard.
+	// The settings table is the runtime source of truth; proxy.cfg remains the
+	// initial fallback for headless/local startup.
+	if saved := savedLogLevel(cfg.LogLevel); saved != "" {
+		cfg.LogLevel = saved
+	}
 	logger.InitConsoleLogger(logger.ConsoleOptions{
 		Level:      logger.ParseLevel(cfg.LogLevel),
 		EnableFile: cfg.LogFile,
@@ -1961,6 +1967,8 @@ func createWebHandler() http.Handler {
 
 	// 中心配置（Supabase）：URL + API key 加密保存 + 角色自动探测。
 	mux.HandleFunc("/api/sb-config", handleSBConfig)
+	// 进程日志级别：GET 查询，POST/PUT 即时切换并持久化。
+	mux.HandleFunc("/api/logs/level", handleLogLevel)
 	// 系统/中心互联日志（syncOnce 成败、直写成败、池冷却等）。
 	mux.HandleFunc("/api/logs/system", handleSystemLogs)
 

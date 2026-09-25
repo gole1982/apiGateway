@@ -2565,6 +2565,10 @@
                             <input type="text" class="form-control" placeholder="模糊过滤请求ID、客户端IP、接口、模型、状态码或报错..." v-model="logSearchQuery">
                         </div>
                         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                            <span class="u-muted-sm">日志级别</span>
+                            <select class="form-control" style="width:auto;min-width:180px;padding:6px 10px;" v-model="logLevel" @change="setLogLevel">
+                                <option v-for="item in logLevels" :key="item.value" :value="item.value">{{ item.label }}</option>
+                            </select>
                             <span class="chip" :class="{ active: logStatusFilter === '' }" @click="logStatusFilter = ''">全部</span>
                             <span class="chip" :class="{ active: logStatusFilter === '200', success: logStatusFilter === '200' }" @click="logStatusFilter = logStatusFilter === '200' ? '' : '200'">2xx</span>
                             <span class="chip" :class="{ active: logStatusFilter === '429', warning: logStatusFilter === '429' }" @click="logStatusFilter = logStatusFilter === '429' ? '' : '429'">429</span>
@@ -3938,6 +3942,37 @@
                 const importSearchQuery = ref('');
                 const logSearchQuery = ref('');
                 const logStatusFilter = ref('');
+                const logLevel = ref('info');
+                const logLevels = [
+                    { value: 'debug', label: 'Debug（全部调试日志）' },
+                    { value: 'info', label: 'Info（默认）' },
+                    { value: 'warn', label: 'Warn（警告及以上）' },
+                    { value: 'error', label: 'Error（仅错误）' },
+                ];
+                const loadLogLevel = async () => {
+                    try {
+                        const r = await fetch('/api/logs/level');
+                        if (r.ok) {
+                            const d = await r.json();
+                            if (d.level) logLevel.value = d.level;
+                        }
+                    } catch (e) {}
+                };
+                const setLogLevel = async () => {
+                    const level = logLevel.value;
+                    try {
+                        const r = await fetch('/api/logs/level', {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ level })
+                        });
+                        const d = await r.json().catch(() => ({}));
+                        if (!r.ok) throw new Error(d.error || '保存失败');
+                        showToast('日志级别', '已切换为 ' + level.toUpperCase(), 'success');
+                    } catch (e) {
+                        showToast('日志级别保存失败', String(e), 'error');
+                        await loadLogLevel();
+                    }
+                };
                 // Insight category & level filters
                 const insightFilter = ref('');
                 const levelFilter = ref('');
@@ -6706,6 +6741,7 @@
                     loadMetrics();
                     fetchSBConfig();
                     loadPullMode();
+                     loadLogLevel();
                     loadSystemLogs();
                 });
 
@@ -6739,6 +6775,7 @@
                     importSearchQuery,
                     logSearchQuery,
                     logStatusFilter,
+                     logLevel, logLevels, loadLogLevel, setLogLevel,
 
                     // Computes
                     filteredPlatforms, sortedPlatforms,

@@ -52,6 +52,7 @@ type ConsoleOptions struct {
 type ConsoleLogger struct {
 	sl        *slog.Logger
 	component string
+	level     *slog.LevelVar
 }
 
 var (
@@ -70,13 +71,16 @@ var (
 // import cycle) can emit records through the plain slog API and still land on
 // the same JSON stream with the same configuration.
 func InitConsoleLogger(opts ConsoleOptions) *ConsoleLogger {
-	c := buildConsoleLogger(opts)
-	// Store unconditionally on the first call so a mis-timed second init cannot
-	// replace a logger that callers have already cached via DefaultConsole().
-	// On later calls we keep the existing one to avoid log routing surprises.
+	// Reuse an already-created logger first. This both preserves the existing
+	// stderr/file sinks and lets startup apply the saved level after early logs
+	// initialized the default info logger.
 	if existing := defaultConsole.Load(); existing != nil {
+		if opts.Level != nil {
+			existing.setLevel(opts.Level.Level())
+		}
 		return existing
 	}
+	c := buildConsoleLogger(opts)
 	defaultConsole.Store(c)
 	// Mirror the handler into the stdlib slog default. Packages below us in the
 	// import graph use slog.Info/Error/etc. which dispatch through slog.Default();
@@ -107,6 +111,8 @@ func buildConsoleLogger(opts ConsoleOptions) *ConsoleLogger {
 	if level == nil {
 		level = slog.LevelInfo
 	}
+	levelVar := new(slog.LevelVar)
+	levelVar.Set(level.Level())
 
 	// Default sink is stderr, mirroring the stdlib `log` default so operators
 	// who already collect stderr see no routing change.
@@ -133,12 +139,11 @@ func buildConsoleLogger(opts ConsoleOptions) *ConsoleLogger {
 	}
 
 	handler := slog.NewJSONHandler(w, &slog.HandlerOptions{
-		Level: level,
+		Level: levelVar,
 		// ReplaceAttr: keep the default time key ("time") — operators expect
 		// the slog default. No replacement here keeps timestamps RFC3339Nano.
 	})
-	sl := slog.New(handler)
-	return &ConsoleLogger{sl: sl, component: ""}
+	return &ConsoleLogger{sl: slog.New(handler), component: "", level: levelVar}
 }
 
 func openLogFile(path string) (*os.File, error) {
@@ -146,6 +151,43 @@ func openLogFile(path string) (*os.File, error) {
 		return nil, err
 	}
 	return os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+}
+
+func (c *ConsoleLogger) setLevel(level slog.Level) {
+	if c != nil && c.level != nil {
+		c.level.Set(level)
+	}
+}
+
+// CurrentLevel returns the currently configured minimum console log level.
+func CurrentLevel() slog.Level {
+	if c := DefaultConsole(); c != nil && c.level != nil {
+		return c.level.Level()
+	}
+	return slog.LevelInfo
+}
+
+// LevelName returns the canonical human-readable name for a slog level.
+func LevelName(level slog.Level) string {
+	switch level {
+	case slog.LevelDebug:
+		return "debug"
+	case slog.LevelInfo:
+		return "info"
+	case slog.LevelWarn:
+		return "warn"
+	case slog.LevelError:
+		return "error"
+	default:
+		return level.String()
+	}
+}
+
+// SetLogLevel changes the process-wide console log threshold immediately.
+func SetLogLevel(level slog.Level) {
+	if c := DefaultConsole(); c != nil {
+		c.setLevel(level)
+	}
 }
 
 // With returns a child ConsoleLogger that adds persistent attributes to every
@@ -176,7 +218,7 @@ func (c *ConsoleLogger) With(kv ...any) *ConsoleLogger {
 		}
 		child = child.With(slog.Any(key, kv[i+1]))
 	}
-	return &ConsoleLogger{sl: child, component: c.component}
+	return &ConsoleLogger{sl: child, component: c.component, level: c.level}
 }
 
 // WithComponent returns a child whose records are tagged with the given
@@ -190,6 +232,7 @@ func (c *ConsoleLogger) WithComponent(component string) *ConsoleLogger {
 	return &ConsoleLogger{
 		sl:        c.sl.With(slog.String("component", component)),
 		component: component,
+		level:     c.level,
 	}
 }
 
