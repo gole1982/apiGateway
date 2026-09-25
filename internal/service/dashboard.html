@@ -1975,7 +1975,8 @@
                         <button class="btn btn-secondary btn-sm" @click="closeDetail">← 返回列表</button>
                         <span style="font-size:1.1rem;font-weight:700;color:var(--color-primary);">{{ keyDetail.label || ('Key #' + keyDetail.key_index) }}</span>
                         <span class="platform-type type-static u-pointer" @click="openDetail('platform', keyDetail.platform_id)" title="查看平台详情">{{ keyDetail.platform_name || ('平台-'+keyDetail.platform_id) }} ›</span>
-                        <span :style="keyBadgeStyle(keyDetail)">{{ keyHealthLabel(keyDetail) }}</span>
+                        <span :style="keyBadgeStyle(keyDetail)" :title="keyCooldownTitle(keyDetail)">{{ keyHealthLabel(keyDetail) }}</span>
+                        <span v-if="keyDetail.cooling" style="font-size:0.76rem;color:var(--color-warning);" :title="keyCooldownTitle(keyDetail)">{{ keyCooldownRemaining(keyDetail) }}</span>
                         <span class="u-flex1"></span>
                         <div class="u-flex-gap8">
                             <button class="plat-toggle" :class="keyDetail.enabled ? 'on' : 'off'" @click="toggleKeyFlat(keyDetail)">
@@ -2008,6 +2009,7 @@
                                     <span v-else>永久</span>
                                 </div></div>
                             <div><div class="u-muted-sm u-mb3">失败原因</div>
+                                 <div v-if="keyDetail.cooling" class="u-muted-sm" style="color:var(--color-warning);margin-top:4px;" :title="keyCooldownTitle(keyDetail)">{{ keyCooldownRemaining(keyDetail) }}</div>
                                 <div style="color:keyDetail.failure_reason ? 'var(--color-danger)' : 'var(--text-muted)';">{{ keyDetail.failure_reason || '—' }}</div></div>
                         </div>
                     </div>
@@ -2099,7 +2101,10 @@
                                         </span>
                                     </td>
                                     <td class="u-nowrap">
-                                        <span :style="keyBadgeStyle(k)" style="font-size:0.74rem;">{{ keyHealthLabel(k) }}</span>
+                                        <span :style="keyBadgeStyle(k)" :title="keyCooldownTitle(k)" style="font-size:0.74rem;">{{ keyHealthLabel(k) }}</span>
+                                        <div v-if="k.cooling" style="font-size:0.68rem;color:var(--color-warning);margin-top:3px;white-space:nowrap;" :title="keyCooldownTitle(k)">
+                                            {{ keyCooldownRemaining(k) }}
+                                        </div>
                                     </td>
                                     <td style="max-width:220px;" @click.stop>
                                         <div v-if="k.models && k.models.length" style="display:flex;flex-wrap:wrap;gap:4px;">
@@ -4012,10 +4017,21 @@
 
                 // ---- Key ↔ Model linkage helpers ----
                 // Normalized health of a key, used for badge coloring across list/table/modal.
+                const keyCooldownRemaining = (k) => {
+                    if (!k || !k.cooling || !k.recover_at) return '';
+                    const seconds = Math.max(0, Math.ceil((new Date(k.recover_at).getTime() - Date.now()) / 1000));
+                    if (seconds <= 0) return '即将恢复';
+                    if (seconds < 60) return `${seconds}s 后恢复`;
+                    return `${Math.ceil(seconds / 60)}m 后恢复`;
+                };
+                const keyCooldownTitle = (k) => {
+                    if (!k || !k.cooling) return k && k.failure_reason ? k.failure_reason : '';
+                    return [k.runtime_reason || k.failure_reason || 'Key 暂时冷却', keyCooldownRemaining(k)].filter(Boolean).join(' · ');
+                };
                 const keyHealth = (k) => {
                     if (!k) return 'healthy';
                     if (k.failure_type === 2) return 'permanent';
-                    if (k.failure_type === 1) return 'cooling';
+                    if (k.cooling || k.failure_type === 1) return 'cooling';
                     if (!k.enabled) return 'disabled';
                     if (k.expires_at && isKeyExpired(k)) return 'expired';
                     return 'healthy';
@@ -4052,7 +4068,7 @@
                     }
                     const bad = p.keys.filter(k => k.failure_type === 2);
                     if (bad.length > 0) return `失效 Key：${bad.map(k => keyShortLabel(k)).join('、')} 永久失败，已退出轮换`;
-                    const cooling = p.keys.filter(k => k.failure_type === 1);
+                    const cooling = p.keys.filter(k => k.cooling || k.failure_type === 1);
                     if (cooling.length > 0) {
                         return p.keys.length === 1
                             ? `唯一 Key ${keyShortLabel(cooling[0])} 冷却中：模型将暂时不可用`
@@ -4062,7 +4078,7 @@
                 };
                 const keyBadgeTitle = (k, rapi) => {
                     const parts = [`#${k.key_index} ${k.label || ''}`.trim()];
-                    if (k.failure_reason) parts.push(`状态: ${k.failure_reason}`);
+                    if (k.failure_reason || k.runtime_reason) parts.push(`状态: ${kCooldownTitle(k)}`);
                     if (isSoleKeyFor(k, rapi)) parts.push('⚠ 该模型仅由此 Key 服务，此 Key 失效将直接导致模型不可用');
                     return parts.join(' | ');
                 };
@@ -4076,7 +4092,7 @@
                 const chainIssues = (rapi) => {
                     const keys = keyPoolForRapi(rapi).keys;
                     const bad = keys.filter(k => k.failure_type === 2);
-                    const cooling = keys.filter(k => k.failure_type === 1);
+                    const cooling = keys.filter(k => k.cooling || k.failure_type === 1);
                     const blocked = keys.filter(k => keyModelBlock(k, rapi));
                     return bad.concat(cooling, blocked);
                 };
@@ -4098,7 +4114,7 @@
                 const platKeyAlerts = (plat) => {
                     const keys = (plat && plat._keys) || [];
                     const perm = keys.filter(k => k.failure_type === 2).length;
-                    const cool = keys.filter(k => k.failure_type === 1).length;
+                    const cool = keys.filter(k => k.cooling || k.failure_type === 1).length;
                     return { perm, cool };
                 };
 
@@ -4132,7 +4148,7 @@
                 };
                 const keyRank = (k) => {
                     if (k.failure_type === 2 || (k.expires_at && isKeyExpired(k))) return 0;
-                    if (k.failure_type === 1) return 1;
+                    if (k.cooling || k.failure_type === 1) return 1;
                     if (!k.enabled) return 2;
                     return 3;
                 };
@@ -5005,17 +5021,28 @@
                 const menuToTab = { platforms: 'platforms', keys: 'keys', models: 'rapis', interfaces: 'lapis' };
                 // 点击条目：只标记该条已读，跳转到对应页签并把该实体预填进页面搜索框，
                 // 直接定位到具体配置行（而非只到功能页）。
-                const openUnreadItem = (it) => {
+                const openUnreadItem = async (it) => {
                     unreadPanelOpen.value = false;
-                    markItemRead(it.id);
+                    await markItemRead(it.id);
                     setTab(menuToTab[it.menu] || it.menu);
                     const id = Number(it.entity_id) || 0;
+                    if (it.menu === 'keys') {
+                        // Reload before opening: the unread event is live scheduler
+                        // state, and keysList may be empty/stale after a refresh.
+                        await loadKeys();
+                        const k = keysList.value.find(x => Number(x.id) === id);
+                        if (k) {
+                            keysSearchQuery.value = '';
+                            keyPlatformFilter.value = '';
+                            openDetail('key', k.id);
+                        } else {
+                            showToast('提示', '该 Key 已不存在或已被删除', 'warning');
+                        }
+                        return;
+                    }
                     if (it.menu === 'platforms') {
                         const p = platforms.value.find(x => x.id === id);
                         platformSearchQuery.value = p ? p.name : '';
-                    } else if (it.menu === 'keys') {
-                        const k = keysList.value.find(x => x.id === id);
-                        keysSearchQuery.value = k ? (k.label || ('#' + k.key_index)) : '';
                     } else if (it.menu === 'models') {
                         const ra = rapis.value.find(x => x.id === id);
                         rapiSearchQuery.value = ra ? ra.alias : '';
@@ -5128,7 +5155,7 @@
                 );
                 const keyHealthLabel = (k) => {
                     if (k.failure_type === 2) return '🔴 永久失效';
-                    if (k.failure_type === 1) return '🟡 冷却中';
+                    if (k.cooling || k.failure_type === 1) return '🟡 冷却中';
                     if (!k.enabled) return '⚫ 已禁用';
                     if (k.expires_at && isKeyExpired(k)) return '⌛ 已过期';
                     return '🟢 正常';

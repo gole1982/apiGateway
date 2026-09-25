@@ -2307,13 +2307,36 @@ func createWebHandler() http.Handler {
 		}
 		type keyView struct {
 			models.PlatformKey
-			PlatformName string         `json:"platform_name"`
-			Models       []keyModelView `json:"models"`
+			PlatformName  string         `json:"platform_name"`
+			Models        []keyModelView `json:"models"`
+			Cooling       bool           `json:"cooling"`
+			RecoverAt     *time.Time     `json:"recover_at,omitempty"`
+			RuntimeReason string         `json:"runtime_reason,omitempty"`
+		}
+
+		// The persisted failure_type is durable configuration state, while the
+		// scheduler owns the live cooldown timer. Merge the latter into the
+		// dashboard projection so a key that is cooling in memory is visible
+		// immediately (and remains distinguishable from a permanent failure).
+		runtimeKeys := make(map[int64]scheduler.KeySnapshot)
+		if proxyGateway != nil {
+			for _, ks := range proxyGateway.Scheduler().Snapshot().Keys {
+				runtimeKeys[ks.ID] = ks
+			}
 		}
 
 		out := make([]keyView, 0, len(keys))
 		for _, k := range keys {
-			kv := keyView{PlatformKey: k, PlatformName: platName[k.PlatformID], Models: []keyModelView{}}
+			ks, cooling := runtimeKeys[k.ID]
+			cooling = cooling && ks.Cooling
+			var recoverAt *time.Time
+			if cooling {
+				recoverAt = &ks.RecoverAt
+			}
+			kv := keyView{
+				PlatformKey: k, PlatformName: platName[k.PlatformID], Models: []keyModelView{},
+				Cooling: cooling, RecoverAt: recoverAt, RuntimeReason: ks.Reason,
+			}
 			for _, ra := range rapis {
 				if ra.PlatformID != k.PlatformID {
 					continue
