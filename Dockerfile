@@ -41,4 +41,7 @@ EXPOSE 13579 24680
 
 VOLUME ["/app/data"]
 
+# gateway.db 必须位于持久化 volume；否则每次重建容器都会重新创建空库。
+ENV APIGATEWAY_DATA_DIR=/app/data
+
 ENTRYPOINT ["/app/gateway"]

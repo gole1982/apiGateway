@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -30,12 +31,49 @@ func Init() error {
 	// 避免"以为用了环境变量、实际在用旧文件"导致的密文不可解。
 	slog.Info("[DB] crypto master key loaded", "component", "db", "source", crypto.KeySource())
 
-	exePath, err := getExecutableDir()
+	dataDir, err := selectDataDir()
 	if err != nil {
 		return err
 	}
-	dbPath := filepath.Join(exePath, "gateway.db")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		return fmt.Errorf("create data dir %q: %w", dataDir, err)
+	}
+	dbPath := filepath.Join(dataDir, "gateway.db")
+	slog.Info("[DB] database path selected", "component", "db", "path", dbPath, "data_dir", dataDir)
 	return initAtPath(dbPath)
+}
+
+// selectDataDir resolves the persistent database directory. An explicit
+// APIGATEWAY_DATA_DIR always wins. For local installs we preserve an existing
+// gateway.db beside the executable; a fresh go run install falls back to the
+// working directory when it contains proxy.cfg, then to the user config dir.
+func selectDataDir() (string, error) {
+	if dir := strings.TrimSpace(os.Getenv("APIGATEWAY_DATA_DIR")); dir != "" {
+		return dir, nil
+	}
+	exeDir, err := getExecutableDir()
+	if err != nil {
+		return "", err
+	}
+	if fileExists(filepath.Join(exeDir, "gateway.db")) {
+		return exeDir, nil
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		for _, name := range []string{"gateway.db", "proxy.cfg"} {
+			if fileExists(filepath.Join(cwd, name)) {
+				return cwd, nil
+			}
+		}
+	}
+	if configDir, err := os.UserConfigDir(); err == nil && configDir != "" {
+		return filepath.Join(configDir, "apiGateway"), nil
+	}
+	return exeDir, nil
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 // initAtPath runs the complete schema/migration/startup-maintenance chain for

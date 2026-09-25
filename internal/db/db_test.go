@@ -194,6 +194,20 @@ func setupTestDB(t *testing.T) *DB {
 	return instance
 }
 
+func TestSelectDataDirExplicitEnvironment(t *testing.T) {
+	initTestCrypto(t)
+	dir := t.TempDir()
+	t.Setenv("APIGATEWAY_DATA_DIR", dir)
+
+	got, err := selectDataDir()
+	if err != nil {
+		t.Fatalf("selectDataDir: %v", err)
+	}
+	if got != dir {
+		t.Fatalf("selectDataDir() = %q, want %q", got, dir)
+	}
+}
+
 func TestInitAtPathEmptyAndIdempotent(t *testing.T) {
 	initTestCrypto(t)
 	dbPath := filepath.Join(t.TempDir(), "gateway.db")

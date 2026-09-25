@@ -13,8 +13,11 @@ services:
     volumes:
       - ./proxy.cfg:/app/proxy.cfg:ro
       - gateway-data:/app/data
+      # 兼容旧镜像：旧版本把数据库写到 /app/gateway.db，此文件位于镜像层，
+      # 容器重建后会丢失。新版本固定写 /app/data/gateway.db。
     environment:
       - TZ=Asia/Shanghai
+      - APIGATEWAY_DATA_DIR=/app/data
     # Health check (proxy endpoint)
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:13579/status", "||", "exit", "1"]
