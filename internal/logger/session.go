@@ -64,8 +64,19 @@ func (t *SessionTracker) GetSessionID(r *http.Request) string {
 	return generateFallbackSessionID(r)
 }
 
-func (t *SessionTracker) InjectSessionID(r *http.Request) string {
-	sessionID := t.GetSessionID(r)
+// InjectSessionID stamps a session id onto the request context and returns
+// (sessionID, stable).
+//
+// stable=true 意味着该 id 由 OnConnState 在 StateNew 时铸造、绑定一条
+// 长连接 —— 同一连接上的后续请求会拿到同一个 id。
+//
+// stable=false 意味着这是 generateFallbackSessionID 现造的 UUID
+// （RemoteAddr + 纳秒时间戳），**每个请求都是全新值**。调用方绝不能把它
+// 当作会话身份长期持有（见 scheduler.PickAvailableKey 的游标作用域）：
+// 拿它做 key 会让每张游标都从 0 开始，等于把全部流量固定到排序最靠前的
+// 那一个 key 上。
+func (t *SessionTracker) InjectSessionID(r *http.Request) (sessionID string, stable bool) {
+	sessionID = t.GetSessionID(r)
 	ctx := context.WithValue(r.Context(), sessionIDKey, sessionID)
 	*r = *r.WithContext(ctx)
 
@@ -76,6 +87,7 @@ func (t *SessionTracker) InjectSessionID(r *http.Request) string {
 		if session.ID == sessionID {
 			session.TotalRequests++
 			session.LastRequestAt = time.Now()
+			stable = true
 			if t.logger != nil && t.logger.Storage != nil {
 				go t.logger.Storage.UpdateSessionRequestCount(session.ID)
 			}
@@ -84,7 +96,7 @@ func (t *SessionTracker) InjectSessionID(r *http.Request) string {
 	}
 	t.mu.Unlock()
 
-	return sessionID
+	return sessionID, stable
 }
 
 func parseConnAddr(addr net.Addr) (string, int) {

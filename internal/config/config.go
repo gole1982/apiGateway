@@ -35,6 +35,23 @@ type Config struct {
 	// is retried automatically so a re-granted permission is picked up.
 	CapabilityBlockSec int
 	RequestMaxWaitSec  int
+	// KeyCursorScope selects how PickAvailableKey rotates keys within a
+	// platform's pool:
+	//
+	//   "session" (default) — one cursor per (platform, session). Every
+	//     conversation sweeps the pool on its own cadence, so all keys enter
+	//     cooldown — and the pool reports itself exhausted — as early as
+	//     possible. Consecutive turns of one conversation always land on
+	//     different keys. Costs cross-session fairness and upstream
+	//     prompt-cache locality.
+	//
+	//   "platform" — one cursor per platform, shared by all models and
+	//     sessions. Fairer quota spreading, but a conversation's turns are
+	//     spaced nSessions x Ts apart on the same key.
+	//
+	// Requests without a connection-stable session id always use platform
+	// scope regardless of this setting.
+	KeyCursorScope string
 
 	// Startup health recovery
 	// RetryOnStartup, when true, makes the gateway probe every RAPI that is
@@ -143,6 +160,7 @@ func Load() (*Config, error) {
 		BillingCooldownSec: cfg.Section("").Key("billing_cooldown_sec").MustInt(1800),
 		CapabilityBlockSec: cfg.Section("").Key("capability_block_sec").MustInt(86400),
 		RequestMaxWaitSec:  cfg.Section("").Key("request_max_wait_sec").MustInt(120),
+		KeyCursorScope:     cfg.Section("").Key("key_cursor_scope").MustString("session"),
 		RetryOnStartup:     cfg.Section("health").Key("retry_on_startup").MustBool(true),
 		RetryConcurrency:   cfg.Section("health").Key("retry_concurrency").MustInt(8),
 		RetryTimeoutSec:    cfg.Section("health").Key("retry_timeout_sec").MustInt(15),

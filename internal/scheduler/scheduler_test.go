@@ -387,7 +387,7 @@ func TestPickAvailableKeySkipsPermanentFailure(t *testing.T) {
 		{ID: 2, KeyIndex: 1, Enabled: true, FailureType: 0}, // healthy
 	}
 
-	got, _, err := m.PickAvailableKey(keys)
+	got, _, err := m.PickAvailableKey(keys, "")
 	if err != nil {
 		t.Fatalf("PickAvailableKey: %v", err)
 	}
@@ -406,7 +406,7 @@ func TestPickAvailableKeyAllowsTemporaryFailure(t *testing.T) {
 		{ID: 1, KeyIndex: 0, Enabled: true, FailureType: 1}, // temporary failure, not skipped
 	}
 
-	got, _, err := m.PickAvailableKey(keys)
+	got, _, err := m.PickAvailableKey(keys, "")
 	if err != nil {
 		t.Fatalf("PickAvailableKey: %v", err)
 	}
@@ -424,7 +424,7 @@ func TestPickAvailableKeyAllPermanentFails(t *testing.T) {
 		{ID: 2, KeyIndex: 1, Enabled: true, FailureType: 2},
 	}
 
-	_, _, err := m.PickAvailableKey(keys)
+	_, _, err := m.PickAvailableKey(keys, "")
 	if !errors.Is(err, ErrAllKeysUnavailable) {
 		t.Fatalf("err = %v, want ErrAllKeysUnavailable", err)
 	}
@@ -445,7 +445,7 @@ func TestPickAvailableKeyRoundRobin(t *testing.T) {
 	// 连续选择应按 KeyIndex 轮转：1 → 2 → 3 → 1 …，与免费/付费无关。
 	want := []int64{1, 2, 3, 1, 2, 3}
 	for i, w := range want {
-		got, _, err := m.PickAvailableKey(keys)
+		got, _, err := m.PickAvailableKey(keys, "")
 		if err != nil {
 			t.Fatalf("pick %d: %v", i, err)
 		}
@@ -469,13 +469,13 @@ func TestPickAvailableKeyRoundRobinPerPlatform(t *testing.T) {
 	}
 
 	// 平台 A 轮转不应影响平台 B 的游标：B 第一次仍取自己的 #3。
-	if _, _, err := m.PickAvailableKey(pa); err != nil {
+	if _, _, err := m.PickAvailableKey(pa, ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := m.PickAvailableKey(pa); err != nil {
+	if _, _, err := m.PickAvailableKey(pa, ""); err != nil {
 		t.Fatal(err)
 	}
-	got, _, err := m.PickAvailableKey(pb)
+	got, _, err := m.PickAvailableKey(pb, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -495,7 +495,7 @@ func TestPickAvailableKeyRoundRobinSkipsCooling(t *testing.T) {
 
 	// 轮到 key 1 时它已冷却 → 跳过取 key 2；下一次轮到 key 2 但它冷却 → 回到 key 1。
 	m.MarkKeyTemporaryFailure(1, time.Now().Add(time.Minute), "429")
-	got, _, err := m.PickAvailableKey(keys)
+	got, _, err := m.PickAvailableKey(keys, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -504,7 +504,7 @@ func TestPickAvailableKeyRoundRobinSkipsCooling(t *testing.T) {
 	}
 
 	m.MarkKeyTemporaryFailure(2, time.Now().Add(time.Minute), "429")
-	_, next, err := m.PickAvailableKey(keys)
+	_, next, err := m.PickAvailableKey(keys, "")
 	if !errors.Is(err, ErrAllKeysUnavailable) {
 		t.Fatalf("err = %v, want ErrAllKeysUnavailable", err)
 	}
@@ -526,7 +526,7 @@ func TestPickAvailableKeySkipsExpired(t *testing.T) {
 		{ID: 2, KeyIndex: 1, Enabled: true, IsFree: false},                  // paid, healthy
 	}
 
-	got, _, err := m.PickAvailableKey(keys)
+	got, _, err := m.PickAvailableKey(keys, "")
 	if err != nil {
 		t.Fatalf("PickAvailableKey: %v", err)
 	}
@@ -545,7 +545,7 @@ func TestPickAvailableKeyAllExpired(t *testing.T) {
 		{ID: 2, KeyIndex: 1, Enabled: true, ExpiresAt: &past},
 	}
 
-	_, _, err := m.PickAvailableKey(keys)
+	_, _, err := m.PickAvailableKey(keys, "")
 	if !errors.Is(err, ErrAllKeysUnavailable) {
 		t.Fatalf("err = %v, want ErrAllKeysUnavailable for all-expired keys", err)
 	}
@@ -627,7 +627,7 @@ func TestPickAvailableKeyDoesNotMutateInput(t *testing.T) {
 	// Caller-ordered snapshot must be preserved across the internal sort.
 	before := append([]models.PlatformKey(nil), keys...)
 
-	_, _, err := m.PickAvailableKey(keys)
+	_, _, err := m.PickAvailableKey(keys, "")
 	if err != nil {
 		t.Fatalf("PickAvailableKey: %v", err)
 	}

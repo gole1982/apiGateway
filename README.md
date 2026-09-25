@@ -47,7 +47,17 @@ max_cooldown_sec = 120
 billing_cooldown_sec = 1800   ; 可恢复计费错误（积分不足/欠费）的长冷却秒数
 capability_block_sec = 86400  ; key×model 能力黑名单 TTL 秒数，到期自动重试
 request_max_wait_sec = 120
+key_cursor_scope = session   ; session（默认）| platform —— 同平台多 key 的轮询作用域
 ```
+
+### `key_cursor_scope`
+
+同平台多 key 时，选 key 的轮询游标按什么作用域维护：
+
+- **`session`（默认）** — 每个 `(平台, 会话)` 一个游标。同一会话的连续两轮**必然**落在不同 key 上，池内按顺序遍历；于是整个 key 池以 `len(pool) × Ts` 的速度被覆盖，所有 key 尽快进入冷却、池尽快整体耗尽。代价：不再保证跨会话的配额公平，且同一对话被拆到多个 key 上会损失上游 prompt 缓存命中。
+- **`platform`** — 每平台一个游标，所有模型、所有会话共用（v2 之前的行为）。配额分摊更公平，但一个会话的相邻两轮在同一个 key 上的间隔是 `Ts × 会话数`，池耗尽更慢。
+
+拿不到**连接级稳定**会话 id 的客户端（例如每个请求新建 TCP 连接的）一律按 `platform` 处理，与本配置无关 —— 原因见 `internal/logger/session.go` 的 `InjectSessionID`。
 
 ## 代理端点
 

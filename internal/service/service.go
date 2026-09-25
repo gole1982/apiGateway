@@ -250,7 +250,7 @@ func (s *Service) Run() error {
 
 	sessionTracker = logger.NewSessionTracker(logInstance)
 
-	schedulerCfg := scheduler.ConfigFromAppConfig(cfg.CooldownSec, cfg.MaxCooldownSec, cfg.RequestMaxWaitSec, cfg.BillingCooldownSec, cfg.CapabilityBlockSec)
+	schedulerCfg := scheduler.ConfigFromAppConfig(cfg.CooldownSec, cfg.MaxCooldownSec, cfg.RequestMaxWaitSec, cfg.BillingCooldownSec, cfg.CapabilityBlockSec, cfg.KeyCursorScope)
 	proxyGateway = gateway.NewProxyGatewayWithConfig(notifySvc, logInstance, sessionTracker, cfg.DialTimeoutSec, cfg.ResponseTimeoutSec, schedulerCfg)
 
 	proxyAddr := fmt.Sprintf("0.0.0.0:%d", cfg.ProxyPort)

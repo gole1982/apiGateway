@@ -617,6 +617,10 @@ func (g *ProxyGateway) HandleChatCompletions(w http.ResponseWriter, r *http.Requ
 	startTime := time.Now()
 	requestID := ""
 	sessionID := ""
+	// keyCursorSession 只在会话 id 连接级稳定（长连接）时非空。每请求一次性的
+	// fallback id 不能当轮询游标用 —— 那会让每张游标都从 0 起算，等于把全部
+	// 流量钉死在排序最靠前的 key 上。详见 scheduler.PickAvailableKey。
+	keyCursorSession := ""
 	fallbackUsed := false
 	clientStatusCode := http.StatusOK
 
@@ -635,7 +639,11 @@ func (g *ProxyGateway) HandleChatCompletions(w http.ResponseWriter, r *http.Requ
 	}
 
 	if g.sessionTracker != nil {
-		sessionID = g.sessionTracker.InjectSessionID(r)
+		var stable bool
+		sessionID, stable = g.sessionTracker.InjectSessionID(r)
+		if stable {
+			keyCursorSession = sessionID
+		}
 	}
 
 	// Bug 8.2: Generate requestID here and pass it into RecordRequestReceived.
@@ -767,9 +775,9 @@ func (g *ProxyGateway) HandleChatCompletions(w http.ResponseWriter, r *http.Requ
 	}
 
 	if isStream {
-		fallbackUsed, clientStatusCode = g.handleStreamingRequest(w, r, body, canonicalBody, &req, lapi, rapis, requestID, sessionID, string(clientFormat))
+		fallbackUsed, clientStatusCode = g.handleStreamingRequest(w, r, body, canonicalBody, &req, lapi, rapis, requestID, sessionID, keyCursorSession, string(clientFormat))
 	} else {
-		fallbackUsed, clientStatusCode = g.handleNonStreamingRequest(w, r, body, canonicalBody, &req, lapi, rapis, requestID, sessionID, string(clientFormat))
+		fallbackUsed, clientStatusCode = g.handleNonStreamingRequest(w, r, body, canonicalBody, &req, lapi, rapis, requestID, sessionID, keyCursorSession, string(clientFormat))
 	}
 
 	g.db.RecordTrend(lapi.ID)
@@ -844,6 +852,7 @@ func (g *ProxyGateway) tryKeyForRAPI(
 	upstreamBody []byte,
 	requestID string,
 	retryCount int,
+	keyCursorSession string,
 	targetFormat string,
 ) (*http.Response, int64, error) {
 	keys := rapi.Keys
@@ -870,7 +879,7 @@ func (g *ProxyGateway) tryKeyForRAPI(
 			// persists the model as unavailable instead of spinning on 404s.
 			return nil, 0, scheduler.ErrAllKeysUnavailable
 		}
-		key, keyNextAvail, err := g.scheduler.PickAvailableKey(keys)
+		key, keyNextAvail, err := g.scheduler.PickAvailableKey(keys, keyCursorSession)
 		if err != nil {
 			// All keys for this RAPI are cooling — align the pool to the pool
 			// standard (earliest key recoverAt) so the RAPI cooldown matches,
@@ -1116,7 +1125,7 @@ func (g *ProxyGateway) handleAllKeysUnavailable(rapi models.RAPIWithPlatform, re
 }
 
 // handleStreamingRequest handles streaming (SSE) requests with full error absorption.
-func (g *ProxyGateway) handleStreamingRequest(w http.ResponseWriter, r *http.Request, originalBody []byte, canonicalBody []byte, req *models.ProxyRequest, lapi *models.LAPI, rapis []models.RAPIWithPlatform, requestID string, sessionID string, clientFormat string) (bool, int) {
+func (g *ProxyGateway) handleStreamingRequest(w http.ResponseWriter, r *http.Request, originalBody []byte, canonicalBody []byte, req *models.ProxyRequest, lapi *models.LAPI, rapis []models.RAPIWithPlatform, requestID string, sessionID string, keyCursorSession string, clientFormat string) (bool, int) {
 	fallbackUsed := false
 	retryCount := 0
 	estimatedTokens := scheduler.EstimateCost(req)
@@ -1216,7 +1225,7 @@ func (g *ProxyGateway) handleStreamingRequest(w http.ResponseWriter, r *http.Req
 		startTime := time.Now()
 		// keyID 现在经 tryKeyForRAPI → doUpstreamRequest → RecordUpstreamSent 落库
 		// （request_logs.selected_key_id，指标 key 维度埋点）。
-		resp, _, err := g.tryKeyForRAPI(r.Context(), rapi, effectiveURL, upstreamBody, requestID, retryCount, targetFormat)
+		resp, _, err := g.tryKeyForRAPI(r.Context(), rapi, effectiveURL, upstreamBody, requestID, retryCount, keyCursorSession, targetFormat)
 		latencyMs := int(time.Since(startTime).Milliseconds())
 
 		if err != nil {
@@ -1345,7 +1354,7 @@ func (g *ProxyGateway) handleStreamingRequest(w http.ResponseWriter, r *http.Req
 }
 
 // handleNonStreamingRequest handles non-streaming requests with full error absorption.
-func (g *ProxyGateway) handleNonStreamingRequest(w http.ResponseWriter, r *http.Request, originalBody []byte, canonicalBody []byte, req *models.ProxyRequest, lapi *models.LAPI, rapis []models.RAPIWithPlatform, requestID string, sessionID string, clientFormat string) (bool, int) {
+func (g *ProxyGateway) handleNonStreamingRequest(w http.ResponseWriter, r *http.Request, originalBody []byte, canonicalBody []byte, req *models.ProxyRequest, lapi *models.LAPI, rapis []models.RAPIWithPlatform, requestID string, sessionID string, keyCursorSession string, clientFormat string) (bool, int) {
 	fallbackUsed := false
 	retryCount := 0
 	estimatedTokens := scheduler.EstimateCost(req)
@@ -1428,7 +1437,7 @@ func (g *ProxyGateway) handleNonStreamingRequest(w http.ResponseWriter, r *http.
 		startTime := time.Now()
 		// keyID 现在经 tryKeyForRAPI → doUpstreamRequest → RecordUpstreamSent 落库
 		// （request_logs.selected_key_id，指标 key 维度埋点）。
-		resp, _, err := g.tryKeyForRAPI(reqCtx, rapi, effectiveURL, upstreamBody, requestID, retryCount, targetFormat)
+		resp, _, err := g.tryKeyForRAPI(reqCtx, rapi, effectiveURL, upstreamBody, requestID, retryCount, keyCursorSession, targetFormat)
 		latencyMs := int(time.Since(startTime).Milliseconds())
 
 		if err != nil {

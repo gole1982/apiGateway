@@ -43,7 +43,50 @@ type Config struct {
 	CapabilityBlock time.Duration
 	QueueMaxLen     int
 	RequestMaxWait  time.Duration
+
+	// KeyCursorScope decides what PickAvailableKey rotates against.
+	//
+	//   CursorScopeSession (default) — one cursor per (platform, session).
+	//     Every conversation sweeps the key pool independently at its own
+	//     cadence, so the pool is covered in len(pool) x Ts instead of
+	//     len(pool) x Ts x nSessions. That is what gets every key into
+	//     cooldown (and the pool into ErrAllKeysUnavailable) as early as
+	//     possible. Costs cross-session fairness, and forfeits upstream
+	//     prompt-cache locality when a conversation is split across keys.
+	//
+	//   CursorScopePlatform — one cursor per platform, shared by all models
+	//     and all sessions. The pre-v2 behaviour: fairer quota spreading,
+	//     but a given conversation's turns are spaced nSessions x Ts apart
+	//     on the same key.
+	//
+	// Requests whose session id is not connection-stable (see
+	// logger.SessionTracker.InjectSessionID) always fall back to platform
+	// scope regardless of this setting — keying a persistent cursor on a
+	// per-request UUID would pin all traffic to the first key.
+	KeyCursorScope string
 }
+
+const (
+	// CursorScopeSession rotates per (platform, session).
+	CursorScopeSession = "session"
+	// CursorScopePlatform rotates per platform, shared across sessions.
+	CursorScopePlatform = "platform"
+)
+
+// sessionCursorTTL is how long an idle per-session key cursor is kept before
+// the recovery loop drops it. Bounds memory when clients churn sessions;
+// long enough that a conversation pausing between turns keeps its position.
+const sessionCursorTTL = 10 * time.Minute
+
+// maxSessionCursors is a hard cap on retained per-session cursors. The TTL
+// sweep normally keeps this unreachable; it exists so a pathological client
+// (millions of distinct sessions inside one TTL window) degrades into cursor
+// recycling rather than unbounded growth.
+const maxSessionCursors = 10000
+
+// cursorSweepThreshold is the map size at which evictCursorsLocked actually
+// does work. Below it, sweeping would be pure overhead.
+const cursorSweepThreshold = 1024
 
 func DefaultConfig() Config {
 	return Config{
@@ -55,11 +98,17 @@ func DefaultConfig() Config {
 		ExponentialBackoff: true,
 		QueueMaxLen:        1024,
 		RequestMaxWait:     2 * time.Minute,
+		KeyCursorScope:     CursorScopeSession,
 	}
 }
 
 // ConfigFromAppConfig builds a scheduler Config from the application config values.
-func ConfigFromAppConfig(cooldownSec, maxCooldownSec, requestMaxWaitSec, billingCooldownSec, capabilityBlockSec int) Config {
+// ConfigFromAppConfig builds the scheduler Config from flat app-config values.
+// keyCursorScope selects the PickAvailableKey rotation scope; empty means
+// DefaultConfig (CursorScopeSession). Anything other than CursorScopePlatform
+// is treated as session scope, so a typo degrades to the faster pool coverage
+// rather than silently disabling rotation diversity.
+func ConfigFromAppConfig(cooldownSec, maxCooldownSec, requestMaxWaitSec, billingCooldownSec, capabilityBlockSec int, keyCursorScope string) Config {
 	cfg := DefaultConfig()
 	if cooldownSec > 0 {
 		cfg.DefaultCooldown = time.Duration(cooldownSec) * time.Second
@@ -80,6 +129,15 @@ func ConfigFromAppConfig(cooldownSec, maxCooldownSec, requestMaxWaitSec, billing
 	if requestMaxWaitSec > 0 {
 		cfg.RequestMaxWait = time.Duration(requestMaxWaitSec) * time.Second
 	}
+	switch keyCursorScope {
+	case CursorScopePlatform:
+		cfg.KeyCursorScope = CursorScopePlatform
+	case CursorScopeSession:
+		cfg.KeyCursorScope = CursorScopeSession
+	default:
+		// 空值（未配置）→ 保持 DefaultConfig 的 session 模式。
+		cfg.KeyCursorScope = CursorScopeSession
+	}
 	return cfg
 }
 
@@ -97,11 +155,25 @@ type Manager struct {
 	platforms map[int64]*entity.Platform
 	queues    map[int64]*waitQueue
 	counters  map[int64]*rapiCounters
-	// keyCursors 是平台级 Key 轮询游标：每个平台维护一个计数器，
-	// PickAvailableKey 按它旋转 key 列表，实现同平台多 key 的一般轮询
-	// （round-robin，均匀分摊配额，不再偏向免费/临期 key）。
-	keyCursors map[int64]*uint64
+	// keyCursors 是 Key 轮询游标。作用域由 Config.KeyCursorScope 决定：
+	// session 模式下按 (平台, 会话) 各一个计数器，会话级轮询能让整个 key
+	// 池以 len(pool) x Ts 的速度被覆盖（见 Config.KeyCursorScope 注释）；
+	// platform 模式下退化为每平台一个计数器（v2 之前的行为）。
+	// sessionID 为空串的条目就是平台级游标。
+	keyCursors map[cursorKey]*keyCursor
 	stop       chan struct{}
+}
+
+// cursorKey 标识一个轮询游标。sessionID == "" 表示平台级游标
+// （配置为 platform 模式，或该请求没有连接级稳定的会话 id）。
+type cursorKey struct {
+	platformID int64
+	sessionID  string
+}
+
+type keyCursor struct {
+	n        uint64    // 轮转计数
+	lastUsed time.Time // 供 recoveryLoop 淘汰闲置会话游标
 }
 
 // timeBucket tracks request/token counts within a fixed time window.
@@ -143,6 +215,9 @@ func NewManager(cfg Config, store ...entity.Store) *Manager {
 	if cfg.QueueMaxLen <= 0 {
 		cfg.QueueMaxLen = DefaultConfig().QueueMaxLen
 	}
+	if cfg.KeyCursorScope == "" {
+		cfg.KeyCursorScope = DefaultConfig().KeyCursorScope
+	}
 	var st entity.Store
 	if len(store) > 0 {
 		st = store[0]
@@ -162,7 +237,7 @@ func NewManager(cfg Config, store ...entity.Store) *Manager {
 		platforms:  make(map[int64]*entity.Platform),
 		queues:     make(map[int64]*waitQueue),
 		counters:   make(map[int64]*rapiCounters),
-		keyCursors: make(map[int64]*uint64),
+		keyCursors: make(map[cursorKey]*keyCursor),
 		stop:       make(chan struct{}),
 	}
 	m.cond = sync.NewCond(&m.mu)
@@ -297,20 +372,29 @@ func (m *Manager) MarkPoolExhausted(rapiID int64, keyIDs []int64, poolRecoverAt 
 }
 
 // PickAvailableKey returns the next available PlatformKey from the provided
-// slice using per-platform round-robin.
+// slice using round-robin over a cursor.
 //
 // 选择算法（同平台多 key 一般轮询）：
 //  1. 按 KeyIndex 稳定排序（操作者配置的顺序即轮询顺序）；
-//  2. 按平台级游标（keyCursors[platform_id]）旋转切片，使每次调用从
-//     上一次选中 key 的下一位开始扫描 —— 均匀分摊各 key 的配额，
-//     不再偏向免费/临期 key；
+//  2. 按游标旋转切片，使每次调用从上一次选中 key 的下一位开始扫描；
 //  3. 依次评估实体可挑性（冷却中的 key 跳过，记录最早恢复时间），
 //     返回第一个可用的 key。
+//
+// 游标作用域（Config.KeyCursorScope）：
+//   - session（默认）：每个 (平台, 会话) 一个游标。同一会话的连续两轮因此
+//     必然落在不同 key 上（池内 key 顺序遍历），整个池被覆盖的墙钟时间是
+//     len(pool) x Ts，让所有 key 尽快进入冷却、池尽快耗尽。
+//   - platform：每平台一个游标，所有模型与会话共用（v2 之前的行为）。
+//
+// sessionID 由调用方给出，且**必须**是连接级稳定的会话 id
+// （logger.SessionTracker.InjectSessionID 的 stable=true）。传空串或传每请求
+// 一次性的 id 都退化为平台级游标 —— 这是刻意的：每请求唯一的 id 会让游标
+// 每次都从 0 开始，等于把全部流量钉在排序最靠前的 key 上。
 //
 // 每个 key 实体先与其最新 DB 行同步（enabled / failure_type / expires_at）
 // 再评估；死 key（禁用/永久失效/过期）跳过。返回 (key, retryAt, nil) 或
 // (zero, retryAt, ErrAllKeysUnavailable)。
-func (m *Manager) PickAvailableKey(keys []models.PlatformKey) (models.PlatformKey, time.Time, error) {
+func (m *Manager) PickAvailableKey(keys []models.PlatformKey, sessionID string) (models.PlatformKey, time.Time, error) {
 	now := time.Now()
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -324,17 +408,19 @@ func (m *Manager) PickAvailableKey(keys []models.PlatformKey) (models.PlatformKe
 		return sorted[i].KeyIndex < sorted[j].KeyIndex
 	})
 
-	// Rotate by the platform cursor so consecutive picks start one past the
-	// key used last time (round-robin). The cursor lives under m.mu.
+	// Rotate by the cursor so consecutive picks start one past the key used
+	// last time (round-robin). The cursor lives under m.mu.
 	if len(sorted) > 0 {
-		pid := sorted[0].PlatformID
-		cur := m.keyCursors[pid]
+		ck := m.cursorKeyLocked(sorted[0].PlatformID, sessionID)
+		cur := m.keyCursors[ck]
 		if cur == nil {
-			cur = new(uint64)
-			m.keyCursors[pid] = cur
+			cur = &keyCursor{}
+			m.keyCursors[ck] = cur
+			m.evictCursorsLocked(now)
 		}
-		rot := int(*cur % uint64(len(sorted)))
-		*cur++
+		cur.lastUsed = now
+		rot := int(cur.n % uint64(len(sorted)))
+		cur.n++
 		if rot > 0 {
 			rotated := make([]models.PlatformKey, len(sorted))
 			copy(rotated, sorted[rot:])
@@ -357,6 +443,59 @@ func (m *Manager) PickAvailableKey(keys []models.PlatformKey) (models.PlatformKe
 		return k, time.Time{}, nil
 	}
 	return models.PlatformKey{}, nextAvail, ErrAllKeysUnavailable
+}
+
+// cursorKeyLocked 决定本次轮询用哪个游标。session 模式下要求调用方传入
+// 连接级稳定的 sessionID；空串（无稳定会话、或该客户端每请求一次新 id）
+// 一律退回平台级游标，见 PickAvailableKey 的说明。
+func (m *Manager) cursorKeyLocked(platformID int64, sessionID string) cursorKey {
+	if m.cfg.KeyCursorScope == CursorScopeSession && sessionID != "" {
+		return cursorKey{platformID: platformID, sessionID: sessionID}
+	}
+	return cursorKey{platformID: platformID}
+}
+
+// evictCursorsLocked 丢弃闲置的会话游标，防止长跑进程因会话 churn 而无限增长。
+// 平台级游标（sessionID == ""）永不淘汰：数量有界（每平台一个）且必须跨会话
+// 保持位置。
+//
+// 只在新建游标时调用，频率与新会话产生速率同阶；且游标数低于 sweep 阈值时
+// 直接返回，所以稳态下这里不做任何工作。
+func (m *Manager) evictCursorsLocked(now time.Time) {
+	if len(m.keyCursors) < cursorSweepThreshold {
+		return
+	}
+	// 第一轮：清掉超过 TTL 未使用的会话游标。
+	cutoff := now.Add(-sessionCursorTTL)
+	for k, c := range m.keyCursors {
+		if k.sessionID != "" && c.lastUsed.Before(cutoff) {
+			delete(m.keyCursors, k)
+		}
+	}
+	// 第二轮：TTL 仍压不住（一个 TTL 窗口内涌入海量不同会话）时，按最久
+	// 未使用顺序丢弃直到回到硬上限以内。牺牲的是这些会话的轮转位置，不是
+	// 正确性 —— 游标本来就只是起点偏移。
+	if len(m.keyCursors) <= maxSessionCursors {
+		return
+	}
+	type aged struct {
+		key  cursorKey
+		used time.Time
+	}
+	var stale []aged
+	for k, c := range m.keyCursors {
+		if k.sessionID != "" {
+			stale = append(stale, aged{key: k, used: c.lastUsed})
+		}
+	}
+	sort.Slice(stale, func(i, j int) bool { return stale[i].used.Before(stale[j].used) })
+	drop := len(m.keyCursors) - maxSessionCursors
+	if drop > len(stale) {
+		drop = len(stale)
+	}
+	for i := 0; i < drop; i++ {
+		delete(m.keyCursors, stale[i].key)
+	}
 }
 
 // MarkKeyFailure puts a PlatformKey into session cooldown WITHOUT persisting
