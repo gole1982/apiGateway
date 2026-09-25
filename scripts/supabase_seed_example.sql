@@ -1,6 +1,8 @@
 -- ===========================================================================
 -- 手动录入示例：第一批配置怎么塞进中心 Supabase（管理端上线前的里程碑路径）
--- 配合 scripts/supabase_schema.sql 使用：先跑 schema，再按此模板录入。
+-- 配合 scripts/supabase_schema_v2.sql 使用：先跑 v2 schema，再按此模板录入。
+-- 注意：本模板按 v1 表结构（platform_keys / key_index）编写，v2 需改为
+-- credential（token_hash / sort_order）。仅作字段取值参考，勿直接用于 v2 中心。
 -- 录入后 config_meta.version 由触发器自动 +1，各代理 60s 内自动拉到。
 --
 -- 注意：

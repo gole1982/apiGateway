@@ -549,7 +549,8 @@ func handleSyncPush(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sbSystemLog("info", "本地→中心推送完成：平台×"+itoa(counts["platform"])+
-		" / 密钥×"+itoa(counts["platform_keys"])+" / 模型×"+itoa(counts["rapi"])+
+		" / 凭据×"+itoa(counts["credential"])+" / 模型×"+itoa(counts["rapi"])+
+		" / 绑定×"+itoa(counts["endpoint_credential"])+
 		" / 接口×"+itoa(counts["lapi"])+" / 路由链×"+itoa(counts["lapi_rapi_order"]))
 	// 拉回刷新本地镜像：让本地 id 与中心对齐、应用中心版本号。
 	_ = syncOnce(true)

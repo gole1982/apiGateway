@@ -3,9 +3,11 @@
 //
 // 语义对齐（与 *db.DB 完全一致，handler 无感知）：
 //   - token / login_password：读=center_key 解密为明文，写=center_key 加密落库；
-//   - rapi.key_ids：中心存"平台内 key_index CSV"（业务键，bundle 契约），
-//     读时换算回 key id CSV、写时换算回 key_index CSV（dashboard 按本地语义
-//     用 key id 勾选）；
+//   - 凭据（v2）：中心表 credential，身份 = token_hash（由明文算），平台内轮换
+//     序号 = sort_order。读出时映射回 models.PlatformKey（KeyIndex ← sort_order）；
+//   - 端点↔凭据绑定（v2）：中心表 endpoint_credential，取代 v1 的 rapi.key_ids
+//     CSV。store 接口对外仍是 RAPIWithPlatform.KeyIDs（credential id CSV），
+//     空 = 该端点用平台全部凭据（与本地 key_ids 语义同义）；
 //   - 未找到 → (nil, nil)，与本地 Scan ErrNoRows 语义一致。
 //
 // 已知取舍（单写者约定下可接受）：PostgREST 无跨表事务，SetPlatformKeys /
@@ -79,10 +81,13 @@ func New(cfg Config, onChanged func()) (*Store, error) {
 
 const (
 	tblPlatform = "platform"
-	tblKeys     = "platform_keys"
-	tblRAPI     = "rapi"
-	tblLAPI     = "lapi"
-	tblOrder    = "lapi_rapi_order"
+	// v2：凭据表以 token_hash 为自然键，平台内轮换序号降级为 sort_order。
+	tblCred = "credential"
+	tblRAPI = "rapi"
+	// v2：端点↔凭据绑定表，取代 v1 的 rapi.key_ids CSV。
+	tblBind  = "endpoint_credential"
+	tblLAPI  = "lapi"
+	tblOrder = "lapi_rapi_order"
 )
 
 // call 执行一次 PostgREST 调用。method 为 GET 时 out 解码为 JSON；
@@ -121,7 +126,8 @@ func (s *Store) call(method, table, query string, body any, out any) error {
 		return err
 	}
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("supabase %s %s: http %d: %s", method, table, resp.StatusCode, truncateBody(data))
+		return wrapCredErr(fmt.Errorf("supabase %s %s: http %d: %s",
+			method, table, resp.StatusCode, truncateBody(data)))
 	}
 	if out != nil && len(data) > 0 {
 		if err := json.Unmarshal(data, out); err != nil {
@@ -135,6 +141,17 @@ func (s *Store) changed() {
 	if s.onChanged != nil {
 		s.onChanged()
 	}
+}
+
+// wrapCredErr 把 token_hash 唯一冲突翻成可读中文，与本地 *db.DB 的
+// wrapCredErr 同文案。v2 起凭据按 token 内容全局唯一（v1 允许同一 token
+// 挂在多个平台），所以"换平台重复添加同一 token"从静默成功变成 409 ——
+// 没有这层翻译，dashboard 上只会显示裸 PostgREST 错误。
+func wrapCredErr(err error) error {
+	if err != nil && strings.Contains(err.Error(), "idx_credential_token_hash") {
+		return fmt.Errorf("该 token 已登记过：凭据按 token 内容全局唯一，无需重复添加")
+	}
+	return err
 }
 
 // ---------------------------------------------------------------------------
@@ -302,37 +319,81 @@ func (s *Store) UpdatePlatformFormats(platformID int64, formatsJSON string, prop
 }
 
 // ---------------------------------------------------------------------------
-// platform_keys
+// credential
+//
+// v2 契约：身份 = token_hash（sha256(明文)[:16]），平台内轮换序号 = sort_order。
+// 读出时映射回 store 接口的 models.PlatformKey（KeyIndex ← sort_order），
+// 使上层 dashboard / gateway 代码对中心与本地两种 store 无需区分。
 // ---------------------------------------------------------------------------
 
+// credRow 是中心 credential 表的解码目标。不能用 models.PlatformKey 直接
+// select=*：v2 列名是 sort_order，与 PlatformKey 的 key_index 字段名不匹配。
+type credRow struct {
+	ID         int64      `json:"id"`
+	PlatformID int64      `json:"platform_id"`
+	TokenHash  string     `json:"token_hash"`
+	SortOrder  int        `json:"sort_order"`
+	Token      string     `json:"token"`
+	Label      string     `json:"label"`
+	Enabled    bool       `json:"enabled"`
+	ExpiresAt  *time.Time `json:"expires_at"`
+	IsFree     bool       `json:"is_free"`
+}
+
+// toPlatformKey 转成 store 接口形态。token 在中心是 center_key 密文，
+// 此处解出明文（与本地 store 行为对齐，热路径零改动）。
+func (r credRow) toPlatformKey(dec func(string) string) models.PlatformKey {
+	return models.PlatformKey{
+		ID:         r.ID,
+		PlatformID: r.PlatformID,
+		KeyIndex:   r.SortOrder, // v2：轮换序号
+		Token:      dec(r.Token),
+		Label:      r.Label,
+		Enabled:    r.Enabled,
+		ExpiresAt:  r.ExpiresAt,
+		IsFree:     r.IsFree,
+	}
+}
+
 func (s *Store) GetPlatformKeys(platformID int64) ([]models.PlatformKey, error) {
-	q := "select=*&platform_id=eq." + strconv.FormatInt(platformID, 10) + "&order=key_index.asc"
-	var rows []models.PlatformKey
-	if err := s.call(http.MethodGet, tblKeys, q, nil, &rows); err != nil {
-		return nil, err
-	}
-	for i := range rows {
-		rows[i].Token = s.dec(rows[i].Token)
-	}
-	return rows, nil
+	q := "select=*&platform_id=eq." + strconv.FormatInt(platformID, 10) + "&order=sort_order.asc"
+	return s.queryCreds(q)
 }
 
 func (s *Store) GetAllPlatformKeys() ([]models.PlatformKey, error) {
-	var rows []models.PlatformKey
-	if err := s.call(http.MethodGet, tblKeys, "select=*&order=platform_id.asc,key_index.asc", nil, &rows); err != nil {
-		return nil, err
-	}
-	for i := range rows {
-		rows[i].Token = s.dec(rows[i].Token)
-	}
-	return rows, nil
+	return s.queryCreds("select=*&order=platform_id.asc,sort_order.asc")
 }
 
+func (s *Store) queryCreds(q string) ([]models.PlatformKey, error) {
+	var rows []credRow
+	if err := s.call(http.MethodGet, tblCred, q, nil, &rows); err != nil {
+		return nil, err
+	}
+	out := make([]models.PlatformKey, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, r.toPlatformKey(s.dec))
+	}
+	return out, nil
+}
+
+// keyRow 生成 credential 写入行。
+//
+// 调用契约：k.Token 必须是**明文**（所有调用点都在 s.enc 之前调用本函数），
+// 因为 token_hash 要由明文算。token 字段留给调用方覆盖为密文。
+// 空 token → token_hash 落 NULL 而非空串：唯一索引是
+// idx_credential_token_hash ... WHERE token_hash IS NOT NULL，多条空 token
+// 凭据（动态令牌占位）写空串会互相撞唯一约束。
 func keyRow(k *models.PlatformKey) map[string]any {
+	var hash any // nil → SQL NULL
+	if h := models.TokenHash(k.Token); h != "" {
+		hash = h
+	}
 	return map[string]any{
-		"platform_id": k.PlatformID, "key_index": k.KeyIndex,
-		"token": k.Token, // 调用方已 enc
-		"label": k.Label, "enabled": k.Enabled,
+		"platform_id": k.PlatformID,
+		"token_hash":  hash,
+		"sort_order":  k.KeyIndex, // v2：平台内轮换序号
+		"token":       k.Token,    // 调用方覆盖为 enc 密文
+		"label":       k.Label, "enabled": k.Enabled,
 		"expires_at": k.ExpiresAt, // *time.Time, nil → null
 		"is_free":    k.IsFree,
 		"updated_at": nowPtr(),
@@ -343,7 +404,7 @@ func (s *Store) AddPlatformKey(k *models.PlatformKey) error {
 	row := keyRow(k)
 	row["token"] = s.enc(k.Token)
 	var out []map[string]any
-	if err := s.call(http.MethodPost, tblKeys, "", row, &out); err != nil {
+	if err := s.call(http.MethodPost, tblCred, "", row, &out); err != nil {
 		return err
 	}
 	k.ID = f64ToID(out, "id")
@@ -354,7 +415,7 @@ func (s *Store) AddPlatformKey(k *models.PlatformKey) error {
 func (s *Store) UpdatePlatformKey(k *models.PlatformKey) error {
 	row := keyRow(k)
 	row["token"] = s.enc(k.Token)
-	if err := s.patchOne(tblKeys, k.ID, row); err != nil {
+	if err := s.patchOne(tblCred, k.ID, row); err != nil {
 		return err
 	}
 	s.changed()
@@ -362,7 +423,7 @@ func (s *Store) UpdatePlatformKey(k *models.PlatformKey) error {
 }
 
 func (s *Store) DeletePlatformKey(keyID int64) error {
-	if err := s.deleteByID(tblKeys, keyID); err != nil {
+	if err := s.deleteByID(tblCred, keyID); err != nil {
 		return err
 	}
 	s.changed()
@@ -373,7 +434,7 @@ func (s *Store) DeletePlatformKey(keyID int64) error {
 // （单写者约定下可接受；中途失败重试即可，幂等）。
 func (s *Store) SetPlatformKeys(platformID int64, keys []models.PlatformKey) error {
 	q := "platform_id=eq." + strconv.FormatInt(platformID, 10)
-	if err := s.call(http.MethodDelete, tblKeys, q, nil, nil); err != nil {
+	if err := s.call(http.MethodDelete, tblCred, q, nil, nil); err != nil {
 		return err
 	}
 	for i := range keys {
@@ -383,7 +444,7 @@ func (s *Store) SetPlatformKeys(platformID int64, keys []models.PlatformKey) err
 		if _, err := json.Marshal(row); err != nil {
 			return err
 		}
-		if err := s.call(http.MethodPost, tblKeys, "", row, nil); err != nil {
+		if err := s.call(http.MethodPost, tblCred, "", row, nil); err != nil {
 			return err
 		}
 	}
@@ -391,37 +452,51 @@ func (s *Store) SetPlatformKeys(platformID int64, keys []models.PlatformKey) err
 	return nil
 }
 
-// DetachKeyFromRAPIs：从所有 rapi.key_ids（中心=key_index CSV）中摘掉该 key，
-// 返回受影响 rapi 的 alias（与本地语义一致）。
+// DetachKeyFromRAPIs：摘掉该 credential 与所有端点的绑定，返回受影响 rapi 的
+// alias（与本地语义一致）。v2 里绑定是独立表的一行，删除即摘除，无需重写 CSV。
 func (s *Store) DetachKeyFromRAPIs(keyID int64) ([]string, error) {
-	// 找到该 key 的 (platform_id, key_index)
-	keys, err := s.callList(tblKeys, "select=platform_id,key_index&id=eq."+strconv.FormatInt(keyID, 10))
+	// 先取受影响的 rapi_id（删完就查不到了），再取 alias 用于回报。
+	rows, err := s.callList(tblBind,
+		"select=rapi_id&credential_id=eq."+strconv.FormatInt(keyID, 10))
 	if err != nil {
 		return nil, err
 	}
-	if len(keys) == 0 {
+	if len(rows) == 0 {
 		return nil, nil
 	}
-	pid := int64(keys[0]["platform_id"].(float64))
-	idx := int(keys[0]["key_index"].(float64))
+	seen := map[int64]bool{}
+	var rapiIDs []int64
+	for _, r := range rows {
+		if f, ok := r["rapi_id"].(float64); ok {
+			if id := int64(f); !seen[id] {
+				seen[id] = true
+				rapiIDs = append(rapiIDs, id)
+			}
+		}
+	}
+	if err := s.call(http.MethodDelete, tblBind,
+		"credential_id=eq."+strconv.FormatInt(keyID, 10), nil, nil); err != nil {
+		return nil, err
+	}
 
-	rapis, err := s.callList(tblRAPI, "select=id,alias,key_ids&platform_id=eq."+strconv.FormatInt(pid, 10))
+	// 一次 in.(...) 取回所有 alias，避免逐个 RTT。
+	parts := make([]string, 0, len(rapiIDs))
+	for _, rid := range rapiIDs {
+		parts = append(parts, strconv.FormatInt(rid, 10))
+	}
+	aliasRows, err := s.callList(tblRAPI, "select=id,alias&id=in.("+strings.Join(parts, ",")+")")
 	if err != nil {
 		return nil, err
 	}
+	aliasByID := map[int64]string{}
+	for _, r := range aliasRows {
+		id, _ := r["id"].(float64)
+		a, _ := r["alias"].(string)
+		aliasByID[int64(id)] = a
+	}
 	var affected []string
-	idxStr := strconv.Itoa(idx)
-	for _, r := range rapis {
-		csv := r["key_ids"].(string)
-		kept := removeCSVItem(csv, idxStr)
-		if kept == csv {
-			continue
-		}
-		id := int64(r["id"].(float64))
-		if err := s.patchOne(tblRAPI, id, map[string]any{"key_ids": kept, "updated_at": nowPtr()}); err != nil {
-			return nil, err
-		}
-		if a, _ := r["alias"].(string); a != "" {
+	for _, rid := range rapiIDs {
+		if a := aliasByID[rid]; a != "" {
 			affected = append(affected, a)
 		}
 	}
@@ -431,77 +506,59 @@ func (s *Store) DetachKeyFromRAPIs(keyID int64) ([]string, error) {
 	return affected, nil
 }
 
-// removeCSVItem 从逗号分隔串里去掉一项（保持其余顺序）。
-func removeCSVItem(csv, item string) string {
-	parts := strings.Split(csv, ",")
-	var keep []string
-	for _, p := range parts {
-		if t := strings.TrimSpace(p); t != "" && t != item {
-			keep = append(keep, t)
-		}
-	}
-	return strings.Join(keep, ",")
-}
-
 // ---------------------------------------------------------------------------
 // rapi
 // ---------------------------------------------------------------------------
 
-// keyIndexTranslator 在"中心 key_index CSV"与"dashboard 侧 key id CSV"间换算。
-type keyIndexTranslator struct {
-	byID    map[int64]int // key id → key_index
-	byIndex map[int]int64 // key_index → key id（同平台内）
-}
+// v2：端点↔凭据绑定。中心用 endpoint_credential 表，store 接口沿用
+// RAPIWithPlatform.KeyIDs（credential id CSV）对外表达，两者互不外泄。
+// 空 KeyIDs = 该端点不绑定任何凭据 = 用该平台全部凭据，与本地 key_ids 语义同义。
 
-func (s *Store) keyTranslator(platformID int64) (*keyIndexTranslator, error) {
-	keys, err := s.GetPlatformKeys(platformID)
+// bindingsByRAPI 一次读回全表绑定，归拢成 rapi_id → credential_id CSV。
+func (s *Store) bindingsByRAPI() (map[int64]string, error) {
+	rows, err := s.callList(tblBind, "select=rapi_id,credential_id")
 	if err != nil {
 		return nil, err
 	}
-	t := &keyIndexTranslator{byID: map[int64]int{}, byIndex: map[int]int64{}}
-	for _, k := range keys {
-		t.byID[k.ID] = k.KeyIndex
-		t.byIndex[k.KeyIndex] = k.ID
+	parts := map[int64][]string{}
+	for _, r := range rows {
+		rf, ok1 := r["rapi_id"].(float64)
+		cf, ok2 := r["credential_id"].(float64)
+		if !ok1 || !ok2 {
+			continue
+		}
+		rid := int64(rf)
+		parts[rid] = append(parts[rid], strconv.FormatInt(int64(cf), 10))
 	}
-	return t, nil
-}
-
-// toLocalKeyIDs：中心 key_index CSV → dashboard 语义的 key id CSV。
-func (t *keyIndexTranslator) toLocalKeyIDs(keyIndexCSV string) string {
-	return t.mapCSV(keyIndexCSV, func(idx int) (int64, bool) {
-		id, ok := t.byIndex[idx]
-		return id, ok
-	})
-}
-
-// toCenterKeyIDs：dashboard 的 key id CSV → 中心 key_index CSV。
-func (t *keyIndexTranslator) toCenterKeyIDs(idCSV string) string {
-	return t.mapCSV(idCSV, func(id int) (int64, bool) {
-		idx, ok := t.byID[int64(id)]
-		return int64(idx), ok
-	})
-}
-
-func (t *keyIndexTranslator) mapCSV(csv string, lookup func(int) (int64, bool)) string {
-	csv = strings.TrimSpace(csv)
-	if csv == "" {
-		return ""
+	out := make(map[int64]string, len(parts))
+	for rid, cs := range parts {
+		out[rid] = strings.Join(cs, ",")
 	}
-	var out []string
-	for _, p := range strings.Split(csv, ",") {
+	return out, nil
+}
+
+// replaceBindings 把某端点的绑定整组替换为 keyIDs（credential id CSV）。
+// PostgREST 无跨表事务 → 先删后插（单写者约定下可接受，重跑幂等）。
+func (s *Store) replaceBindings(rapiID int64, keyIDs string) error {
+	if err := s.call(http.MethodDelete, tblBind,
+		"rapi_id=eq."+strconv.FormatInt(rapiID, 10), nil, nil); err != nil {
+		return err
+	}
+	for _, p := range strings.Split(keyIDs, ",") {
 		p = strings.TrimSpace(p)
 		if p == "" {
 			continue
 		}
-		n, err := strconv.Atoi(p)
+		cid, err := strconv.ParseInt(p, 10, 64)
 		if err != nil {
-			continue
+			continue // 与 v1 mapCSV 同策略：跳过无法解析的项，不整批失败
 		}
-		if v, ok := lookup(n); ok {
-			out = append(out, strconv.FormatInt(v, 10))
+		row := map[string]any{"rapi_id": rapiID, "credential_id": cid}
+		if err := s.call(http.MethodPost, tblBind, "", row, nil); err != nil {
+			return err
 		}
 	}
-	return strings.Join(out, ",")
+	return nil
 }
 
 func (s *Store) GetRAPIs() ([]models.RAPIWithPlatform, error) {
@@ -516,25 +573,28 @@ func (s *Store) GetRAPIsByPlatform(platformID int64) ([]models.RAPIWithPlatform,
 func (s *Store) listRAPIs(extraFilter string) ([]models.RAPIWithPlatform, error) {
 	q := "select=*" + orderSuffix(extraFilter, "sort_order.asc,id.asc")
 
-	// Three independent PostgREST reads. Each is a full HTTPS round trip to the
-	// center, so running them concurrently takes this call from ~3 RTT to ~1 RTT.
-	// Safe to fan out: all three are read-only and call/dec hold no shared
+	// Four independent PostgREST reads. Each is a full HTTPS round trip to the
+	// center, so running them concurrently takes this call from ~4 RTT to ~1 RTT.
+	// Safe to fan out: all four are read-only and call/dec hold no shared
 	// mutable state (only *http.Client, which is concurrency-safe).
 	var (
 		raws    []models.RAPI
 		plats   []models.Platform
 		allKeys []models.PlatformKey
+		binds   map[int64]string
 		rawsErr error
 		platErr error
 		keysErr error
+		bindErr error
 		wg      sync.WaitGroup
 	)
-	wg.Add(3)
+	wg.Add(4)
 	go func() { defer wg.Done(); rawsErr = s.call(http.MethodGet, tblRAPI, q, nil, &raws) }()
 	go func() { defer wg.Done(); plats, platErr = s.GetPlatforms() }()
 	go func() { defer wg.Done(); allKeys, keysErr = s.GetAllPlatformKeys() }()
+	go func() { defer wg.Done(); binds, bindErr = s.bindingsByRAPI() }()
 	wg.Wait()
-	// Preserve the original error precedence: rapi, then platforms, then keys.
+	// Preserve the original error precedence: rapi, platforms, keys, bindings.
 	if rawsErr != nil {
 		return nil, rawsErr
 	}
@@ -543,6 +603,9 @@ func (s *Store) listRAPIs(extraFilter string) ([]models.RAPIWithPlatform, error)
 	}
 	if keysErr != nil {
 		return nil, keysErr
+	}
+	if bindErr != nil {
+		return nil, bindErr
 	}
 	platByID := map[int64]*models.Platform{}
 	for i := range plats {
@@ -559,9 +622,10 @@ func (s *Store) listRAPIs(extraFilter string) ([]models.RAPIWithPlatform, error)
 		if p := platByID[r.PlatformID]; p != nil {
 			fillPlatform(&wp, p)
 			wp.Keys = keysByPlat[p.ID]
-			// key_ids：中心 key_index CSV → dashboard 语义 key id CSV
-			wp.KeyIDs = keyIdxToIDCSV(r.KeyIDs, keysByPlat[p.ID])
 		}
+		// v2：绑定来自 endpoint_credential 表（v1 是 rapi.key_ids CSV）。
+		// 空 = 未绑定 = 该平台全部凭据。
+		wp.KeyIDs = binds[r.ID]
 		out = append(out, wp)
 	}
 	return out, nil
@@ -599,31 +663,21 @@ func fillPlatform(wp *models.RAPIWithPlatform, p *models.Platform) {
 	wp.LastTokenFetch = p.LastTokenFetch
 }
 
-// keyIdxToIDCSV：中心 key_index CSV → 本地语义 key id CSV（按该平台密钥表）。
-func keyIdxToIDCSV(keyIndexCSV string, keys []models.PlatformKey) string {
-	if strings.TrimSpace(keyIndexCSV) == "" {
-		return ""
+func (s *Store) GetRAPIByID(id int64) (*models.RAPIWithPlatform, error) {
+	wp, err := s.getRAPIByIDNoBindings(id)
+	if err != nil || wp == nil {
+		return wp, err
 	}
-	byIdx := map[int]int64{}
-	for _, k := range keys {
-		byIdx[k.KeyIndex] = k.ID
+	// v2：绑定来自 endpoint_credential。
+	if binds, err := s.bindingsByRAPI(); err == nil {
+		wp.KeyIDs = binds[wp.ID]
 	}
-	var out []string
-	for _, p := range strings.Split(keyIndexCSV, ",") {
-		p = strings.TrimSpace(p)
-		if p == "" {
-			continue
-		}
-		if n, err := strconv.Atoi(p); err == nil {
-			if id, ok := byIdx[n]; ok {
-				out = append(out, strconv.FormatInt(id, 10))
-			}
-		}
-	}
-	return strings.Join(out, ",")
+	return wp, nil
 }
 
-func (s *Store) GetRAPIByID(id int64) (*models.RAPIWithPlatform, error) {
+// getRAPIByIDNoBindings 组装单个端点（平台 + 平台凭据），**不含**绑定。
+// 供 GetRAPIsForLAPI 复用：整链只拉一次绑定表，避免 N+1 次全表读。
+func (s *Store) getRAPIByIDNoBindings(id int64) (*models.RAPIWithPlatform, error) {
 	var raws []models.RAPI
 	if err := s.call(http.MethodGet, tblRAPI,
 		"select=*&id=eq."+strconv.FormatInt(id, 10)+"&limit=1", nil, &raws); err != nil {
@@ -638,11 +692,13 @@ func (s *Store) GetRAPIByID(id int64) (*models.RAPIWithPlatform, error) {
 	} else if p != nil {
 		fillPlatform(&wp, p)
 		wp.Keys, _ = s.GetPlatformKeys(p.ID)
-		wp.KeyIDs = keyIdxToIDCSV(raws[0].KeyIDs, wp.Keys)
 	}
 	return &wp, nil
 }
 
+// rapiRow 生成 rapi 写入行。v2 的 rapi 表**没有** key_ids 列（绑定在
+// endpoint_credential），带上会让 PostgREST 报未知列，故此处不出现。
+// 调用方需另行写绑定，见 replaceBindings。
 func rapiRow(r *models.RAPI) map[string]any {
 	return map[string]any{
 		"platform_id": r.PlatformID, "alias": r.Alias, "model": r.Model,
@@ -650,7 +706,7 @@ func rapiRow(r *models.RAPI) map[string]any {
 		"rpm_limit": r.RPMLimit, "rph_limit": r.RPHLimit, "rpd_limit": r.RPDLimit,
 		"tpm_limit": r.TPMLimit, "tph_limit": r.TPHLimit, "tpd_limit": r.TPDLimit,
 		"time_period_rules": r.TimePeriodRules, "supported_formats": r.SupportedFormats,
-		"custom_headers": r.CustomHeaders, "key_ids": r.KeyIDs, "source": r.Source,
+		"custom_headers": r.CustomHeaders, "source": r.Source,
 		"vendor": r.Vendor, "series": r.Series, "model_name": r.ModelName,
 		"version": r.Version, "suffix": r.Suffix, "notes": r.Notes,
 		"updated_at": nowPtr(), // sort_order 只经 SetRAPISortOrder 改，模型无此字段
@@ -658,29 +714,26 @@ func rapiRow(r *models.RAPI) map[string]any {
 }
 
 func (s *Store) CreateRAPI(r *models.RAPI) error {
-	t, err := s.keyTranslator(r.PlatformID)
-	if err != nil {
-		return err
-	}
-	row := rapiRow(r)
-	row["key_ids"] = t.toCenterKeyIDs(r.KeyIDs)
 	var out []map[string]any
-	if err := s.call(http.MethodPost, tblRAPI, "", row, &out); err != nil {
+	if err := s.call(http.MethodPost, tblRAPI, "", rapiRow(r), &out); err != nil {
 		return err
 	}
 	r.ID = f64ToID(out, "id")
+	// v2：绑定独立成表。KeyIDs 已是中心 credential id（中心模式下
+	// 上层拿到的就是中心 id），无需换算。
+	if err := s.replaceBindings(r.ID, r.KeyIDs); err != nil {
+		return err
+	}
 	s.changed()
 	return nil
 }
 
 func (s *Store) UpdateRAPI(r *models.RAPI) error {
-	t, err := s.keyTranslator(r.PlatformID)
-	if err != nil {
+	if err := s.patchOne(tblRAPI, r.ID, rapiRow(r)); err != nil {
 		return err
 	}
-	row := rapiRow(r)
-	row["key_ids"] = t.toCenterKeyIDs(r.KeyIDs)
-	if err := s.patchOne(tblRAPI, r.ID, row); err != nil {
+	// v2：绑定独立成表，端点更新时整组替换。
+	if err := s.replaceBindings(r.ID, r.KeyIDs); err != nil {
 		return err
 	}
 	s.changed()
@@ -863,12 +916,22 @@ func (s *Store) GetRAPIsForLAPI(lapiID int64) ([]models.RAPIWithPlatform, error)
 	}
 	byID := map[int64]*models.RAPIWithPlatform{}
 	for i := range ids {
-		wp, err := s.GetRAPIByID(ids[i])
+		wp, err := s.getRAPIByIDNoBindings(ids[i])
 		if err != nil {
 			return nil, err
 		}
 		if wp != nil {
 			byID[wp.ID] = wp
+		}
+	}
+	// 整链只拉一次绑定表（v2），逐个填 KeyIDs。
+	if len(byID) > 0 {
+		binds, err := s.bindingsByRAPI()
+		if err != nil {
+			return nil, err
+		}
+		for id, wp := range byID {
+			wp.KeyIDs = binds[id]
 		}
 	}
 	out := make([]models.RAPIWithPlatform, 0, len(ids))
@@ -915,7 +978,7 @@ func (s *Store) SetLAPIRAPIOrder(lapiID int64, rapiIDs []int64) error {
 // ---------------------------------------------------------------------------
 
 // LocalSnapshot 是待推送的本地 SQLite 定义快照（由 service 层从 db.Get() 读取，
-// token 已被本地解出为明文）。ReplaceAll 用它整体覆盖中心 5 张定义表。
+// token 已被本地解出为明文）。ReplaceAll 用它整体覆盖中心 6 张定义表。
 type LocalSnapshot struct {
 	Platforms []models.Platform
 	Keys      []models.PlatformKey
@@ -924,19 +987,20 @@ type LocalSnapshot struct {
 	Orders    []db.LAPIRAPIOrder
 }
 
-// ReplaceAll 用本地定义整体覆盖中心 5 张定义表。流程：
-//  1. DELETE 全表（子→父：order→rapi→keys→lapi→platform，id=gte.0 全删）；
+// ReplaceAll 用本地定义整体覆盖中心 6 张定义表。流程：
+//  1. DELETE 全表（子→父：order→binding→rapi→credential→lapi→platform，id=gte.0 全删）；
 //  2. INSERT platform（父，不传 id），读回服务端 id 建 old→new 映射；
-//  3. INSERT platform_keys（remap platform_id），建 old key id→new + old key id→key_index；
-//  4. INSERT rapi（remap platform_id；key_ids 本地 key-id CSV → 中心 key-index CSV）；
-//  5. INSERT lapi，建 old→new 映射；
-//  6. INSERT lapi_rapi_order（remap lapi_id / rapi_id）。
+//  3. INSERT credential（remap platform_id；token_hash 由明文算），建 old key id→new；
+//  4. INSERT rapi（remap platform_id；v2 无 key_ids 列）；
+//  5. INSERT endpoint_credential（remap rapi_id / credential_id）；
+//  6. INSERT lapi，建 old→new 映射；
+//  7. INSERT lapi_rapi_order（remap lapi_id / rapi_id）。
 //
 // 不传 id（中心自增）避免序列错位（PostgREST 无法 setval）；token 走 s.enc 边界。
 // 非原子：中途失败留部分状态，重跑幂等（全删全插）。返回新中心各表行数。
 func (s *Store) ReplaceAll(local LocalSnapshot) (map[string]int, error) {
 	// 1) DELETE 全表，子→父。
-	for _, t := range []string{tblOrder, tblRAPI, tblKeys, tblLAPI, tblPlatform} {
+	for _, t := range []string{tblOrder, tblBind, tblRAPI, tblCred, tblLAPI, tblPlatform} {
 		if err := s.call(http.MethodDelete, t, "id=gte.0", nil, nil); err != nil {
 			return nil, fmt.Errorf("delete %s: %w", t, err)
 		}
@@ -956,28 +1020,35 @@ func (s *Store) ReplaceAll(local LocalSnapshot) (map[string]int, error) {
 		platMap[p.ID] = f64ToID(out, "id")
 	}
 
-	// 3) platform_keys：remap platform_id；记 old key id→key_index（供 rapi 换算）。
-	keyMap := map[int64]int64{}               // old key id → new id
-	keyIdxByPlat := map[int64]map[int64]int{} // old platform id → (old key id → key_index)
+	// 3) credential：remap platform_id。token_hash 由**明文**算（keyRow 内
+	//    完成），v2 凭据身份即 token_hash。空 token → NULL，不参与唯一约束。
+	//    同一 token 在本地跨平台重复时中心唯一索引会拒；本地迁移
+	//    （MigrateNaturalKeys）已按 token_hash 合并过，仍撞说明数据不一致，
+	//    显式报错让操作者处理，而不是让 PostgREST 抛裸 409。
+	keyMap := map[int64]int64{} // old key id → new credential id
+	seenHash := map[string]int64{}
 	for i := range local.Keys {
 		k := local.Keys[i]
-		row := keyRow(&k)
+		row := keyRow(&k) // 用明文 k.Token 算 token_hash
 		if np, ok := platMap[k.PlatformID]; ok {
 			row["platform_id"] = np
 		}
+		if h := models.TokenHash(k.Token); h != "" {
+			if prev, dup := seenHash[h]; dup {
+				return nil, fmt.Errorf("insert credential: token_hash %s 重复（本地 key id %d 与 %d 同 token；"+
+					"v2 凭据按 token 全局唯一，请先跑本地自然键迁移合并）", h, prev, k.ID)
+			}
+			seenHash[h] = k.ID
+		}
 		row["token"] = s.enc(k.Token)
 		var out []map[string]any
-		if err := s.call(http.MethodPost, tblKeys, "", row, &out); err != nil {
-			return nil, fmt.Errorf("insert key platform=%d idx=%d: %w", k.PlatformID, k.KeyIndex, err)
+		if err := s.call(http.MethodPost, tblCred, "", row, &out); err != nil {
+			return nil, fmt.Errorf("insert credential platform=%d idx=%d: %w", k.PlatformID, k.KeyIndex, err)
 		}
 		keyMap[k.ID] = f64ToID(out, "id")
-		if keyIdxByPlat[k.PlatformID] == nil {
-			keyIdxByPlat[k.PlatformID] = map[int64]int{}
-		}
-		keyIdxByPlat[k.PlatformID][k.ID] = k.KeyIndex
 	}
 
-	// 4) rapi：remap platform_id；key_ids 本地 key-id CSV → 中心 key-index CSV。
+	// 4) rapi：remap platform_id。v2 的 rapi 表无 key_ids 列，绑定见第 5 步。
 	rapiMap := map[int64]int64{} // old id → new id
 	for i := range local.RAPIs {
 		wp := local.RAPIs[i]
@@ -986,15 +1057,6 @@ func (s *Store) ReplaceAll(local LocalSnapshot) (map[string]int, error) {
 		if np, ok := platMap[wp.PlatformID]; ok {
 			row["platform_id"] = np
 		}
-		mapped := remapKeyIDsToIdx(wp.KeyIDs, keyIdxByPlat[wp.PlatformID])
-		// key_ids 原本非空、换算后为空 = 该平台 key 未成功 remap（如 platform
-		// INSERT 失败）→ 模型会变成"无 key 绑定"。这是数据错误而非悬空清理，
-		// 显式报错而不是静默写空串。
-		if strings.TrimSpace(wp.KeyIDs) != "" && mapped == "" {
-			return nil, fmt.Errorf("insert rapi %q: key_ids %q 无法映射为中心 key_index（平台 %d 的 key 未成功重映射）",
-				wp.Alias, wp.KeyIDs, wp.PlatformID)
-		}
-		row["key_ids"] = mapped
 		var out []map[string]any
 		if err := s.call(http.MethodPost, tblRAPI, "", row, &out); err != nil {
 			return nil, fmt.Errorf("insert rapi %q: %w", wp.Alias, err)
@@ -1002,7 +1064,34 @@ func (s *Store) ReplaceAll(local LocalSnapshot) (map[string]int, error) {
 		rapiMap[wp.ID] = f64ToID(out, "id")
 	}
 
-	// 5) lapi。
+	// 5) endpoint_credential：本地 key id CSV → 中心 credential_id。
+	//    原本非空、remap 后全空 = 该平台的 credential 未成功插入 → 端点会静默
+	//    变成"用平台全部凭据"。这是数据错误而非悬空清理，显式报错。
+	for i := range local.RAPIs {
+		wp := local.RAPIs[i]
+		ids := splitCSV(wp.KeyIDs)
+		if len(ids) == 0 {
+			continue // 空 = 不绑定 = 用平台全部凭据，与本地语义一致
+		}
+		credIDs := make([]int64, 0, len(ids))
+		for _, old := range ids {
+			if nc, ok := keyMap[old]; ok {
+				credIDs = append(credIDs, nc)
+			}
+		}
+		if len(credIDs) == 0 {
+			return nil, fmt.Errorf("insert binding for rapi %q: key_ids %q 无一能映射到中心 credential",
+				wp.Alias, wp.KeyIDs)
+		}
+		for _, cid := range credIDs {
+			row := map[string]any{"rapi_id": rapiMap[wp.ID], "credential_id": cid}
+			if err := s.call(http.MethodPost, tblBind, "", row, nil); err != nil {
+				return nil, fmt.Errorf("insert binding rapi=%q cred=%d: %w", wp.Alias, cid, err)
+			}
+		}
+	}
+
+	// 6) lapi。
 	lapiMap := map[int64]int64{} // old id → new id
 	for i := range local.LAPIs {
 		l := local.LAPIs[i]
@@ -1013,7 +1102,7 @@ func (s *Store) ReplaceAll(local LocalSnapshot) (map[string]int, error) {
 		lapiMap[l.ID] = f64ToID(out, "id")
 	}
 
-	// 6) lapi_rapi_order：remap lapi_id / rapi_id；悬空引用丢弃。
+	// 7) lapi_rapi_order：remap lapi_id / rapi_id；悬空引用丢弃。
 	for _, o := range local.Orders {
 		nl, okL := lapiMap[o.LapiID]
 		nr, okR := rapiMap[o.RAPIID]
@@ -1028,11 +1117,12 @@ func (s *Store) ReplaceAll(local LocalSnapshot) (map[string]int, error) {
 
 	s.changed()
 
-	// 7) 读回中心各表行数（定义表小，select=id 全取后计数即可）。
+	// 8) 读回中心各表行数（定义表小，select=id 全取后计数即可）。
 	counts := map[string]int{}
 	for _, pair := range []struct{ tbl, key string }{
-		{tblPlatform, "platform"}, {tblKeys, "platform_keys"},
-		{tblRAPI, "rapi"}, {tblLAPI, "lapi"}, {tblOrder, "lapi_rapi_order"},
+		{tblPlatform, "platform"}, {tblCred, "credential"},
+		{tblRAPI, "rapi"}, {tblBind, "endpoint_credential"},
+		{tblLAPI, "lapi"}, {tblOrder, "lapi_rapi_order"},
 	} {
 		if rows, err := s.callList(pair.tbl, "select=id"); err == nil {
 			counts[pair.key] = len(rows)
@@ -1041,12 +1131,12 @@ func (s *Store) ReplaceAll(local LocalSnapshot) (map[string]int, error) {
 	return counts, nil
 }
 
-// DumpAll 读出中心 5 张定义表的全部行（select=*）。token/login_password
+// DumpAll 读出中心 6 张定义表的全部行（select=*）。token/login_password
 // 保持中心存储形态（center_key 密文），不会把明文引入备份。用于 push 覆盖前
 // 自动备份中心快照（service 层存 settings.center_backup_latest）。
 func (s *Store) DumpAll() (map[string][]map[string]any, error) {
 	out := map[string][]map[string]any{}
-	for _, t := range []string{tblPlatform, tblKeys, tblRAPI, tblLAPI, tblOrder} {
+	for _, t := range []string{tblPlatform, tblCred, tblRAPI, tblBind, tblLAPI, tblOrder} {
 		rows, err := s.callList(t, "select=*")
 		if err != nil {
 			return nil, fmt.Errorf("dump %s: %w", t, err)
@@ -1070,30 +1160,25 @@ func rapiCore(wp models.RAPIWithPlatform) models.RAPI {
 	}
 }
 
-// remapKeyIDsToIdx 把本地 rapi.key_ids（key id CSV）按 oldIDToIdx 换算为中心
-// key_index CSV。悬空 id（查不到 key_index）丢弃，与 centerinit 行为一致。
-func remapKeyIDsToIdx(csv string, oldIDToIdx map[int64]int) string {
+// splitCSV 解析逗号分隔的 id 串（models 里 key_ids / KeyIDs 的存储形态）。
+// 空项与非数字项一律丢弃 —— 与 v1 mapCSV 的"跳过无法解析项"策略一致，
+// 避免单个坏值让整批绑定写失败。
+func splitCSV(csv string) []int64 {
 	csv = strings.TrimSpace(csv)
 	if csv == "" {
-		return ""
+		return nil
 	}
-	var out []string
+	var out []int64
 	for _, p := range strings.Split(csv, ",") {
 		p = strings.TrimSpace(p)
 		if p == "" {
 			continue
 		}
-		id, err := strconv.ParseInt(p, 10, 64)
-		if err != nil {
-			continue
+		if id, err := strconv.ParseInt(p, 10, 64); err == nil {
+			out = append(out, id)
 		}
-		idx, ok := oldIDToIdx[id]
-		if !ok {
-			continue
-		}
-		out = append(out, strconv.Itoa(idx))
 	}
-	return strings.Join(out, ",")
+	return out
 }
 
 // ---------------------------------------------------------------------------
