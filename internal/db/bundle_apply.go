@@ -194,12 +194,16 @@ func (db *DB) ApplyBundle(env *bundle.Envelope, centerKey []byte, sourceURL stri
 	}
 
 	// ---- 2. credential：按 token_hash upsert（v2 业务键，镜像 idx_credential_token_hash）----
-	// sort_order（平台内轮换序号）取 bundle 数组下标：自然键契约里没有 key_index，
-	// 中心按轮换顺序发出 credentials，数组位置即轮换序号，行为与 v1 等价。
+	// 归属平台取契约里的 platform_base_url（本地 credential.platform_id 是权威）；
+	// 平台内轮换序号取契约里的 sort_order。两者都是普通属性，身份只由 token_hash 决定。
 	credLocalID := make(map[string]int64, len(b.Credentials))
 	credSeen := make(map[string]struct{}, len(b.Credentials))
-	for i, k := range b.Credentials {
+	for _, k := range b.Credentials {
 		hash := strings.TrimSpace(k.TokenHash)
+		pid, ok := platID[k.PlatformBaseURL]
+		if !ok {
+			return fmt.Errorf("credential %s: platform base_url %q missing (validate should have caught)", hash, k.PlatformBaseURL)
+		}
 		encToken, plainToken, err := reencryptPlain(k.Token, centerKey)
 		if err != nil {
 			return fmt.Errorf("credential %s token: %w", hash, err)
@@ -210,33 +214,26 @@ func (db *DB) ApplyBundle(env *bundle.Envelope, centerKey []byte, sourceURL stri
 			return fmt.Errorf("credential token_hash mismatch: bundle=%s local=%s（中心与本地 token 不一致）", hash, lh)
 		}
 		hashArg := localHash
-		sortOrder := i
 
 		var id int64
 		err = tx.QueryRow(`SELECT id FROM credential WHERE token_hash = ?`, hash).Scan(&id)
 		switch {
 		case err == nil:
 			if _, err = tx.Exec(`UPDATE credential SET
-					token=?, label=?, enabled=?, sort_order=?,
+					platform_id=?, token=?, label=?, enabled=?, sort_order=?,
 					failure_type=0, failure_reason='', failed_at=NULL,
 					expires_at=?, is_free=?, updated_at=?
 				WHERE id=?`,
-				encToken, k.Label, b2i(k.Enabled), sortOrder,
+				pid, encToken, k.Label, b2i(k.Enabled), k.SortOrder,
 				k.ExpiresAt, b2i(k.IsFree), now, id); err != nil {
 				return wrapCredErr(fmt.Errorf("update credential %s: %w", hash, err))
 			}
 		case errors.Is(err, sql.ErrNoRows):
-			// platform_id 必填：凭据的归属平台由 center_key 无法表达时取第一个平台，
-			// 其真实归属以 endpoint_credential 绑定为准（见下方绑定物化）。
-			var pid int64
-			if err = tx.QueryRow(`SELECT id FROM platform ORDER BY id LIMIT 1`).Scan(&pid); err != nil {
-				return fmt.Errorf("credential %s: no platform to attach: %w", hash, err)
-			}
 			res, err := tx.Exec(`INSERT INTO credential
 					(platform_id, sort_order, token_hash, token, label, enabled,
 					 expires_at, is_free, created_at, updated_at)
 				VALUES (?,?,?,?,?,?, ?,?,?,?)`,
-				pid, sortOrder, hashArg, encToken, k.Label, b2i(k.Enabled),
+				pid, k.SortOrder, hashArg, encToken, k.Label, b2i(k.Enabled),
 				k.ExpiresAt, b2i(k.IsFree), now, now)
 			if err != nil {
 				return wrapCredErr(fmt.Errorf("insert credential %s: %w", hash, err))

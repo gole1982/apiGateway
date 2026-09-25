@@ -34,7 +34,7 @@ func TestSyncPullApplyE2E(t *testing.T) {
 				"token": "sk-test-plain", "enabled": true, "supported_formats": `["openai"]`,
 			}},
 			"credentials": []map[string]any{{
-				"token_hash": keyHash, "token": keyToken, "enabled": true,
+				"token_hash": keyHash, "platform_base_url": "https://api.openai.com", "sort_order": 0, "token": keyToken, "enabled": true,
 			}},
 			"rapis": []map[string]any{{
 				"platform_base_url": "https://api.openai.com", "alias": "gpt-4", "model": "gpt-4",

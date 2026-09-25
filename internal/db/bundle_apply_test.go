@@ -57,7 +57,7 @@ func TestApplyBundle_InsertUpdateDelete(t *testing.T) {
 				Token: encCenter(t, "sk-aaa", ck), Enabled: true, SupportedFormats: `["openai"]`,
 			}},
 			Credentials: []bundle.Credential{{
-				TokenHash: models.TokenHash(credToken), Token: encCenter(t, credToken, ck), Enabled: true,
+				TokenHash: models.TokenHash(credToken), PlatformBaseURL: "https://api.openai.com", Token: encCenter(t, credToken, ck), Enabled: true,
 			}},
 			RAPIs: []bundle.RAPI{{
 				PlatformBaseURL: "https://api.openai.com", Alias: "gpt-4", Model: "gpt-4", Enabled: true,
@@ -168,7 +168,7 @@ func TestApplyBundle_IdempotentReapply(t *testing.T) {
 				Enabled: true, SupportedFormats: `["openai"]`,
 			}},
 			Credentials: []bundle.Credential{{
-				TokenHash: models.TokenHash("k0"), Token: encCenter(t, "k0", ck), Enabled: true,
+				TokenHash: models.TokenHash("k0"), PlatformBaseURL: "https://x", Token: encCenter(t, "k0", ck), Enabled: true,
 			}},
 		},
 	}
@@ -198,7 +198,7 @@ func TestApplyBundle_RejectsInvalidReference(t *testing.T) {
 		Version:       1,
 		Bundle: bundle.Bundle{
 			Platforms:   []bundle.Platform{{Name: "p1", BaseURL: "https://x", Enabled: true, SupportedFormats: `["openai"]`}},
-			Credentials: []bundle.Credential{{TokenHash: models.TokenHash("k"), Token: encCenter(t, "k", ck), Enabled: true}},
+			Credentials: []bundle.Credential{{TokenHash: models.TokenHash("k"), PlatformBaseURL: "https://x", Token: encCenter(t, "k", ck), Enabled: true}},
 			Bindings: []bundle.CredentialBinding{{
 				PlatformBaseURL: "https://ghost", Model: "nope",
 				TokenHash: models.TokenHash("k"), Enabled: true,

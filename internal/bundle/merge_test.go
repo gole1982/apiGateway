@@ -8,7 +8,9 @@ import (
 // 构造助手（v2 自然键）
 func pf(name, baseURL string) Platform { return Platform{Name: name, BaseURL: baseURL} }
 
-func cf(hash, label string) Credential { return Credential{TokenHash: hash, Label: label} }
+func cf(baseURL, hash, label string) Credential {
+	return Credential{TokenHash: hash, PlatformBaseURL: baseURL, Label: label, Enabled: true}
+}
 
 func rf(baseURL, model, alias string) RAPI {
 	return RAPI{PlatformBaseURL: baseURL, Model: model, Alias: alias}
@@ -57,7 +59,7 @@ func TestMerge2_IdenticalIsNoop(t *testing.T) {
 	b := func() *Bundle {
 		return &Bundle{
 			Platforms:   []Platform{pf("A", "https://a.example.com")},
-			Credentials: []Credential{cf("h1", "k1")},
+			Credentials: []Credential{cf("https://a.example.com", "h1", "k1")},
 			RAPIs:       []RAPI{rf("https://a.example.com", "m1", "a-m1")},
 			LAPIs:       []LAPI{lf("chat")},
 			Bindings:    []CredentialBinding{bf("https://a.example.com", "m1", "h1")},
@@ -83,12 +85,12 @@ func TestMerge2_IdenticalIsNoop(t *testing.T) {
 func TestMerge2_BaseURLIsExactKeyNotNormalized(t *testing.T) {
 	center := &Bundle{
 		Platforms:   []Platform{pf("A", "https://A.Example.com/")},
-		Credentials: []Credential{cf("h1", "k1")},
+		Credentials: []Credential{cf("https://A.Example.com/", "h1", "k1")},
 		RAPIs:       []RAPI{rf("https://A.Example.com/", "m1", "x")},
 	}
 	local := &Bundle{
 		Platforms:   []Platform{pf("B", "https://a.example.com")},
-		Credentials: []Credential{cf("h2", "k2")},
+		Credentials: []Credential{cf("https://a.example.com", "h2", "k2")},
 		RAPIs:       []RAPI{rf("https://a.example.com", "m1", "y")},
 	}
 	got, rep, err := Merge(center, local, RuleCenterWins)
@@ -111,7 +113,7 @@ func TestMerge2_ConflictRule(t *testing.T) {
 	mk := func(name string) *Bundle {
 		return &Bundle{
 			Platforms:   []Platform{{Name: name, BaseURL: "https://x.example.com"}},
-			Credentials: []Credential{cf("h1", "k1")},
+			Credentials: []Credential{cf("https://x.example.com", "h1", "k1")},
 			RAPIs:       []RAPI{rf("https://x.example.com", "m1", "x")},
 		}
 	}
@@ -142,13 +144,13 @@ func TestMerge2_ConflictRule(t *testing.T) {
 func TestMerge2_LocalOnlyRowsAreKept(t *testing.T) {
 	center := &Bundle{
 		Platforms:   []Platform{pf("A", "https://a")},
-		Credentials: []Credential{cf("h1", "k1")},
+		Credentials: []Credential{cf("https://a", "h1", "k1")},
 		RAPIs:       []RAPI{rf("https://a", "m1", "x")},
 		Bindings:    []CredentialBinding{bf("https://a", "m1", "h1")},
 	}
 	local := &Bundle{
 		Platforms:   []Platform{pf("A", "https://a"), pf("B", "https://b")},
-		Credentials: []Credential{cf("h1", "k1"), cf("h2", "k2")},
+		Credentials: []Credential{cf("https://a", "h1", "k1"), cf("https://b", "h2", "k2")},
 		RAPIs:       []RAPI{rf("https://a", "m1", "x"), rf("https://b", "m2", "y")},
 		Bindings:    []CredentialBinding{bf("https://a", "m1", "h1"), bf("https://b", "m2", "h2")},
 	}
@@ -177,7 +179,7 @@ func TestMerge2_LocalOnlyRowsAreKept(t *testing.T) {
 func TestMerge2_PrunesDanglingRefs(t *testing.T) {
 	center := &Bundle{
 		Platforms:   []Platform{pf("A", "https://a")},
-		Credentials: []Credential{cf("h1", "k1")},
+		Credentials: []Credential{cf("https://a", "h1", "k1")},
 		RAPIs:       []RAPI{rf("https://a", "ok", "x")},
 		LAPIs:       []LAPI{lf("chat")},
 		Bindings:    []CredentialBinding{bf("https://a", "ok", "h1")},
@@ -188,7 +190,7 @@ func TestMerge2_PrunesDanglingRefs(t *testing.T) {
 	}
 	local := &Bundle{
 		Platforms:   []Platform{pf("A", "https://a")},
-		Credentials: []Credential{cf("h1", "k1")},
+		Credentials: []Credential{cf("https://a", "h1", "k1")},
 		RAPIs:       []RAPI{rf("https://a", "ok", "x"), rf("https://zzz", "orphan", "z")},
 		Bindings: []CredentialBinding{
 			bf("https://a", "ok", "h1"),
@@ -217,7 +219,7 @@ func TestMerge2_PrunesDanglingRefs(t *testing.T) {
 func chainFixture() *Bundle {
 	return &Bundle{
 		Platforms:   []Platform{pf("A", "https://a")},
-		Credentials: []Credential{cf("h1", "k1")},
+		Credentials: []Credential{cf("https://a", "h1", "k1")},
 		RAPIs:       []RAPI{rf("https://a", "m1", "e1"), rf("https://a", "m2", "e2"), rf("https://a", "m3", "e3")},
 	}
 }

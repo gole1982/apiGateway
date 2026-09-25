@@ -54,15 +54,22 @@ type Bundle struct {
 	Bindings []CredentialBinding `json:"bindings,omitempty"`
 }
 
-// Credential —— 平台密钥定义（业务键 TokenHash）。
+// Credential —— 平台密钥定义。**业务键 = TokenHash**（全局唯一，token 内容判据）。
 // token 为 center_key 密文；token_hash 是相等性判据（高熵，离线爆破不可行）。
+//
+// PlatformBaseURL / SortOrder 是**普通属性，不是键的一部分**：token_hash 全局唯一，
+// 但凭据仍需声明归属平台（本地 credential.platform_id 是 NOT NULL 外键，且调度器按
+// 平台分组轮换），以及平台内的轮换序号。v1 的 key_index 曾兼作 (平台, key_index)
+// 复合键的一部分，v2 把它降级为纯属性，复合身份改由 idx_credential_token_hash 承担。
 type Credential struct {
-	TokenHash string     `json:"token_hash"`
-	Token     string     `json:"token"` // center_key 密文
-	Label     string     `json:"label"`
-	Enabled   bool       `json:"enabled"`
-	ExpiresAt *time.Time `json:"expires_at"` // null = 永不失效
-	IsFree    bool       `json:"is_free"`
+	TokenHash       string     `json:"token_hash"`
+	PlatformBaseURL string     `json:"platform_base_url"` // 归属平台（引用 platform.base_url）
+	SortOrder       int        `json:"sort_order"`        // 平台内轮换序号
+	Token           string     `json:"token"`             // center_key 密文
+	Label           string     `json:"label"`
+	Enabled         bool       `json:"enabled"`
+	ExpiresAt       *time.Time `json:"expires_at"` // null = 永不失效
+	IsFree          bool       `json:"is_free"`
 }
 
 // CredentialBinding —— 端点↔凭据绑定（自然键 (endpoint, token_hash)）。
@@ -191,7 +198,7 @@ func Validate(env *Envelope) error {
 		platSet[bu] = struct{}{}
 	}
 
-	// 凭据：token_hash 作业务键，去重
+	// 凭据：token_hash 作业务键去重；归属平台必须存在
 	credSet := make(map[string]struct{}, len(b.Credentials))
 	for _, c := range b.Credentials {
 		h := strings.TrimSpace(c.TokenHash)
@@ -202,6 +209,10 @@ func Validate(env *Envelope) error {
 			return fmt.Errorf("bundle: duplicate credential token_hash %q", h)
 		}
 		credSet[h] = struct{}{}
+		cp := platformKey(c.PlatformBaseURL)
+		if _, ok := platSet[cp]; !ok {
+			return fmt.Errorf("bundle: credential %s references unknown platform base_url %q", h, c.PlatformBaseURL)
+		}
 	}
 
 	// 端点：(platform.base_url, model) 作业务键
