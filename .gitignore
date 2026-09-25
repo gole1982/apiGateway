@@ -27,3 +27,6 @@ bin/
 .workbuddy-ai/
 *.exe~
 opencode.json
+
+# 本地数据备份（bundle 契约 v2 迁移前快照，勿入库）
+backups/

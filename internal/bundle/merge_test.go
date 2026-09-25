@@ -5,313 +5,331 @@ import (
 	"testing"
 )
 
-// plat / key / rapi / lapi 构造助手，字段少写其余留零值。
-func p(name string) Platform { return Platform{Name: name, BaseURL: "https://" + name} }
+// 构造助手（v2 自然键）
+func pf(name, baseURL string) Platform { return Platform{Name: name, BaseURL: baseURL} }
 
-func pk(plat string, idx int) PlatformKey {
-	return PlatformKey{PlatformName: plat, KeyIndex: idx, Label: "k"}
+func cf(hash, label string) Credential { return Credential{TokenHash: hash, Label: label} }
+
+func rf(baseURL, model, alias string) RAPI {
+	return RAPI{PlatformBaseURL: baseURL, Model: model, Alias: alias}
 }
 
-func rp(plat, alias, keys string) RAPI {
-	return RAPI{PlatformName: plat, Alias: alias, Model: alias, KeyIDs: keys}
+func lf(alias string) LAPI { return LAPI{Alias: alias} }
+
+func of(lapi, baseURL, model string, i int) LAPIRapiOrder {
+	return LAPIRapiOrder{LAPIAlias: lapi, RAPIPlatformBaseURL: baseURL, RAPIModel: model, OrderIndex: i}
 }
 
-func lp(alias string) LAPI { return LAPI{Alias: alias} }
-
-func ord(lapi, plat, alias string, i int) LAPIRapiOrder {
-	return LAPIRapiOrder{LAPIAlias: lapi, RAPIPlatformName: plat, RAPIAlias: alias, OrderIndex: i}
+func bf(baseURL, model, hash string) CredentialBinding {
+	return CredentialBinding{PlatformBaseURL: baseURL, Model: model, TokenHash: hash, Enabled: true}
 }
 
-func findPlat(bs *Bundle, name string) *Platform {
+func findPlat(bs *Bundle, baseURL string) *Platform {
 	for i := range bs.Platforms {
-		if bs.Platforms[i].Name == name {
+		if platformKey(bs.Platforms[i].BaseURL) == platformKey(baseURL) {
 			return &bs.Platforms[i]
 		}
 	}
 	return nil
 }
 
-func findRAPI(bs *Bundle, k RAPIKey) *RAPI {
+func findRAPI(bs *Bundle, e EndpointRef) *RAPI {
 	for i := range bs.RAPIs {
-		if bs.RAPIs[i].PlatformName == k.PlatformName && bs.RAPIs[i].Alias == k.Alias {
+		if platformKey(bs.RAPIs[i].PlatformBaseURL) == e.BaseURL && bs.RAPIs[i].Model == e.Model {
 			return &bs.RAPIs[i]
 		}
 	}
 	return nil
 }
 
-// 基础：两端完全相同 → 无冲突、无新增、无裁剪。
-func TestMerge_IdenticalIsNoop(t *testing.T) {
-	c := &Bundle{
-		Platforms:    []Platform{p("A")},
-		PlatformKeys: []PlatformKey{pk("A", 0), pk("A", 1)},
-		RAPIs:        []RAPI{rp("A", "m1", "0")},
-		LAPIs:        []LAPI{lp("chat")},
-		LAPIRapiOrder: []LAPIRapiOrder{
-			ord("chat", "A", "m1", 0),
-		},
+func chainOf(bs *Bundle, alias string) []string {
+	var out []string
+	for _, o := range bs.LAPIRapiOrder {
+		if o.LAPIAlias == alias {
+			out = append(out, platformKey(o.RAPIPlatformBaseURL)+"#"+o.RAPIModel)
+		}
 	}
-	l := &Bundle{
-		Platforms:    []Platform{p("A")},
-		PlatformKeys: []PlatformKey{pk("A", 0), pk("A", 1)},
-		RAPIs:        []RAPI{rp("A", "m1", "0")},
-		LAPIs:        []LAPI{lp("chat")},
-		LAPIRapiOrder: []LAPIRapiOrder{
-			ord("chat", "A", "m1", 0),
-		},
+	return out
+}
+
+// 完全一致 → 无冲突、无新增、无裁剪。
+func TestMerge2_IdenticalIsNoop(t *testing.T) {
+	b := func() *Bundle {
+		return &Bundle{
+			Platforms:   []Platform{pf("A", "https://a.example.com")},
+			Credentials: []Credential{cf("h1", "k1")},
+			RAPIs:       []RAPI{rf("https://a.example.com", "m1", "a-m1")},
+			LAPIs:       []LAPI{lf("chat")},
+			Bindings:    []CredentialBinding{bf("https://a.example.com", "m1", "h1")},
+			LAPIRapiOrder: []LAPIRapiOrder{
+				of("chat", "https://a.example.com", "m1", 0),
+			},
+		}
 	}
-	got, rep, err := Merge(c, l, RuleCenterWins)
+	got, rep, err := Merge(b(), b(), RuleCenterWins)
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
 	if !rep.Empty() {
 		t.Fatalf("expected empty report, got %+v", rep)
 	}
-	if len(got.Platforms) != 1 || len(got.PlatformKeys) != 2 || len(got.RAPIs) != 1 ||
-		len(got.LAPIs) != 1 || len(got.LAPIRapiOrder) != 1 {
-		t.Fatalf("union changed cardinality: %+v", got)
+	if !reflect.DeepEqual(got, b()) {
+		t.Errorf("union changed content:\n got=%+v\nwant=%+v", got, b())
 	}
 }
 
-// 冲突规则：中心优先保留中心值；本地优先保留本地值；两者都要记录差异字段。
-func TestMerge_ConflictRule(t *testing.T) {
-	mk := func(bu string) *Bundle {
-		return &Bundle{
-			Platforms:    []Platform{{Name: "A", BaseURL: bu}},
-			PlatformKeys: []PlatformKey{pk("A", 0)},
-			RAPIs:        []RAPI{rp("A", "m1", "")},
-			LAPIs:        []LAPI{lp("chat")},
-		}
-	}
-	center, local := mk("https://center"), mk("https://local")
-
-	got, rep, err := Merge(center, local, RuleCenterWins)
-	if err != nil {
-		t.Fatalf("merge: %v", err)
-	}
-	if v := findPlat(got, "A").BaseURL; v != "https://center" {
-		t.Errorf("center_wins: BaseURL = %q, want center", v)
-	}
-	if len(rep.Conflicts) != 1 {
-		t.Fatalf("want 1 conflict, got %+v", rep.Conflicts)
-	}
-	if c := rep.Conflicts[0]; c.Kind != "platform" || c.Key != "A" ||
-		!reflect.DeepEqual(c.Fields, []string{"BaseURL"}) {
-		t.Errorf("conflict detail wrong: %+v", c)
-	}
-
-	got2, rep2, err := Merge(center, local, RuleLocalWins)
-	if err != nil {
-		t.Fatalf("merge: %v", err)
-	}
-	if v := findPlat(got2, "A").BaseURL; v != "https://local" {
-		t.Errorf("local_wins: BaseURL = %q, want local", v)
-	}
-	if len(rep2.Conflicts) != 1 {
-		t.Errorf("local_wins should still report the conflict, got %+v", rep2.Conflicts)
-	}
-}
-
-// 只在本地存在的行要全部收进结果并登记为"待补推"。
-func TestMerge_LocalOnlyRowsAreKept(t *testing.T) {
+// 键语义：base_url **原样**作键，刻意不归一化——镜像 idx_platform_base_url
+// 建在原始列上的事实。大小写/尾斜杠不同的两个平台，库里是两行，契约也必须当两行。
+func TestMerge2_BaseURLIsExactKeyNotNormalized(t *testing.T) {
 	center := &Bundle{
-		Platforms:    []Platform{p("A")},
-		PlatformKeys: []PlatformKey{pk("A", 0)},
-		RAPIs:        []RAPI{rp("A", "m1", "")},
-		LAPIs:        []LAPI{lp("chat")},
+		Platforms:   []Platform{pf("A", "https://A.Example.com/")},
+		Credentials: []Credential{cf("h1", "k1")},
+		RAPIs:       []RAPI{rf("https://A.Example.com/", "m1", "x")},
 	}
 	local := &Bundle{
-		Platforms:    []Platform{p("A"), p("B")},
-		PlatformKeys: []PlatformKey{pk("A", 0), pk("B", 0)},
-		RAPIs:        []RAPI{rp("A", "m1", ""), rp("B", "m2", "0")},
-		LAPIs:        []LAPI{lp("chat"), lp("code")},
-		LAPIRapiOrder: []LAPIRapiOrder{
-			ord("code", "B", "m2", 0),
-		},
+		Platforms:   []Platform{pf("B", "https://a.example.com")},
+		Credentials: []Credential{cf("h2", "k2")},
+		RAPIs:       []RAPI{rf("https://a.example.com", "m1", "y")},
 	}
 	got, rep, err := Merge(center, local, RuleCenterWins)
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
-	if findPlat(got, "B") == nil {
-		t.Error("local-only platform B must survive the union")
+	if len(got.Platforms) != 2 {
+		t.Fatalf("trailing-slash variant must stay a separate platform (DB keeps them apart), got %d: %+v", len(got.Platforms), got.Platforms)
 	}
-	if findRAPI(got, RAPIKey{"B", "m2"}) == nil {
-		t.Error("local-only rapi (B,m2) must survive the union")
-	}
-	if len(got.LAPIs) != 2 {
-		t.Errorf("want 2 lapis, got %d", len(got.LAPIs))
-	}
-	if len(got.LAPIRapiOrder) != 1 || got.LAPIRapiOrder[0].LAPIAlias != "code" {
-		t.Errorf("local-only route chain missing: %+v", got.LAPIRapiOrder)
-	}
-	if !reflect.DeepEqual(rep.LocalOnlyPlatforms, []string{"B"}) {
+	if !reflect.DeepEqual(rep.LocalOnlyPlatforms, []string{"https://a.example.com"}) {
 		t.Errorf("LocalOnlyPlatforms = %v", rep.LocalOnlyPlatforms)
 	}
-	if !reflect.DeepEqual(rep.LocalOnlyRAPIs, []RAPIKey{{"B", "m2"}}) {
-		t.Errorf("LocalOnlyRAPIs = %v", rep.LocalOnlyRAPIs)
-	}
-	if !reflect.DeepEqual(rep.LocalOnlyKeys, []PKRef{{"B", 0}}) {
-		t.Errorf("LocalOnlyKeys = %v", rep.LocalOnlyKeys)
-	}
-	if !reflect.DeepEqual(rep.LocalOnlyLAPIs, []string{"code"}) {
-		t.Errorf("LocalOnlyLAPIs = %v", rep.LocalOnlyLAPIs)
-	}
-	if !reflect.DeepEqual(rep.LocalOnlyOrderLAPI, []string{"code"}) {
-		t.Errorf("LocalOnlyOrderLAPI = %v", rep.LocalOnlyOrderLAPI)
+	if len(rep.Conflicts) != 0 {
+		t.Errorf("different keys are not conflicts, got %+v", rep.Conflicts)
 	}
 }
 
-// 关键约束：同一 lapi 的链绝不两侧交错（落库有 UNIQUE(lapi_id, order_index)，
-// 交错会产生重复 order_index，ApplyBundle 必失败）。
-func TestMerge_OrderChainNeverInterleaves(t *testing.T) {
-	center := &Bundle{
-		Platforms: []Platform{p("A"), p("B")},
-		RAPIs:     []RAPI{rp("A", "m1", ""), rp("B", "m2", "")},
-		LAPIs:     []LAPI{lp("chat")},
-		LAPIRapiOrder: []LAPIRapiOrder{
-			ord("chat", "A", "m1", 0),
-			ord("chat", "B", "m2", 1),
-		},
+// 冲突规则：同键但非键字段不同 → 中心优先 / 本地优先。
+func TestMerge2_ConflictRule(t *testing.T) {
+	mk := func(name string) *Bundle {
+		return &Bundle{
+			Platforms:   []Platform{{Name: name, BaseURL: "https://x.example.com"}},
+			Credentials: []Credential{cf("h1", "k1")},
+			RAPIs:       []RAPI{rf("https://x.example.com", "m1", "x")},
+		}
 	}
-	local := &Bundle{
-		Platforms: []Platform{p("A"), p("B")},
-		RAPIs:     []RAPI{rp("A", "m1", ""), rp("B", "m2", "")},
-		LAPIs:     []LAPI{lp("chat")},
-		LAPIRapiOrder: []LAPIRapiOrder{
-			ord("chat", "A", "m1", 0),
-		},
+	c, l := mk("center-name"), mk("local-name")
+
+	got, rep, err := Merge(c, l, RuleCenterWins)
+	if err != nil {
+		t.Fatalf("merge: %v", err)
 	}
-	for _, rule := range []ConflictRule{RuleCenterWins, RuleLocalWins} {
-		got, _, err := Merge(center, local, rule)
-		if err != nil {
-			t.Fatalf("merge(%v): %v", rule, err)
-		}
-		if len(got.LAPIRapiOrder) != 2 {
-			t.Fatalf("rule %v: want the center's full 2-step chain, got %+v", rule, got.LAPIRapiOrder)
-		}
-		seen := map[int]bool{}
-		for _, o := range got.LAPIRapiOrder {
-			if seen[o.OrderIndex] {
-				t.Fatalf("rule %v: duplicate order_index %d — would violate UNIQUE(lapi_id, order_index)", rule, o.OrderIndex)
-			}
-			seen[o.OrderIndex] = true
-		}
+	if got.Platforms[0].Name != "center-name" {
+		t.Errorf("center_wins: got %q", got.Platforms[0].Name)
+	}
+	if len(rep.Conflicts) != 1 || rep.Conflicts[0].Kind != "platform" {
+		t.Errorf("want 1 platform conflict, got %+v", rep.Conflicts)
+	} else if !reflect.DeepEqual(rep.Conflicts[0].Fields, []string{"Name"}) {
+		t.Errorf("conflict fields = %v, want [Name]", rep.Conflicts[0].Fields)
+	}
+	got2, _, err := Merge(c, l, RuleLocalWins)
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	if got2.Platforms[0].Name != "local-name" {
+		t.Errorf("local_wins: got %q", got2.Platforms[0].Name)
 	}
 }
 
-// 悬空引用必须裁掉，否则 Validate 会拒、结果无法落库。
-func TestMerge_PrunesDanglingRefs(t *testing.T) {
+// 本地独有的平台/凭据/端点/绑定都要收进结果并登记待补推。
+func TestMerge2_LocalOnlyRowsAreKept(t *testing.T) {
 	center := &Bundle{
-		Platforms:    []Platform{p("A")},
-		PlatformKeys: []PlatformKey{pk("A", 0)},
-		RAPIs:        []RAPI{rp("A", "ok", "0")},
-		LAPIs:        []LAPI{lp("chat")},
-		LAPIRapiOrder: []LAPIRapiOrder{
-			ord("chat", "A", "ok", 0),
-			ord("chat", "A", "ghost", 1), // 指向不存在的 rapi
-		},
+		Platforms:   []Platform{pf("A", "https://a")},
+		Credentials: []Credential{cf("h1", "k1")},
+		RAPIs:       []RAPI{rf("https://a", "m1", "x")},
+		Bindings:    []CredentialBinding{bf("https://a", "m1", "h1")},
 	}
 	local := &Bundle{
-		Platforms: []Platform{p("A")},
-		// 本地有个孤儿平台 Z（两端都没有）→ 其下的 rapi/密钥应被裁掉
-		PlatformKeys: []PlatformKey{pk("A", 0), pk("Z", 0)},
-		RAPIs: []RAPI{
-			rp("A", "ok", "0"),
-			rp("A", "badkeys", "7"), // key_index 7 不存在
-			rp("Z", "orphan", ""),   // 平台 Z 不在合并结果里
-		},
-		LAPIs: []LAPI{lp("chat")},
+		Platforms:   []Platform{pf("A", "https://a"), pf("B", "https://b")},
+		Credentials: []Credential{cf("h1", "k1"), cf("h2", "k2")},
+		RAPIs:       []RAPI{rf("https://a", "m1", "x"), rf("https://b", "m2", "y")},
+		Bindings:    []CredentialBinding{bf("https://a", "m1", "h1"), bf("https://b", "m2", "h2")},
 	}
 	got, rep, err := Merge(center, local, RuleCenterWins)
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
-	if findRAPI(got, RAPIKey{"A", "ok"}) == nil {
-		t.Error("valid rapi dropped")
+	if findPlat(got, "https://b") == nil || findRAPI(got, EndpointRef{"https://b", "m2"}) == nil {
+		t.Errorf("local-only rows lost: %+v", got)
 	}
-	if findRAPI(got, RAPIKey{"A", "badkeys"}) != nil {
-		t.Error("rapi with unresolvable key_ids must be pruned")
+	if len(rep.LocalOnlyPlatforms) != 1 || rep.LocalOnlyPlatforms[0] != "https://b" {
+		t.Errorf("LocalOnlyPlatforms = %v", rep.LocalOnlyPlatforms)
 	}
-	if findRAPI(got, RAPIKey{"Z", "orphan"}) != nil {
-		t.Error("rapi under a non-merged platform must be pruned")
+	if len(rep.LocalOnlyCreds) != 1 || rep.LocalOnlyCreds[0].TokenHash != "h2" {
+		t.Errorf("LocalOnlyCreds = %v", rep.LocalOnlyCreds)
 	}
-	if len(got.PlatformKeys) != 1 {
-		t.Errorf("key under non-merged platform must be pruned, got %+v", got.PlatformKeys)
+	if len(rep.LocalOnlyRAPIs) != 1 {
+		t.Errorf("LocalOnlyRAPIs = %v", rep.LocalOnlyRAPIs)
 	}
-	if len(got.LAPIRapiOrder) != 1 || got.LAPIRapiOrder[0].RAPIAlias != "ok" {
-		t.Errorf("route pointing at a pruned rapi must be dropped: %+v", got.LAPIRapiOrder)
-	}
-	if len(rep.DroppedRAPIs) != 2 {
-		t.Errorf("DroppedRAPIs = %v, want 2", rep.DroppedRAPIs)
-	}
-	if len(rep.DroppedKeys) != 1 {
-		t.Errorf("DroppedKeys = %v, want 1", rep.DroppedKeys)
-	}
-	if len(rep.DroppedOrder) != 1 {
-		t.Errorf("DroppedOrder = %v, want 1", rep.DroppedOrder)
+	if len(rep.LocalOnlyBindings) != 1 {
+		t.Errorf("LocalOnlyBindings = %v", rep.LocalOnlyBindings)
 	}
 }
 
-// 合并语义下不产生删除：只在中心的行即使本地没有也必须保留。
-func TestMerge_NeverDeletesCenterOnlyRows(t *testing.T) {
+// 悬空引用必须裁掉：端点平台消失、绑定指向不存在的端点/凭据。
+func TestMerge2_PrunesDanglingRefs(t *testing.T) {
 	center := &Bundle{
-		Platforms:    []Platform{p("A"), p("B")},
-		PlatformKeys: []PlatformKey{pk("A", 0), pk("B", 0)},
-		RAPIs:        []RAPI{rp("A", "m1", ""), rp("B", "m2", "")},
-		LAPIs:        []LAPI{lp("chat"), lp("code")},
-	}
-	local := &Bundle{Platforms: []Platform{p("A")}} // 本地几乎空白
-	got, _, err := Merge(center, local, RuleCenterWins)
-	if err != nil {
-		t.Fatalf("merge: %v", err)
-	}
-	if len(got.Platforms) != 2 || len(got.PlatformKeys) != 2 ||
-		len(got.RAPIs) != 2 || len(got.LAPIs) != 2 {
-		t.Fatalf("merge must not delete center-only rows, got %+v", got)
-	}
-}
-
-// 幂等：把结果再与自身合并应是不动点（无新增/无冲突/无裁剪）。
-func TestMerge_Idempotent(t *testing.T) {
-	local := &Bundle{
-		Platforms:    []Platform{p("A"), p("B")},
-		PlatformKeys: []PlatformKey{pk("A", 0), pk("B", 0)},
-		RAPIs:        []RAPI{rp("A", "m1", "0"), rp("B", "m2", "")},
-		LAPIs:        []LAPI{lp("chat")},
+		Platforms:   []Platform{pf("A", "https://a")},
+		Credentials: []Credential{cf("h1", "k1")},
+		RAPIs:       []RAPI{rf("https://a", "ok", "x")},
+		LAPIs:       []LAPI{lf("chat")},
+		Bindings:    []CredentialBinding{bf("https://a", "ok", "h1")},
 		LAPIRapiOrder: []LAPIRapiOrder{
-			ord("chat", "A", "m1", 0),
+			of("chat", "https://a", "ok", 0),
+			of("chat", "https://a", "ghost", 1),
 		},
 	}
-	first, _, err := Merge(&Bundle{}, local, RuleCenterWins)
+	local := &Bundle{
+		Platforms:   []Platform{pf("A", "https://a")},
+		Credentials: []Credential{cf("h1", "k1")},
+		RAPIs:       []RAPI{rf("https://a", "ok", "x"), rf("https://zzz", "orphan", "z")},
+		Bindings: []CredentialBinding{
+			bf("https://a", "ok", "h1"),
+			bf("https://a", "ok", "nosuchhash"),
+		},
+	}
+	got, rep, err := Merge(center, local, RuleCenterWins)
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
-	second, rep, err := Merge(first, first, RuleCenterWins)
-	if err != nil {
-		t.Fatalf("merge: %v", err)
+	if findRAPI(got, EndpointRef{"https://zzz", "orphan"}) != nil {
+		t.Error("rapi under a non-merged platform must be pruned")
 	}
-	if !rep.Empty() {
-		t.Errorf("self-merge should be a no-op, got %+v", rep)
+	if len(got.Bindings) != 1 {
+		t.Errorf("binding with unknown token_hash must be pruned, got %+v", got.Bindings)
 	}
-	if !reflect.DeepEqual(first, second) {
-		t.Errorf("merge is not idempotent:\n first =%+v\n second=%+v", first, second)
+	if len(rep.DroppedBindings) != 1 {
+		t.Errorf("DroppedBindings = %v", rep.DroppedBindings)
+	}
+	if len(got.LAPIRapiOrder) != 1 || got.LAPIRapiOrder[0].RAPIModel != "ok" {
+		t.Errorf("chain node pointing at a pruned endpoint must be dropped: %+v", got.LAPIRapiOrder)
 	}
 }
 
-// 两侧皆空 / 一侧为 nil 都不能 panic。
-func TestMerge_NilAndEmpty(t *testing.T) {
-	if _, _, err := Merge(nil, nil, RuleCenterWins); err == nil {
-		t.Error("expected error when both sides are nil")
+// 端点与平台（供链测试复用）
+func chainFixture() *Bundle {
+	return &Bundle{
+		Platforms:   []Platform{pf("A", "https://a")},
+		Credentials: []Credential{cf("h1", "k1")},
+		RAPIs:       []RAPI{rf("https://a", "m1", "e1"), rf("https://a", "m2", "e2"), rf("https://a", "m3", "e3")},
 	}
-	got, _, err := Merge(nil, &Bundle{Platforms: []Platform{p("A")}}, RuleCenterWins)
-	if err != nil {
-		t.Fatalf("merge(nil, local): %v", err)
+}
+
+// lapi 链比较矩阵（§5.2）：
+//
+//	L0  链相同        → 只留中心版，不产生副本
+//	L1  同集异序      → 中心占原名 + 本地改名 #local
+//	L2c 中心更长      → 只留中心长链
+//	L2l 本地更长      → 本地占原名（中心短链丢弃）
+//	L3  无关          → 中心占原名 + 本地改名 #local
+func TestMerge2_LAPIChainMatrix(t *testing.T) {
+	cases := []struct {
+		name       string
+		cChain     []LAPIRapiOrder
+		lChain     []LAPIRapiOrder
+		wantLevel  string
+		wantKept   string
+		wantLAPI   []string // 期望的 lapi 别名集合
+		wantChains map[string][]string
+	}{
+		{
+			name:      "L0 链相同去重",
+			cChain:    []LAPIRapiOrder{of("chat", "https://a", "m1", 0), of("chat", "https://a", "m2", 1)},
+			lChain:    []LAPIRapiOrder{of("chat", "https://a", "m1", 0), of("chat", "https://a", "m2", 1)},
+			wantLevel: "L0", wantKept: "center",
+			wantLAPI:   []string{"chat"},
+			wantChains: map[string][]string{"chat": {"https://a#m1", "https://a#m2"}},
+		},
+		{
+			name:      "L1 同集异序→本地改名保留",
+			cChain:    []LAPIRapiOrder{of("chat", "https://a", "m1", 0), of("chat", "https://a", "m2", 1)},
+			lChain:    []LAPIRapiOrder{of("chat", "https://a", "m2", 0), of("chat", "https://a", "m1", 1)},
+			wantLevel: "L1", wantKept: "center",
+			wantLAPI: []string{"chat", "chat#local2"},
+			wantChains: map[string][]string{
+				"chat":        {"https://a#m1", "https://a#m2"},
+				"chat#local2": {"https://a#m2", "https://a#m1"},
+			},
+		},
+		{
+			name:      "L2c 中心更长→只用中心长链",
+			cChain:    []LAPIRapiOrder{of("chat", "https://a", "m1", 0), of("chat", "https://a", "m2", 1)},
+			lChain:    []LAPIRapiOrder{of("chat", "https://a", "m1", 0)},
+			wantLevel: "L2c", wantKept: "center",
+			wantLAPI:   []string{"chat"},
+			wantChains: map[string][]string{"chat": {"https://a#m1", "https://a#m2"}},
+		},
+		{
+			name:      "L2l 本地更长→本地占原名",
+			cChain:    []LAPIRapiOrder{of("chat", "https://a", "m1", 0)},
+			lChain:    []LAPIRapiOrder{of("chat", "https://a", "m1", 0), of("chat", "https://a", "m3", 1)},
+			wantLevel: "L2l", wantKept: "local",
+			wantLAPI:   []string{"chat"},
+			wantChains: map[string][]string{"chat": {"https://a#m1", "https://a#m3"}},
+		},
+		{
+			name:      "L3 无关→中心占原名+本地改名",
+			cChain:    []LAPIRapiOrder{of("chat", "https://a", "m1", 0)},
+			lChain:    []LAPIRapiOrder{of("chat", "https://a", "m3", 0)},
+			wantLevel: "L3", wantKept: "center",
+			wantLAPI: []string{"chat", "chat#local2"},
+			wantChains: map[string][]string{
+				"chat":        {"https://a#m1"},
+				"chat#local2": {"https://a#m3"},
+			},
+		},
 	}
-	if len(got.Platforms) != 1 {
-		t.Errorf("local-only rows lost when center is nil: %+v", got)
-	}
-	if _, _, err := Merge(&Bundle{}, &Bundle{}, RuleCenterWins); err != nil {
-		t.Errorf("empty+empty should not error: %v", err)
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			center := chainFixture()
+			center.LAPIs = []LAPI{lf("chat")}
+			center.LAPIRapiOrder = tc.cChain
+			local := chainFixture()
+			local.LAPIs = []LAPI{lf("chat")}
+			local.LAPIRapiOrder = tc.lChain
+
+			got, rep, err := Merge(center, local, RuleCenterWins)
+			if err != nil {
+				t.Fatalf("merge: %v", err)
+			}
+			if len(rep.LAPIs) != 1 {
+				t.Fatalf("want 1 lapi decision, got %+v", rep.LAPIs)
+			}
+			d := rep.LAPIs[0]
+			if d.Level != tc.wantLevel || d.Kept != tc.wantKept {
+				t.Errorf("decision = %s/%s, want %s/%s", d.Level, d.Kept, tc.wantLevel, tc.wantKept)
+			}
+			var aliases []string
+			for _, l := range got.LAPIs {
+				aliases = append(aliases, l.Alias)
+			}
+			if !reflect.DeepEqual(aliases, tc.wantLAPI) {
+				t.Errorf("lapi aliases = %v, want %v", aliases, tc.wantLAPI)
+			}
+			for alias, want := range tc.wantChains {
+				if g := chainOf(got, alias); !reflect.DeepEqual(g, want) {
+					t.Errorf("chain[%s] = %v, want %v", alias, g, want)
+				}
+			}
+			// 每个 lapi 的 order_index 必须从 0 连续（UNIQUE 约束前提）
+			seen := map[string]map[int]bool{}
+			for _, o := range got.LAPIRapiOrder {
+				if seen[o.LAPIAlias] == nil {
+					seen[o.LAPIAlias] = map[int]bool{}
+				}
+				if seen[o.LAPIAlias][o.OrderIndex] {
+					t.Errorf("duplicate order_index %d for lapi %s", o.OrderIndex, o.LAPIAlias)
+				}
+				seen[o.LAPIAlias][o.OrderIndex] = true
+			}
+		})
 	}
 }
