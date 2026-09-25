@@ -137,7 +137,7 @@ func (s *LogStorage) SaveRequestLog(log *RequestLog) error {
 			response_headers, response_body, latency_ms, tokens_used, finish_reason, error_message,
 			retry_count, fallback_used, status, completed_at,
 			input_tokens, output_tokens, cached_tokens, ttft_ms, rest_latency_ms, selected_key_id, selected_platform_id
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			session_id      = CASE WHEN excluded.session_id      != '' THEN excluded.session_id      ELSE request_logs.session_id      END,
 			client_ip       = CASE WHEN excluded.client_ip       != '' THEN excluded.client_ip       ELSE request_logs.client_ip       END,

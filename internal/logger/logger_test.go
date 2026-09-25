@@ -6,7 +6,37 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"gateway/internal/db"
 )
+
+// TestSaveRequestLogPersists verifies the production request-log INSERT shape:
+// every declared request_logs column has one matching bind value. A mismatch here
+// silently routes every request to failed_events.log and leaves the dashboard empty.
+func TestSaveRequestLogPersists(t *testing.T) {
+	t.Setenv("APIGATEWAY_DATA_DIR", t.TempDir())
+	if err := db.Init(); err != nil {
+		t.Fatalf("db.Init: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Get().Conn().Close() })
+	storage := NewLogStorage(db.Get())
+	if err := storage.InitTables(); err != nil {
+		t.Fatalf("InitTables: %v", err)
+	}
+	entry := &RequestLog{
+		ID: "request-log-test", Timestamp: time.Now(), Status: "pending",
+	}
+	if err := storage.SaveRequestLog(entry); err != nil {
+		t.Fatalf("SaveRequestLog: %v", err)
+	}
+	logs, err := storage.GetRequestLogs(RequestLogFilter{RequestID: entry.ID, Limit: 1})
+	if err != nil {
+		t.Fatalf("GetRequestLogs: %v", err)
+	}
+	if len(logs) != 1 || logs[0].ID != entry.ID {
+		t.Fatalf("saved request logs = %+v, want one %q", logs, entry.ID)
+	}
+}
 
 // getString must return a plain string value unchanged.
 func TestGetStringPlainString(t *testing.T) {

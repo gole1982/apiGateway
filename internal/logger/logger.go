@@ -347,6 +347,8 @@ func (w *LogWorker) persistBatch(batch []LogEvent) {
 	// the dashboard does not show incomplete requests as completed.
 	for _, log := range requestLogs {
 		if err := w.logger.Storage.SaveRequestLog(log); err != nil {
+			DefaultConsole().Error("logger", "[logger] request log save failed",
+				"request_id", log.ID, "error", err.Error())
 			saveFailedEvent(log)
 			continue
 		}
