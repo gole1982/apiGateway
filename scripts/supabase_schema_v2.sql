@@ -192,11 +192,25 @@ CREATE INDEX IF NOT EXISTS idx_endpoint_cred_cred ON endpoint_credential(credent
 -- 4. 【破坏性】清空中心定义数据
 --    授权范围内：中心不迁移旧数据，随后由本地 ExportBundle 推送重建。
 --    顺序：子 → 父（外键）。
---    config_meta.version 归零，使代理下次轮询看到版本变化而重新全量拉取。
+--    config_meta.version 的归零放在第 5 节末尾 —— config_meta 自身在全新
+--    Supabase 项目上还不存在，必须先 CREATE 再 UPDATE。
+--
+--    ⚠️ 本步无条件清空 6 张定义表。本脚本"可重复运行"指的是不会报错，
+--    **不是可以随便重跑**：推送成功后误跑第二遍会静默清空刚灌进去的数据。
+--    故加显式闸 —— 真的要清空必须先在同一个会话里 SET。
 -- ---------------------------------------------------------------------------
+DO $$
+BEGIN
+    IF current_setting('apiGateway.destructive', true) IS DISTINCT FROM 'yes' THEN
+        RAISE EXCEPTION
+            '第 4 步会 TRUNCATE 全部 6 张定义表。确认要清空，请先执行：'
+            '    SET apiGateway.destructive = ''yes'';'
+            ' 若只是想重建表/函数而不清数据，请注释掉第 4 步的 TRUNCATE。';
+    END IF;
+END $$;
+
 TRUNCATE TABLE lapi_rapi_order, endpoint_credential, lapi, rapi, credential, platform
     RESTART IDENTITY CASCADE;
-UPDATE config_meta SET version = 0, updated_at = now() WHERE id = 1;
 
 -- ---------------------------------------------------------------------------
 -- 5. 版本号 + commit 级 bump（沿用 v1 机制）
@@ -209,6 +223,9 @@ CREATE TABLE IF NOT EXISTS config_meta (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 INSERT INTO config_meta (id, version) VALUES (1, 0) ON CONFLICT (id) DO NOTHING;
+-- 归零：全新库上面 INSERT 已是 0（幂等），已有中心则重置，
+-- 使代理下次轮询看到版本变化而重新全量拉取。必须在 INSERT 之后。
+UPDATE config_meta SET version = 0, updated_at = now() WHERE id = 1;
 
 CREATE OR REPLACE FUNCTION bump_version() RETURNS TRIGGER
 LANGUAGE plpgsql AS $$

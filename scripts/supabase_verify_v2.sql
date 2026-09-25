@@ -3,6 +3,10 @@
 -- 用法：重建 + 推送本地数据之后，在 Supabase SQL Editor 执行。
 -- 本脚本**只含 SELECT**，不修改任何数据。
 --
+-- 重建脚本的第 4 步有破坏性闸：首次执行 supabase_schema_v2.sql 前需先
+--   SET apiGateway.destructive = 'yes';
+-- 否则会 RAISE EXCEPTION 拒绝 TRUNCATE。详见该脚本第 4 节。
+--
 -- 期望值（来自当前本地 SQLite，生产初始化以本地为准）：
 --   platform 19 / credential 34 / rapi 59 / lapi 22
 --   endpoint_credential 82 / lapi_rapi_order 33
@@ -54,6 +58,18 @@ FROM endpoint_credential ec WHERE NOT EXISTS (SELECT 1 FROM credential c WHERE c
 UNION ALL
 SELECT 'binding_without_token_hash', count(*)
 FROM endpoint_credential ec JOIN credential c ON c.id = ec.credential_id WHERE c.token_hash IS NULL
+UNION ALL
+-- 跨平台绑定：credential.platform_id 只是"归属平台"、不是身份，schema 层面
+-- 并不禁止把平台 B 的凭据绑到平台 A 的端点上。但 v1 结构性不可能出现这种
+-- 绑定（key_index 是平台内序号），v2 可以。一旦出现，gateway 的
+-- filterKeysForRAPIs 会把多个平台的凭据混进同一个池，而 PickAvailableKey
+-- 的轮询游标只取 sorted[0].PlatformID —— 配额会记到错误的平台上。
+-- 本地迁移产出的绑定天然同平台，所以这里期望恒为 0。
+SELECT 'binding_cross_platform', count(*)
+FROM endpoint_credential ec
+JOIN rapi r       ON r.id = ec.rapi_id
+JOIN credential c ON c.id = ec.credential_id
+WHERE c.platform_id <> r.platform_id
 UNION ALL
 SELECT 'order_without_lapi', count(*)
 FROM lapi_rapi_order o WHERE NOT EXISTS (SELECT 1 FROM lapi l WHERE l.id = o.lapi_id)

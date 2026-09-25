@@ -70,8 +70,12 @@ func (db *DB) GetSyncState() (SyncState, error) {
 //     lapi=alias。全部镜像本地唯一索引（idx_platform_base_url /
 //     idx_credential_token_hash / idx_rapi_platform_model），故同名平台、
 //     同显示名模型不再被并成一行。
-//   - credential.sort_order 取 **bundle 数组下标**（中心按轮换顺序发出），
-//     这是自然键契约里唯一能承载"平台内轮换序号"的位置。
+//   - credential.sort_order 取契约里的 **sort_order 字段**（不是 bundle 数组
+//     下标 —— 数组下标是跨平台累加的全局值，写进去会毁掉"平台内轮换序号"的
+//     含义）。get_bundle 按 (base_url, sort_order) 排序发出，字段值与数组
+//     顺序在平台内一致，故轮询顺序等价；用字段值还能免疫"删掉某个平台的
+//     一个 key 导致后续平台下标整体左移"。sort_order 是自然键契约里唯一能
+//     承载平台内轮换序号的位置。
 //   - b.Bindings 按 (端点自然键, token_hash) 解析成本地 id CSV 后交
 //     syncBindingsTx 物化 endpoint_credential，再由它刷新 key_ids 派生列；
 //     某端点无绑定 = 绑定该平台全部凭据（与旧 key_ids 为空同义）。

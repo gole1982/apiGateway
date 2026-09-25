@@ -9,7 +9,7 @@
 
 | 位置 | 内容 |
 |---|---|
-| DB 列 | `rapi.available` / `platform_keys.failure_type` / `enabled` / `expires_at` |
+| DB 列 | `rapi.available` / `credential.failure_type` / `enabled` / `expires_at` |
 | scheduler 内存结构 | `unavailableUntil` / `invalidated` / `consecutiveFailures` |
 | gateway 编排逻辑 | `classifyFailure` / `allKeysHardDead` / `handleAllKeysUnavailable` 里散落的 if/else |
 
@@ -192,8 +192,10 @@ gateway / service 不再直接写 DB 状态列，只发事件；实体负责落�
 Key 的增删改走 `internal/service`（HTTP）→ `internal/db`（持久化）→
 `internal/scheduler`（内存实体）三层，完备性约定：
 
-- **添加**（POST）：`AddPlatformKey` 取 `key_index=max+1`，`AUTOINCREMENT` 保证
-  id 永不复用（RAPI 白名单引用不会错指）；随后自动触发 `RecoverPlatformRAPIs`
+- **添加**（POST）：`AddPlatformKey` 写入 `credential`，平台内轮换序号取
+  `sort_order=max+1`，身份是 `token_hash`（`sha256(明文)[:16]`，空 token 落
+  NULL 不参与唯一），`AUTOINCREMENT` 保证 id 永不复用（RAPI 白名单引用不会
+  错指）；随后自动触发 `RecoverPlatformRAPIs`
   探测式恢复——此前因 key 全死而不可用的模型只有真正应答才复活。
 - **更新**（PUT `?key_id=N`）：单 key 更新，token 留空 = 保留原值（不回传明文）。
 - **整表替换**（平台弹窗保存）：`SetPlatformKeys` 先按 id（旧客户端按解密 token
