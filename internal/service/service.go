@@ -2278,24 +2278,56 @@ func createWebHandler() http.Handler {
 			http.Error(w, `{"error":"method not allowed"}`, 405)
 			return
 		}
-		keys, err := store.A().GetAllPlatformKeys()
-		if err != nil {
-			writeJSONError(w, 500, err)
+		// These four reads are independent of each other. Each store call can be a
+		// remote round trip (the active store is Supabase in management mode), so
+		// issuing them sequentially dominated this endpoint's latency.
+		var (
+			keys      []models.PlatformKey
+			keysErr   error
+			platforms []models.Platform
+			rapis     []models.RAPIWithPlatform
+			blocks    []models.KeyModelBlock
+			wg        sync.WaitGroup
+		)
+		wg.Add(4)
+		go func() { defer wg.Done(); keys, keysErr = store.A().GetAllPlatformKeys() }()
+		go func() { defer wg.Done(); platforms, _ = store.A().GetPlatforms() }()
+		go func() { defer wg.Done(); rapis, _ = store.A().GetRAPIs() }()
+		go func() { defer wg.Done(); blocks, _ = db.Get().GetKeyModelBlocks() }()
+		wg.Wait()
+		if keysErr != nil {
+			writeJSONError(w, 500, keysErr)
 			return
 		}
 		if keys == nil {
 			keys = []models.PlatformKey{}
 		}
-		platforms, _ := store.A().GetPlatforms()
 		platName := make(map[int64]string, len(platforms))
 		for _, p := range platforms {
 			platName[p.ID] = p.Name
 		}
-		rapis, _ := store.A().GetRAPIs()
-		blocks, _ := db.Get().GetKeyModelBlocks()
-		blockSet := make(map[string]models.KeyModelBlock, len(blocks))
+
+		// Composite struct key instead of a fmt.Sprintf'd string: avoids one
+		// allocation + formatting call per key×model pair.
+		type blockKey struct{ key, rapi int64 }
+		blockSet := make(map[blockKey]models.KeyModelBlock, len(blocks))
 		for _, b := range blocks {
-			blockSet[fmt.Sprintf("%d:%d", b.KeyID, b.RAPIID)] = b
+			blockSet[blockKey{b.KeyID, b.RAPIID}] = b
+		}
+
+		// Bucket models by platform and parse each model's key whitelist exactly
+		// once. The previous nested loop re-parsed KeyIDs for every key×model pair
+		// (O(keys×models) Sscanf calls), which was the real hot spot.
+		type rapiRef struct {
+			rapi    models.RAPIWithPlatform
+			keyIDs  []int64
+			allKeys bool // empty whitelist => every key of the platform serves it
+		}
+		rapisByPlatform := make(map[int64][]rapiRef, len(platforms))
+		for _, ra := range rapis {
+			ids := parseKeyIDs(ra.KeyIDs)
+			rapisByPlatform[ra.PlatformID] = append(rapisByPlatform[ra.PlatformID],
+				rapiRef{rapi: ra, keyIDs: ids, allKeys: len(ids) == 0})
 		}
 
 		type keyModelView struct {
@@ -2337,20 +2369,19 @@ func createWebHandler() http.Handler {
 				PlatformKey: k, PlatformName: platName[k.PlatformID], Models: []keyModelView{},
 				Cooling: cooling, RecoverAt: recoverAt, RuntimeReason: ks.Reason,
 			}
-			for _, ra := range rapis {
-				if ra.PlatformID != k.PlatformID {
-					continue
+			if refs := rapisByPlatform[k.PlatformID]; len(refs) > 0 {
+				kv.Models = make([]keyModelView, 0, len(refs))
+				for _, ref := range refs {
+					if !ref.allKeys && !intIn(ref.keyIDs, k.ID) {
+						continue
+					}
+					b, blocked := blockSet[blockKey{k.ID, ref.rapi.ID}]
+					mv := keyModelView{ID: ref.rapi.ID, Alias: ref.rapi.Alias, Model: ref.rapi.Model, Blocked: blocked}
+					if blocked {
+						mv.Reason = b.Reason
+					}
+					kv.Models = append(kv.Models, mv)
 				}
-				ids := parseKeyIDs(ra.KeyIDs)
-				if len(ids) > 0 && !intIn(ids, k.ID) {
-					continue
-				}
-				b, blocked := blockSet[fmt.Sprintf("%d:%d", k.ID, ra.ID)]
-				mv := keyModelView{ID: ra.ID, Alias: ra.Alias, Model: ra.Model, Blocked: blocked}
-				if blocked {
-					mv.Reason = b.Reason
-				}
-				kv.Models = append(kv.Models, mv)
 			}
 			out = append(out, kv)
 		}

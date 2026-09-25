@@ -22,6 +22,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"gateway/internal/crypto"
@@ -514,23 +515,40 @@ func (s *Store) GetRAPIsByPlatform(platformID int64) ([]models.RAPIWithPlatform,
 // listRAPIs 拉取 rapi 行 + 平台/密钥做本地语义的 JOIN 组装。
 func (s *Store) listRAPIs(extraFilter string) ([]models.RAPIWithPlatform, error) {
 	q := "select=*" + orderSuffix(extraFilter, "sort_order.asc,id.asc")
-	var raws []models.RAPI
-	if err := s.call(http.MethodGet, tblRAPI, q, nil, &raws); err != nil {
-		return nil, err
+
+	// Three independent PostgREST reads. Each is a full HTTPS round trip to the
+	// center, so running them concurrently takes this call from ~3 RTT to ~1 RTT.
+	// Safe to fan out: all three are read-only and call/dec hold no shared
+	// mutable state (only *http.Client, which is concurrency-safe).
+	var (
+		raws    []models.RAPI
+		plats   []models.Platform
+		allKeys []models.PlatformKey
+		rawsErr error
+		platErr error
+		keysErr error
+		wg      sync.WaitGroup
+	)
+	wg.Add(3)
+	go func() { defer wg.Done(); rawsErr = s.call(http.MethodGet, tblRAPI, q, nil, &raws) }()
+	go func() { defer wg.Done(); plats, platErr = s.GetPlatforms() }()
+	go func() { defer wg.Done(); allKeys, keysErr = s.GetAllPlatformKeys() }()
+	wg.Wait()
+	// Preserve the original error precedence: rapi, then platforms, then keys.
+	if rawsErr != nil {
+		return nil, rawsErr
 	}
-	plats, err := s.GetPlatforms()
-	if err != nil {
-		return nil, err
+	if platErr != nil {
+		return nil, platErr
+	}
+	if keysErr != nil {
+		return nil, keysErr
 	}
 	platByID := map[int64]*models.Platform{}
 	for i := range plats {
 		platByID[plats[i].ID] = &plats[i]
 	}
 	keysByPlat := map[int64][]models.PlatformKey{}
-	allKeys, err := s.GetAllPlatformKeys()
-	if err != nil {
-		return nil, err
-	}
 	for _, k := range allKeys {
 		keysByPlat[k.PlatformID] = append(keysByPlat[k.PlatformID], k)
 	}
