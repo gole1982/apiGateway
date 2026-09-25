@@ -6,6 +6,8 @@ import (
 
 	"gateway/internal/bundle"
 	"gateway/internal/crypto"
+
+	"gateway/internal/models"
 )
 
 // 固定中心密钥（32 字节 hex）。测试用，生产请随机生成。
@@ -43,7 +45,9 @@ func TestApplyBundle_InsertUpdateDelete(t *testing.T) {
 	db := setupTestDB(t)
 	ck := mustCenterKey(t)
 
-	// V1：1 平台 + 1 key + 1 rapi + 1 lapi + 1 路由链
+	// v1：1 平台 + 1 凭据 + 1 端点 + 1 lapi + 1 绑定 + 1 路由链
+	// （v2 自然键：platform=base_url、credential=token_hash、rapi=(base_url, model)）
+	credToken := "sk-key0"
 	v1 := &bundle.Envelope{
 		SchemaVersion: bundle.SchemaVersion,
 		Version:       1,
@@ -52,16 +56,21 @@ func TestApplyBundle_InsertUpdateDelete(t *testing.T) {
 				Name: "openai", BaseURL: "https://api.openai.com",
 				Token: encCenter(t, "sk-aaa", ck), Enabled: true, SupportedFormats: `["openai"]`,
 			}},
-			PlatformKeys: []bundle.PlatformKey{{
-				PlatformName: "openai", KeyIndex: 0, Token: encCenter(t, "sk-key0", ck), Enabled: true,
+			Credentials: []bundle.Credential{{
+				TokenHash: models.TokenHash(credToken), Token: encCenter(t, credToken, ck), Enabled: true,
 			}},
 			RAPIs: []bundle.RAPI{{
-				PlatformName: "openai", Alias: "gpt-4", Model: "gpt-4", Enabled: true,
-				KeyIDs: "0", SupportedFormats: `["openai"]`,
+				PlatformBaseURL: "https://api.openai.com", Alias: "gpt-4", Model: "gpt-4", Enabled: true,
+				SupportedFormats: `["openai"]`,
 			}},
 			LAPIs: []bundle.LAPI{{Alias: "chat", Enabled: true}},
+			Bindings: []bundle.CredentialBinding{{
+				PlatformBaseURL: "https://api.openai.com", Model: "gpt-4",
+				TokenHash: models.TokenHash(credToken), Enabled: true,
+			}},
 			LAPIRapiOrder: []bundle.LAPIRapiOrder{{
-				LAPIAlias: "chat", RAPIPlatformName: "openai", RAPIAlias: "gpt-4", OrderIndex: 0,
+				LAPIAlias: "chat", RAPIPlatformBaseURL: "https://api.openai.com",
+				RAPIModel: "gpt-4", OrderIndex: 0,
 			}},
 		},
 	}
@@ -158,8 +167,8 @@ func TestApplyBundle_IdempotentReapply(t *testing.T) {
 				Name: "p1", BaseURL: "https://x", Token: encCenter(t, "sk", ck),
 				Enabled: true, SupportedFormats: `["openai"]`,
 			}},
-			PlatformKeys: []bundle.PlatformKey{{
-				PlatformName: "p1", KeyIndex: 0, Token: encCenter(t, "k0", ck), Enabled: true,
+			Credentials: []bundle.Credential{{
+				TokenHash: models.TokenHash("k0"), Token: encCenter(t, "k0", ck), Enabled: true,
 			}},
 		},
 	}
@@ -182,14 +191,17 @@ func TestApplyBundle_RejectsInvalidReference(t *testing.T) {
 	db := setupTestDB(t)
 	ck := mustCenterKey(t)
 
-	// key 引用了不存在的平台 → bundle.Validate 在 ApplyBundle 内拒掉
+	// v2 里凭据不直接引用平台（归属由绑定的端点决定），等价的悬空引用是
+	// 绑定指向不存在的端点 → bundle.Validate 在 ApplyBundle 内拒掉。
 	bad := &bundle.Envelope{
 		SchemaVersion: bundle.SchemaVersion,
 		Version:       1,
 		Bundle: bundle.Bundle{
-			Platforms: []bundle.Platform{{Name: "p1", BaseURL: "https://x", Enabled: true, SupportedFormats: `["openai"]`}},
-			PlatformKeys: []bundle.PlatformKey{{
-				PlatformName: "ghost", KeyIndex: 0, Token: encCenter(t, "k", ck), Enabled: true,
+			Platforms:   []bundle.Platform{{Name: "p1", BaseURL: "https://x", Enabled: true, SupportedFormats: `["openai"]`}},
+			Credentials: []bundle.Credential{{TokenHash: models.TokenHash("k"), Token: encCenter(t, "k", ck), Enabled: true}},
+			Bindings: []bundle.CredentialBinding{{
+				PlatformBaseURL: "https://ghost", Model: "nope",
+				TokenHash: models.TokenHash("k"), Enabled: true,
 			}},
 		},
 	}

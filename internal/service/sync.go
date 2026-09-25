@@ -40,10 +40,10 @@ var (
 	syncCenterKey  []byte
 	syncSourceURL  string
 	syncConfigured bool
-	syncStarted    bool           // 轮询 goroutine 是否已启动（热激活复用）
+	syncStarted    bool            // 轮询 goroutine 是否已启动（热激活复用）
 	syncStopCh     <-chan struct{} // Run 启动时记录，热激活启动轮询用
-	syncPollSec    int            // 轮询间隔（热激活沿用）
-	manageMode     atomic.Bool    // 管理模式：定义类写直写中心，只读守卫放行
+	syncPollSec    int             // 轮询间隔（热激活沿用）
+	manageMode     atomic.Bool     // 管理模式：定义类写直写中心，只读守卫放行
 )
 
 // syncSnapshot 在读锁内取同步配置的当前快照，供 syncOnce / 状态接口使用——
@@ -193,12 +193,14 @@ func syncOnce(force bool) error {
 	logger.DefaultConsole().Info("service", "[SYNC] applied new config",
 		"version", env.Version,
 		"platforms", len(env.Bundle.Platforms),
-		"keys", len(env.Bundle.PlatformKeys),
+		"credentials", len(env.Bundle.Credentials),
 		"rapis", len(env.Bundle.RAPIs),
-		"lapis", len(env.Bundle.LAPIs))
+		"lapis", len(env.Bundle.LAPIs),
+		"bindings", len(env.Bundle.Bindings))
 	sbSystemLog("info", "已应用新配置 v"+itoa(int(env.Version))+
-		"（平台×"+itoa(len(env.Bundle.Platforms))+" / 密钥×"+itoa(len(env.Bundle.PlatformKeys))+
-		" / 模型×"+itoa(len(env.Bundle.RAPIs))+" / 接口×"+itoa(len(env.Bundle.LAPIs))+"）")
+		"（平台×"+itoa(len(env.Bundle.Platforms))+" / 凭据×"+itoa(len(env.Bundle.Credentials))+
+		" / 模型×"+itoa(len(env.Bundle.RAPIs))+" / 接口×"+itoa(len(env.Bundle.LAPIs))+
+		" / 绑定×"+itoa(len(env.Bundle.Bindings))+"）")
 	return nil
 }
 
@@ -372,10 +374,11 @@ func handleSyncCenter(w http.ResponseWriter, r *http.Request) {
 	out["connected"] = true
 	out["tables"] = map[string]int{
 		"platform":        len(env.Bundle.Platforms),
-		"platform_keys":   len(env.Bundle.PlatformKeys),
+		"credentials":     len(env.Bundle.Credentials),
 		"rapi":            len(env.Bundle.RAPIs),
 		"lapi":            len(env.Bundle.LAPIs),
 		"lapi_rapi_order": len(env.Bundle.LAPIRapiOrder),
+		"bindings":        len(env.Bundle.Bindings),
 	}
 
 	st, err := db.Get().GetSyncState()
@@ -617,4 +620,3 @@ func activateCenter(sbURL, sbKey, centerKeyHex string) (string, error) {
 	logger.DefaultConsole().Info("service", "[SYNC] proxy mode hot-activated", "center", base)
 	return role, nil
 }
-

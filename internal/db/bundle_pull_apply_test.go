@@ -10,6 +10,8 @@ import (
 
 	"gateway/internal/bundle"
 	"gateway/internal/crypto"
+
+	"gateway/internal/models"
 )
 
 // TestSyncPullApplyE2E 用本地 HTTP 桩模拟中心 Supabase 的 get_version / get_bundle
@@ -19,7 +21,10 @@ func TestSyncPullApplyE2E(t *testing.T) {
 	db := setupTestDB(t)
 
 	// 中心要返回的 bundle（明文 token，模拟手动录入里程碑）
+	// v2 自然键：credentials 按轮换序排列、绑定显式承载（key_ids CSV 已废除）
 	const remoteVersion int64 = 2
+	const keyToken = "sk-key-plain"
+	keyHash := models.TokenHash(keyToken)
 	envelopeJSON, err := json.Marshal(map[string]any{
 		"schema_version": bundle.SchemaVersion,
 		"version":        remoteVersion,
@@ -28,16 +33,21 @@ func TestSyncPullApplyE2E(t *testing.T) {
 				"name": "openai", "base_url": "https://api.openai.com",
 				"token": "sk-test-plain", "enabled": true, "supported_formats": `["openai"]`,
 			}},
-			"platform_keys": []map[string]any{{
-				"platform_name": "openai", "key_index": 0, "token": "sk-key-plain", "enabled": true,
+			"credentials": []map[string]any{{
+				"token_hash": keyHash, "token": keyToken, "enabled": true,
 			}},
 			"rapis": []map[string]any{{
-				"platform_name": "openai", "alias": "gpt-4", "model": "gpt-4", "enabled": true,
-				"key_ids": "0", "supported_formats": `["openai"]`,
+				"platform_base_url": "https://api.openai.com", "alias": "gpt-4", "model": "gpt-4",
+				"enabled": true, "supported_formats": `["openai"]`,
 			}},
 			"lapis": []map[string]any{{"alias": "chat", "enabled": true}},
+			"bindings": []map[string]any{{
+				"platform_base_url": "https://api.openai.com", "model": "gpt-4",
+				"token_hash": keyHash, "enabled": true,
+			}},
 			"lapi_rapi_order": []map[string]any{{
-				"lapi_alias": "chat", "rapi_platform_name": "openai", "rapi_alias": "gpt-4", "order_index": 0,
+				"lapi_alias": "chat", "rapi_platform_base_url": "https://api.openai.com",
+				"rapi_model": "gpt-4", "order_index": 0,
 			}},
 		},
 	})

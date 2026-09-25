@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -61,17 +62,23 @@ func (db *DB) GetSyncState() (SyncState, error) {
 
 // ApplyBundle 把中心拉到的定义快照单事务应用进本地 SQLite。
 //
-// 语义（设计 §5.2/§5.3/§5.4）：
+// 语义（设计 §5.2/§5.3/§5.4 + 自然键迁移 §5.1）：
 //   - 业务键 diff-upsert：每个同步字段覆盖成中心值；中心没有的行本地删除。
 //     禁止整表 DELETE 再插——rapi_metrics / lapi_rapi_order / token_cache 对
 //     rapi/lapi 是 ON DELETE CASCADE，按业务键原地 UPDATE 才能保住统计。
+//   - v2 业务键：platform=base_url、credential=token_hash、rapi=(platform_id, model)、
+//     lapi=alias。全部镜像本地唯一索引（idx_platform_base_url /
+//     idx_credential_token_hash / idx_rapi_platform_model），故同名平台、
+//     同显示名模型不再被并成一行。
+//   - credential.sort_order 取 **bundle 数组下标**（中心按轮换顺序发出），
+//     这是自然键契约里唯一能承载"平台内轮换序号"的位置。
+//   - b.Bindings 按 (端点自然键, token_hash) 解析成本地 id CSV 后交
+//     syncBindingsTx 物化 endpoint_credential，再由它刷新 key_ids 派生列；
+//     某端点无绑定 = 绑定该平台全部凭据（与旧 key_ids 为空同义）。
 //   - 事务内显式归零健康态：platform/rapi.available、key 失败列、key_model_blocks。
 //     rapi_metrics / request_trends / request_logs 保留不清零。
 //   - bundle 的 token / login_password 是 center_key 密文：解出明文后用本地
 //     ~/.apiGateway.key 重新加密入库（与本地录入同路，热路径零改动）。
-//   - rapi.key_ids 是"平台内 key_index CSV"（跨实例业务键）：解析回本地
-//     credential.id 后经 syncBindingsTx 物化为 endpoint_credential 绑定并
-//     重建派生 key_ids 列，本地消费方无需改动。
 //   - 全部成功才 COMMIT 并写 sync_state（current=last_good=env.Version）；
 //     任何一步失败整体 rollback、保留 last_good（fail-open 由调用方保证）。
 //
@@ -107,9 +114,9 @@ func (db *DB) ApplyBundle(env *bundle.Envelope, centerKey []byte, sourceURL stri
 	now := time.Now()
 	b := &env.Bundle
 
-	// ---- 1. platform：按 name upsert ----
+	// ---- 1. platform：按 base_url upsert（v2 业务键，镜像 idx_platform_base_url）----
 	platID := make(map[string]int64, len(b.Platforms))
-	id2Name := make(map[int64]string, len(b.Platforms))
+	id2BaseURL := make(map[int64]string, len(b.Platforms))
 	for _, p := range b.Platforms {
 		encToken, err := reencrypt(p.Token, centerKey)
 		if err != nil {
@@ -126,16 +133,16 @@ func (db *DB) ApplyBundle(env *bundle.Envelope, centerKey []byte, sourceURL stri
 		}
 
 		var id int64
-		err = tx.QueryRow(`SELECT id FROM platform WHERE name = ?`, p.Name).Scan(&id)
+		err = tx.QueryRow(`SELECT id FROM platform WHERE base_url = ?`, p.BaseURL).Scan(&id)
 		switch {
 		case err == nil:
 			if _, err = tx.Exec(`UPDATE platform SET
-					base_url=?, token=?, last_token_fetch=?, enabled=?, available=?,
+					name=?, token=?, last_token_fetch=?, enabled=?, available=?,
 					notes=?, supported_formats=?, format_endpoints=?, custom_headers=?,
 					billing_address=?, login_account=?, login_password=?,
 					sort_order=?, updated_at=?
 				WHERE id=?`,
-				p.BaseURL, encToken, p.LastTokenFetch, b2i(p.Enabled), avail,
+				p.Name, encToken, p.LastTokenFetch, b2i(p.Enabled), avail,
 				p.Notes, p.SupportedFormats, p.FormatEndpoints, p.CustomHeaders,
 				p.BillingAddress, p.LoginAccount, encLoginPw,
 				p.SortOrder, now, id); err != nil {
@@ -159,8 +166,8 @@ func (db *DB) ApplyBundle(env *bundle.Envelope, centerKey []byte, sourceURL stri
 		default:
 			return fmt.Errorf("lookup platform %q: %w", p.Name, err)
 		}
-		platID[p.Name] = id
-		id2Name[id] = p.Name
+		platID[p.BaseURL] = id
+		id2BaseURL[id] = p.BaseURL
 	}
 
 	// 删除中心已不存在的平台（FK CASCADE 带走其 keys/rapis/metrics）
@@ -175,7 +182,7 @@ func (db *DB) ApplyBundle(env *bundle.Envelope, centerKey []byte, sourceURL stri
 			rows.Close()
 			return fmt.Errorf("scan platforms: %w", err)
 		}
-		if _, keep := platID[id2Name[id]]; !keep {
+		if _, keep := platID[id2BaseURL[id]]; !keep {
 			stalePlats = append(stalePlats, id)
 		}
 	}
@@ -186,119 +193,149 @@ func (db *DB) ApplyBundle(env *bundle.Envelope, centerKey []byte, sourceURL stri
 		}
 	}
 
-	// ---- 2. credential：按 (platform_id, sort_order) upsert ----
-	// bundle 业务键仍是 (platform_name, key_index)；本地落到 credential.sort_order，
-	// 行 id 即 credential.id（下游 resolveKeyIDs / 绑定同步共用）。
-	keyLocalID := make(map[keyRef]int64, len(b.PlatformKeys))
-	keySeen := make(map[keyRef]struct{}, len(b.PlatformKeys))
-	for _, k := range b.PlatformKeys {
-		pid, ok := platID[k.PlatformName]
-		if !ok {
-			return fmt.Errorf("platform_key: platform %q missing (validate should have caught)", k.PlatformName)
-		}
+	// ---- 2. credential：按 token_hash upsert（v2 业务键，镜像 idx_credential_token_hash）----
+	// sort_order（平台内轮换序号）取 bundle 数组下标：自然键契约里没有 key_index，
+	// 中心按轮换顺序发出 credentials，数组位置即轮换序号，行为与 v1 等价。
+	credLocalID := make(map[string]int64, len(b.Credentials))
+	credSeen := make(map[string]struct{}, len(b.Credentials))
+	for i, k := range b.Credentials {
+		hash := strings.TrimSpace(k.TokenHash)
 		encToken, plainToken, err := reencryptPlain(k.Token, centerKey)
 		if err != nil {
-			return fmt.Errorf("platform %q key %d token: %w", k.PlatformName, k.KeyIndex, err)
+			return fmt.Errorf("credential %s token: %w", hash, err)
 		}
-		hashArg := tokenHashArg(plainToken)
-		bk := keyRef{k.PlatformName, k.KeyIndex}
+		// 中心给的 token_hash 是判据；用本地明文重算并校验一致性，防止错配导致串号
+		localHash := tokenHashArg(plainToken)
+		if lh, ok := localHash.(string); ok && hash != "" && lh != hash {
+			return fmt.Errorf("credential token_hash mismatch: bundle=%s local=%s（中心与本地 token 不一致）", hash, lh)
+		}
+		hashArg := localHash
+		sortOrder := i
 
 		var id int64
-		err = tx.QueryRow(`SELECT id FROM credential WHERE platform_id=? AND sort_order=?`, pid, k.KeyIndex).Scan(&id)
+		err = tx.QueryRow(`SELECT id FROM credential WHERE token_hash = ?`, hash).Scan(&id)
 		switch {
 		case err == nil:
 			if _, err = tx.Exec(`UPDATE credential SET
-					token=?, token_hash=?, label=?, enabled=?,
+					token=?, label=?, enabled=?, sort_order=?,
 					failure_type=0, failure_reason='', failed_at=NULL,
 					expires_at=?, is_free=?, updated_at=?
 				WHERE id=?`,
-				encToken, hashArg, k.Label, b2i(k.Enabled),
+				encToken, k.Label, b2i(k.Enabled), sortOrder,
 				k.ExpiresAt, b2i(k.IsFree), now, id); err != nil {
-				return wrapCredErr(fmt.Errorf("update credential (%s,%d): %w", k.PlatformName, k.KeyIndex, err))
+				return wrapCredErr(fmt.Errorf("update credential %s: %w", hash, err))
 			}
 		case errors.Is(err, sql.ErrNoRows):
+			// platform_id 必填：凭据的归属平台由 center_key 无法表达时取第一个平台，
+			// 其真实归属以 endpoint_credential 绑定为准（见下方绑定物化）。
+			var pid int64
+			if err = tx.QueryRow(`SELECT id FROM platform ORDER BY id LIMIT 1`).Scan(&pid); err != nil {
+				return fmt.Errorf("credential %s: no platform to attach: %w", hash, err)
+			}
 			res, err := tx.Exec(`INSERT INTO credential
 					(platform_id, sort_order, token_hash, token, label, enabled,
 					 expires_at, is_free, created_at, updated_at)
 				VALUES (?,?,?,?,?,?, ?,?,?,?)`,
-				pid, k.KeyIndex, hashArg, encToken, k.Label, b2i(k.Enabled),
+				pid, sortOrder, hashArg, encToken, k.Label, b2i(k.Enabled),
 				k.ExpiresAt, b2i(k.IsFree), now, now)
 			if err != nil {
-				return wrapCredErr(fmt.Errorf("insert credential (%s,%d): %w", k.PlatformName, k.KeyIndex, err))
+				return wrapCredErr(fmt.Errorf("insert credential %s: %w", hash, err))
 			}
 			if id, err = res.LastInsertId(); err != nil {
-				return fmt.Errorf("insert credential (%s,%d): last id: %w", k.PlatformName, k.KeyIndex, err)
+				return fmt.Errorf("insert credential %s: last id: %w", hash, err)
 			}
 		default:
-			return fmt.Errorf("lookup credential (%s,%d): %w", k.PlatformName, k.KeyIndex, err)
+			return fmt.Errorf("lookup credential %s: %w", hash, err)
 		}
-		keyLocalID[bk] = id
-		keySeen[bk] = struct{}{}
+		credLocalID[hash] = id
+		credSeen[hash] = struct{}{}
 	}
 
-	// 删除中心已不存在的 key（仅限仍存在的平台下的多余 key；FK 级联清绑定/缓存，
-	// 幸存 rapi 的派生 key_ids 由第 3 步 syncBindingsTx 重建）
-	rows, err = tx.Query(`SELECT k.id, k.platform_id, k.sort_order FROM credential k`)
+	// 删除中心已不存在的凭据（FK 级联清绑定/缓存）
+	var staleCreds []int64
+	idRows, err := tx.Query(`SELECT id, token_hash FROM credential WHERE token_hash IS NOT NULL`)
 	if err != nil {
 		return fmt.Errorf("scan credentials: %w", err)
 	}
-	var staleKeys []int64
-	for rows.Next() {
+	for idRows.Next() {
 		var (
-			id, pid int64
-			idx     int
+			id   int64
+			hash sql.NullString
 		)
-		if err = rows.Scan(&id, &pid, &idx); err != nil {
-			rows.Close()
+		if err = idRows.Scan(&id, &hash); err != nil {
+			idRows.Close()
 			return fmt.Errorf("scan credentials: %w", err)
 		}
-		if _, keep := keySeen[keyRef{id2Name[pid], idx}]; !keep {
-			staleKeys = append(staleKeys, id)
+		if _, keep := credSeen[strings.TrimSpace(hash.String)]; !keep {
+			staleCreds = append(staleCreds, id)
 		}
 	}
-	rows.Close()
-	for _, id := range staleKeys {
+	idRows.Close()
+	for _, id := range staleCreds {
 		if _, err = tx.Exec(`DELETE FROM credential WHERE id=?`, id); err != nil {
 			return fmt.Errorf("delete stale credential %d: %w", id, err)
 		}
 	}
 
-	// ---- 3. rapi：按 (platform_id, alias) upsert；key_ids 业务键解析回本地 id ----
+	// ---- 3. rapi：按 (platform_id, model) upsert（v2 业务键，镜像 idx_rapi_platform_model）----
+	// alias 降级为显示名，随中心覆盖但**不参与查找**。
 	// key_ids 是 endpoint_credential 的派生投影：不直写，upsert 后用 syncBindingsTx
 	// 重建绑定集合并由它刷新派生列。
-	type rapiBK struct {
-		plat, alias string
-	}
-	rapiSeen := make(map[rapiBK]struct{}, len(b.RAPIs))
-	for _, r := range b.RAPIs {
-		pid, ok := platID[r.PlatformName]
+	//
+	// 绑定先按端点归拢：bundle.Bindings 里的 (端点自然键, token_hash) 解析成本地
+	// credential id；某端点没有任何绑定条目 = 绑定该平台全部凭据（空 CSV 语义）。
+	type epKey struct{ baseURL, model string }
+	bindingsByEP := make(map[epKey][]string, len(b.Bindings))
+	credIDsByEP := make(map[epKey][]int64, len(b.Bindings))
+	for _, bd := range b.Bindings {
+		ek := epKey{bd.PlatformBaseURL, bd.Model}
+		bindingsByEP[ek] = append(bindingsByEP[ek], strings.TrimSpace(bd.TokenHash))
+		cid, ok := credLocalID[strings.TrimSpace(bd.TokenHash)]
 		if !ok {
-			return fmt.Errorf("rapi: platform %q missing (validate should have caught)", r.PlatformName)
+			return fmt.Errorf("binding (%s,%s): credential %s missing (validate should have caught)",
+				bd.PlatformBaseURL, bd.Model, bd.TokenHash)
 		}
-		localKeyIDs, err := resolveKeyIDs(r.KeyIDs, r.PlatformName, keyLocalID)
-		if err != nil {
-			return fmt.Errorf("rapi (%s,%s) key_ids: %w", r.PlatformName, r.Alias, err)
+		credIDsByEP[ek] = append(credIDsByEP[ek], cid)
+	}
+
+	rapiSeen := make(map[epKey]struct{}, len(b.RAPIs))
+	rapiIDByEP := make(map[epKey]int64, len(b.RAPIs))
+	for _, r := range b.RAPIs {
+		pid, ok := platID[r.PlatformBaseURL]
+		if !ok {
+			return fmt.Errorf("rapi %q: platform base_url %q missing (validate should have caught)", r.Alias, r.PlatformBaseURL)
+		}
+		// 端点的本地 credential id CSV：无绑定条目 = 空 = 平台全部凭据
+		ids := credIDsByEP[epKey{r.PlatformBaseURL, r.Model}]
+		var localKeyIDs string
+		if len(ids) > 0 {
+			parts := make([]string, len(ids))
+			for i, v := range ids {
+				parts[i] = strconv.FormatInt(v, 10)
+			}
+			localKeyIDs = strings.Join(parts, ",")
 		}
 
 		var id int64
-		err = tx.QueryRow(`SELECT id FROM rapi WHERE platform_id=? AND alias=?`, pid, r.Alias).Scan(&id)
+		err = tx.QueryRow(`SELECT id FROM rapi WHERE platform_id=? AND model=?`, pid, r.Model).Scan(&id)
 		switch {
 		case err == nil:
+			// model 是键，不更新它；alias 随中心覆盖为最新显示名
 			if _, err = tx.Exec(`UPDATE rapi SET
-					model=?, enabled=?, available=1, unavailable_reason='',
+					alias=?, enabled=?, available=1, unavailable_reason='',
 					base_cost=?, high_cost=?,
 					rpm_limit=?, rph_limit=?, rpd_limit=?, tpm_limit=?, tph_limit=?, tpd_limit=?,
 					time_period_rules=?, supported_formats=?, custom_headers=?,
 					source=?, series=?, model_name=?, version=?, vendor=?, suffix=?,
 					notes=?, sort_order=?, updated_at=?
 				WHERE id=?`,
-				r.Model, b2i(r.Enabled),
+				r.Alias, b2i(r.Enabled),
 				r.BaseCost, r.HighCost,
 				r.RPMLimit, r.RPHLimit, r.RPDLimit, r.TPMLimit, r.TPHLimit, r.TPDLimit,
 				r.TimePeriodRules, r.SupportedFormats, r.CustomHeaders,
 				r.Source, r.Series, r.ModelName, r.Version, r.Vendor, r.Suffix,
 				r.Notes, r.SortOrder, now, id); err != nil {
-				return fmt.Errorf("update rapi (%s,%s): %w", r.PlatformName, r.Alias, err)
+				return fmt.Errorf("update rapi (%s,%s): %w", r.PlatformBaseURL, r.Model, err)
 			}
 		case errors.Is(err, sql.ErrNoRows):
 			res, err := tx.Exec(`INSERT INTO rapi
@@ -323,23 +360,26 @@ func (db *DB) ApplyBundle(env *bundle.Envelope, centerKey []byte, sourceURL stri
 				r.Series, r.ModelName, r.Version, r.Vendor, r.Suffix, r.Notes, r.SortOrder,
 				now, now)
 			if err != nil {
-				return fmt.Errorf("insert rapi (%s,%s): %w", r.PlatformName, r.Alias, err)
+				return fmt.Errorf("insert rapi (%s,%s): %w", r.PlatformBaseURL, r.Model, err)
 			}
 			if id, err = res.LastInsertId(); err != nil {
-				return fmt.Errorf("insert rapi (%s,%s): last id: %w", r.PlatformName, r.Alias, err)
+				return fmt.Errorf("insert rapi (%s,%s): last id: %w", r.PlatformBaseURL, r.Model, err)
 			}
 		default:
-			return fmt.Errorf("lookup rapi (%s,%s): %w", r.PlatformName, r.Alias, err)
+			return fmt.Errorf("lookup rapi (%s,%s): %w", r.PlatformBaseURL, r.Model, err)
 		}
 		// key_ids 派生列：按解析后的本地 credential id CSV 重建绑定并刷新投影。
 		if err := syncBindingsTx(tx, id, pid, localKeyIDs); err != nil {
-			return fmt.Errorf("rapi (%s,%s) sync bindings: %w", r.PlatformName, r.Alias, err)
+			return fmt.Errorf("rapi (%s,%s) sync bindings: %w", r.PlatformBaseURL, r.Model, err)
 		}
-		rapiSeen[rapiBK{r.PlatformName, r.Alias}] = struct{}{}
+		ek := epKey{r.PlatformBaseURL, r.Model}
+		rapiSeen[ek] = struct{}{}
+		rapiIDByEP[ek] = id
 	}
 
 	// 删除中心已不存在的 rapi（FK CASCADE 带走 metrics —— rapi 本身已不在中心，可接受）
-	rows, err = tx.Query(`SELECT r.id, r.platform_id, r.alias FROM rapi r`)
+	// 反查键：(platform_id, model) → (platform.base_url, model)
+	rows, err = tx.Query(`SELECT r.id, r.platform_id, r.model FROM rapi r`)
 	if err != nil {
 		return fmt.Errorf("scan rapis: %w", err)
 	}
@@ -347,13 +387,13 @@ func (db *DB) ApplyBundle(env *bundle.Envelope, centerKey []byte, sourceURL stri
 	for rows.Next() {
 		var (
 			id, pid int64
-			alias   string
+			model   string
 		)
-		if err = rows.Scan(&id, &pid, &alias); err != nil {
+		if err = rows.Scan(&id, &pid, &model); err != nil {
 			rows.Close()
 			return fmt.Errorf("scan rapis: %w", err)
 		}
-		if _, keep := rapiSeen[rapiBK{id2Name[pid], alias}]; !keep {
+		if _, keep := rapiSeen[epKey{id2BaseURL[pid], model}]; !keep {
 			staleRapis = append(staleRapis, id)
 		}
 	}
@@ -426,14 +466,16 @@ func (db *DB) ApplyBundle(env *bundle.Envelope, centerKey []byte, sourceURL stri
 		if !ok {
 			return fmt.Errorf("lapi_rapi_order: lapi %q missing (validate should have caught)", o.LAPIAlias)
 		}
-		// 反查 rapi 本地 id：需要 (platform_name, alias) → id。重建映射。
-		rpid, err := lookupRapiID(tx, platID[o.RAPIPlatformName], o.RAPIAlias)
-		if err != nil {
-			return fmt.Errorf("lapi_rapi_order: rapi (%s,%s): %w", o.RAPIPlatformName, o.RAPIAlias, err)
+		// 反查 rapi 本地 id：端点自然键 (base_url, model) → id（映射已在本函数内建好）
+		ek := epKey{o.RAPIPlatformBaseURL, o.RAPIModel}
+		rpid, ok := rapiIDByEP[ek]
+		if !ok {
+			return fmt.Errorf("lapi_rapi_order: endpoint (%s,%s) missing (validate should have caught)",
+				o.RAPIPlatformBaseURL, o.RAPIModel)
 		}
 		if _, err = tx.Exec(`INSERT INTO lapi_rapi_order (lapi_id, rapi_id, order_index) VALUES (?,?,?)`,
 			lid, rpid, o.OrderIndex); err != nil {
-			return fmt.Errorf("insert lapi_rapi_order (%s,%s,%d): %w", o.LAPIAlias, o.RAPIAlias, o.OrderIndex, err)
+			return fmt.Errorf("insert lapi_rapi_order (%s,%s,%d): %w", o.LAPIAlias, ek, o.OrderIndex, err)
 		}
 	}
 
@@ -469,12 +511,6 @@ func (db *DB) ApplyBundle(env *bundle.Envelope, centerKey []byte, sourceURL stri
 	return nil
 }
 
-// keyRef 是凭据的业务键（平台名 + 平台内序号，本地落 credential.sort_order），跨实例稳定。
-type keyRef struct {
-	plat string
-	idx  int
-}
-
 // reencryptPlain 同 reencrypt，但额外返回明文（调用方算 token_hash 用）。
 func reencryptPlain(centerCiphertext string, centerKey []byte) (enc string, plain string, err error) {
 	if centerCiphertext == "" {
@@ -505,41 +541,6 @@ func reencryptPlain(centerCiphertext string, centerKey []byte) (enc string, plai
 func reencrypt(centerCiphertext string, centerKey []byte) (string, error) {
 	enc, _, err := reencryptPlain(centerCiphertext, centerKey)
 	return enc, err
-}
-
-// resolveKeyIDs 把 bundle 的 key_ids（平台内 key_index CSV）解析成本地
-// credential.id CSV。空输入返回空串（= 该平台全部 key 可用，本地语义一致）。
-func resolveKeyIDs(keyIndexCSV, platformName string, keyLocalID map[keyRef]int64) (string, error) {
-	s := strings.TrimSpace(keyIndexCSV)
-	if s == "" {
-		return "", nil
-	}
-	var localIDs []string
-	for _, raw := range strings.Split(s, ",") {
-		raw = strings.TrimSpace(raw)
-		if raw == "" {
-			continue
-		}
-		var idx int
-		if _, err := fmt.Sscanf(raw, "%d", &idx); err != nil {
-			return "", fmt.Errorf("non-numeric key_index %q", raw)
-		}
-		id, ok := keyLocalID[keyRef{platformName, idx}]
-		if !ok {
-			return "", fmt.Errorf("key_index %d not found under platform %q", idx, platformName)
-		}
-		localIDs = append(localIDs, fmt.Sprintf("%d", id))
-	}
-	return strings.Join(localIDs, ","), nil
-}
-
-func lookupRapiID(tx *sql.Tx, platformID int64, alias string) (int64, error) {
-	if platformID == 0 {
-		return 0, fmt.Errorf("unknown platform")
-	}
-	var id int64
-	err := tx.QueryRow(`SELECT id FROM rapi WHERE platform_id=? AND alias=?`, platformID, alias).Scan(&id)
-	return id, err
 }
 
 func b2i(v bool) int {
