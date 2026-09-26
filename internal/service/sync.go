@@ -54,7 +54,7 @@ func syncSnapshot() (client *bundle.Client, centerKey []byte, sourceURL string, 
 	return syncClient, syncCenterKey, syncSourceURL, syncConfigured
 }
 
-// startupLocalCounts 是网关启动那一刻本地 SQLite 5 张定义表的行数快照，
+// startupLocalCounts 是网关启动那一刻本地 SQLite 6 张定义表的行数快照，
 // 用于仪表盘「中心连接信息」卡的「启动以来变化量」列（当前本地 − 启动快照）。
 // 在 service.Run 里 db.Init 之后捕获一次；db.Get() 在 manage 模式下仍是本地
 // SQLite（运行时读一律走本地，store 切换只影响定义类 CRUD 写）。
@@ -226,7 +226,12 @@ func localTableCounts() map[string]int {
 		out["platform"] = len(ps)
 	}
 	if ks, err := d.GetAllPlatformKeys(); err == nil {
-		out["platform_keys"] = len(ks)
+		// v2：本地凭据在 credential 表；计数键与中心表名一致，
+		// 前端按表名取数（旧键名 platform_keys 已随旧表删除）。
+		out["credential"] = len(ks)
+	}
+	if bs, err := d.GetAllEndpointCredentials(); err == nil {
+		out["endpoint_credential"] = len(bs)
 	}
 	if rs, err := d.GetRAPIs(); err == nil {
 		out["rapi"] = len(rs)
@@ -372,13 +377,17 @@ func handleSyncCenter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out["connected"] = true
+	// 键必须用中心真实表名（credential / endpoint_credential），与
+	// localTableCounts / fillSBTables 一致 —— 前端三列（中心/本地/启动快照）
+	// 共用同一个表名数组取数，键系不一致就会显示"—"（2026-09-26 事故：
+	// 此处曾用 bundle 风格的复数键 credentials/bindings）。
 	out["tables"] = map[string]int{
-		"platform":        len(env.Bundle.Platforms),
-		"credentials":     len(env.Bundle.Credentials),
-		"rapi":            len(env.Bundle.RAPIs),
-		"lapi":            len(env.Bundle.LAPIs),
-		"lapi_rapi_order": len(env.Bundle.LAPIRapiOrder),
-		"bindings":        len(env.Bundle.Bindings),
+		"platform":            len(env.Bundle.Platforms),
+		"credential":          len(env.Bundle.Credentials),
+		"rapi":                len(env.Bundle.RAPIs),
+		"lapi":                len(env.Bundle.LAPIs),
+		"lapi_rapi_order":     len(env.Bundle.LAPIRapiOrder),
+		"endpoint_credential": len(env.Bundle.Bindings),
 	}
 
 	st, err := db.Get().GetSyncState()

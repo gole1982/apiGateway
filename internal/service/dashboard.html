@@ -1560,7 +1560,8 @@
                             <div class="unread-menu-title" style="padding:0 14px 6px;">中心各表统计</div>
                             <div style="padding:0 14px 12px;">
                                 <div style="display:flex;justify-content:space-between;padding:3px 0;"><span>平台（platform）</span><span>{{ syncCenter.tables?.platform }}</span></div>
-                                <div style="display:flex;justify-content:space-between;padding:3px 0;"><span>密钥（platform_keys）</span><span>{{ syncCenter.tables?.platform_keys }}</span></div>
+                                <div style="display:flex;justify-content:space-between;padding:3px 0;"><span>密钥（credential）</span><span>{{ syncCenter.tables?.credential }}</span></div>
+                                <div style="display:flex;justify-content:space-between;padding:3px 0;"><span>绑定（endpoint_credential）</span><span>{{ syncCenter.tables?.endpoint_credential }}</span></div>
                                 <div style="display:flex;justify-content:space-between;padding:3px 0;"><span>上游模型（rapi）</span><span>{{ syncCenter.tables?.rapi }}</span></div>
                                 <div style="display:flex;justify-content:space-between;padding:3px 0;"><span>客户端模型（lapi）</span><span>{{ syncCenter.tables?.lapi }}</span></div>
                                 <div style="display:flex;justify-content:space-between;padding:3px 0;"><span>路由链（lapi_rapi_order）</span><span>{{ syncCenter.tables?.lapi_rapi_order }}</span></div>
@@ -1701,7 +1702,7 @@
                             </tr>
                         </thead>
                         <tbody>
-                            <tr v-for="t in ['platform','platform_keys','rapi','lapi','lapi_rapi_order']" :key="t" style="border-top:1px solid rgba(255,255,255,0.05);">
+                            <tr v-for="t in ['platform','credential','endpoint_credential','rapi','lapi','lapi_rapi_order']" :key="t" style="border-top:1px solid rgba(255,255,255,0.05);">
                                 <td style="padding:5px 8px;">{{ tableNameLabel(t) }}</td>
                                 <td style="text-align:right;padding:5px 8px;font-family:var(--font-mono);">{{ syncCenter.connected ? ((syncCenter.tables ?? {})[t] ?? '—') : '—' }}</td>
                                 <td style="text-align:right;padding:5px 8px;font-family:var(--font-mono);">{{ (syncCenter.local_tables ?? {})[t] ?? '—' }}</td>
@@ -2724,7 +2725,7 @@
                             </tr>
                         </thead>
                         <tbody>
-                            <tr v-for="t in ['platform','platform_keys','rapi','lapi','lapi_rapi_order']" :key="t" style="border-top:1px solid rgba(255,255,255,0.05);">
+                            <tr v-for="t in ['platform','credential','endpoint_credential','rapi','lapi','lapi_rapi_order']" :key="t" style="border-top:1px solid rgba(255,255,255,0.05);">
                                 <td style="padding:5px 8px;">{{ tableNameLabel(t) }}</td>
                                 <td style="text-align:right;padding:5px 8px;font-family:var(--font-mono);">{{ (sbConfig.tables ?? {})[t] ?? '—' }}</td>
                                 <td style="text-align:right;padding:5px 8px;font-family:var(--font-mono);">{{ (sbConfig.local_tables ?? {})[t] ?? '—' }}</td>
@@ -3826,8 +3827,8 @@
                     management: '管理端（可写）', proxy: '代理端（只读）', offline: '未连接'
                 }[sbConfig.value.role] || sbConfig.value.role));
                 const tableNameLabel = (t) => ({
-                    platform: '平台', platform_keys: '密钥', rapi: '上游模型',
-                    lapi: '客户端模型', lapi_rapi_order: '路由链'
+                    platform: '平台', credential: '密钥', endpoint_credential: '绑定',
+                    rapi: '上游模型', lapi: '客户端模型', lapi_rapi_order: '路由链'
                 }[t] || t);
                 // 角色 → 可读标签 / 颜色（仪表盘中心连接信息卡 + 中心配置页共用）。
                 const roleLabel = (r) => ({
@@ -3894,7 +3895,8 @@
                         if (r.ok) {
                             const ct = d.center_tables || {};
                             showToast('推送成功', '本地定义已覆盖中心（平台×' + (ct.platform ?? 0) +
-                                ' / 密钥×' + (ct.platform_keys ?? 0) + ' / 模型×' + (ct.rapi ?? 0) +
+                                ' / 密钥×' + (ct.credential ?? 0) + ' / 绑定×' + (ct.endpoint_credential ?? 0) +
+                                ' / 模型×' + (ct.rapi ?? 0) +
                                 ' / 接口×' + (ct.lapi ?? 0) + ' / 路由链×' + (ct.lapi_rapi_order ?? 0) + '）', 'success');
                             fetchSBConfig();
                             fetchSyncCenter();

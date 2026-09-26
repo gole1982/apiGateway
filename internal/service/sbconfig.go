@@ -328,7 +328,9 @@ func fillSBTables(resp *sbConfigResponse, url, key string) {
 	// 这里轻量调用：直接 GET 各表 count。
 	client := &http.Client{Timeout: 8 * time.Second}
 	tables := map[string]int{}
-	for _, t := range []string{"platform", "platform_keys", "rapi", "lapi", "lapi_rapi_order"} {
+	// v2 自然键：platform_keys 已删除，凭据是 credential，绑定是
+	// endpoint_credential。查旧表名会 404 → 前端显示"—"（2026-09-26 事故）。
+	for _, t := range []string{"platform", "credential", "rapi", "endpoint_credential", "lapi", "lapi_rapi_order"} {
 		req, _ := http.NewRequestWithContext(context.Background(), http.MethodHead, url+"/rest/v1/"+t+"?select=id&limit=1", nil)
 		req.Header.Set("apikey", key)
 		req.Header.Set("Authorization", "Bearer "+key)

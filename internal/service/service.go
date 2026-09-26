@@ -1472,7 +1472,7 @@ func createWebHandler() http.Handler {
 		// (important for aggregators with non-standard paths).
 		logger.DefaultConsole().Info("service", "[BATCH] detecting formats for platform", "platform", platform.Name)
 		// Use the first usable platform key (not platform.Token, which may be empty
-		// when keys live in platform_keys) so format detection exercises the same
+		// when keys live in credential) so format detection exercises the same
 		// credentials as real requests.
 		detectResults := apiformat.DetectFormats(r.Context(), platform.BaseURL, req.Models[0], platformKeyToken(req.PlatformID, platform.Token), nil)
 		var supportedFormats []apiformat.APIFormat
