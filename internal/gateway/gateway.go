@@ -809,7 +809,7 @@ func (g *ProxyGateway) loadKeysForRAPIs(rapis []models.RAPIWithPlatform) {
 }
 
 // filterKeysByKeyIDs returns only the keys whose ID is listed in keyIDsCSV
-// (comma-separated platform_keys IDs), preserving the original order. An empty
+// (comma-separated credential IDs), preserving the original order. An empty
 // whitelist means "all keys allowed" (the default). Unknown IDs are dropped
 // silently — the DB row is authoritative for key existence.
 func filterKeysByKeyIDs(keys []models.PlatformKey, keyIDsCSV string) []models.PlatformKey {
@@ -856,7 +856,7 @@ func (g *ProxyGateway) tryKeyForRAPI(
 	targetFormat string,
 ) (*http.Response, int64, error) {
 	keys := rapi.Keys
-	// Fallback: if no platform_keys loaded, use legacy platform.Token as a synthetic key.
+	// Fallback: if no credential keys loaded, use legacy platform.Token as a synthetic key.
 	if len(keys) == 0 {
 		syntheticKey := models.PlatformKey{
 			ID:         -1,

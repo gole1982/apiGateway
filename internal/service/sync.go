@@ -216,31 +216,90 @@ func pullMode() string {
 // localTableCounts 统计本地 SQLite 5 张定义表的当前行数。
 // 一律走 db.Get()（本地），绝不走 store.A()——manage 模式下 store 是中心库，
 // 用 store.A() 会把中心行数当成本地，使仪表盘「中心 vs 本地」对比失去意义。
+// centerDefinitionTables 是中心 6 张定义表的规范表名。三个计数源必须用
+// 同一套键，前端三列（中心/本地/启动快照）共用一个表名数组取数：
+//   - fillSBTables（sb-config 卡中心列）：按此表名逐个 REST 查数；
+//   - handleSyncCenter tables（sync 卡中心列）：按此表名从 bundle 取数；
+//   - localTableCounters（两卡的本地列 + 启动快照）：本地 SQLite 同名表。
+//
+// 2026-09-26 事故：三处各写各的字面量（platform_keys 旧名、bundle 复数键
+// credentials/bindings），面板密钥行显示"—"、推送 toast 显示 0，而全部单测
+// 全绿 —— 因为 service 包覆盖率仅 1.8%，根本没覆盖到接线处。
+// TestDefinitionTableKeysConsistent 把"三处一致"锁死，此后加表只改这一处。
+var centerDefinitionTables = []string{
+	"platform", "credential", "endpoint_credential",
+	"rapi", "lapi", "lapi_rapi_order",
+}
+
+// bundleTableCount 按规范表名从 bundle 取行数。switch 显式列出全部 6 张表，
+// 未知表名返回 -1（调用方跳过），而不是静默计 0 —— 拼错表名时 0 会伪装成
+// "空表"，-1 会在面板上暴露为缺失。
+func bundleTableCount(b *bundle.Bundle, table string) int {
+	if b == nil {
+		return -1
+	}
+	switch table {
+	case "platform":
+		return len(b.Platforms)
+	case "credential":
+		return len(b.Credentials)
+	case "endpoint_credential":
+		return len(b.Bindings)
+	case "rapi":
+		return len(b.RAPIs)
+	case "lapi":
+		return len(b.LAPIs)
+	case "lapi_rapi_order":
+		return len(b.LAPIRapiOrder)
+	}
+	return -1
+}
+
+// localTableCounter 把本地计数键与取值函数绑在一起。键集合可独立断言
+// （TestDefinitionTableKeysConsistent），无需 DB；取值失败时跳过该键，
+// 与旧行为一致（前端把缺失渲染为"—"）。
+type localTableCounter struct {
+	key   string
+	count func(d *db.DB) (int, bool)
+}
+
+var localTableCounters = []localTableCounter{
+	{"platform", func(d *db.DB) (int, bool) {
+		ps, err := d.GetPlatforms()
+		return len(ps), err == nil
+	}},
+	{"credential", func(d *db.DB) (int, bool) {
+		ks, err := d.GetAllPlatformKeys()
+		return len(ks), err == nil
+	}},
+	{"endpoint_credential", func(d *db.DB) (int, bool) {
+		bs, err := d.GetAllEndpointCredentials()
+		return len(bs), err == nil
+	}},
+	{"rapi", func(d *db.DB) (int, bool) {
+		rs, err := d.GetRAPIs()
+		return len(rs), err == nil
+	}},
+	{"lapi", func(d *db.DB) (int, bool) {
+		ls, err := d.GetLAPIs()
+		return len(ls), err == nil
+	}},
+	{"lapi_rapi_order", func(d *db.DB) (int, bool) {
+		os, err := d.GetAllLAPIRAPIOrders()
+		return len(os), err == nil
+	}},
+}
+
 func localTableCounts() map[string]int {
 	d := db.Get()
 	if d == nil {
 		return map[string]int{}
 	}
 	out := map[string]int{}
-	if ps, err := d.GetPlatforms(); err == nil {
-		out["platform"] = len(ps)
-	}
-	if ks, err := d.GetAllPlatformKeys(); err == nil {
-		// v2：本地凭据在 credential 表；计数键与中心表名一致，
-		// 前端按表名取数（旧键名 platform_keys 已随旧表删除）。
-		out["credential"] = len(ks)
-	}
-	if bs, err := d.GetAllEndpointCredentials(); err == nil {
-		out["endpoint_credential"] = len(bs)
-	}
-	if rs, err := d.GetRAPIs(); err == nil {
-		out["rapi"] = len(rs)
-	}
-	if ls, err := d.GetLAPIs(); err == nil {
-		out["lapi"] = len(ls)
-	}
-	if os, err := d.GetAllLAPIRAPIOrders(); err == nil {
-		out["lapi_rapi_order"] = len(os)
+	for _, c := range localTableCounters {
+		if n, ok := c.count(d); ok {
+			out[c.key] = n
+		}
 	}
 	return out
 }
@@ -377,18 +436,14 @@ func handleSyncCenter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out["connected"] = true
-	// 键必须用中心真实表名（credential / endpoint_credential），与
-	// localTableCounts / fillSBTables 一致 —— 前端三列（中心/本地/启动快照）
-	// 共用同一个表名数组取数，键系不一致就会显示"—"（2026-09-26 事故：
-	// 此处曾用 bundle 风格的复数键 credentials/bindings）。
-	out["tables"] = map[string]int{
-		"platform":            len(env.Bundle.Platforms),
-		"credential":          len(env.Bundle.Credentials),
-		"rapi":                len(env.Bundle.RAPIs),
-		"lapi":                len(env.Bundle.LAPIs),
-		"lapi_rapi_order":     len(env.Bundle.LAPIRapiOrder),
-		"endpoint_credential": len(env.Bundle.Bindings),
+	// 中心列的键与 centerDefinitionTables 同源（见该变量注释里的事故）。
+	tables := map[string]int{}
+	for _, t := range centerDefinitionTables {
+		if n := bundleTableCount(&env.Bundle, t); n >= 0 {
+			tables[t] = n
+		}
 	}
+	out["tables"] = tables
 
 	st, err := db.Get().GetSyncState()
 	if err != nil {

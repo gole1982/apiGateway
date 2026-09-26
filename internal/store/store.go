@@ -29,7 +29,7 @@ type Store interface {
 	SetPlatformSortOrder(ids []int64) error
 	UpdatePlatformFormats(platformID int64, formatsJSON string, propagateToRAPIs bool, formatEndpointsJSON string) error
 
-	// ---- platform_keys ----
+	// ---- credential (exposed as platform keys) ----
 	GetPlatformKeys(platformID int64) ([]models.PlatformKey, error)
 	GetAllPlatformKeys() ([]models.PlatformKey, error)
 	SetPlatformKeys(platformID int64, keys []models.PlatformKey) error
