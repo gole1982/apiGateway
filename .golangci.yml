@@ -47,7 +47,7 @@ linters-settings:
       naturalmigrate:
         files:
           - $all
-          - !$_test\.go
+          - "!$_test"
         allow:
           - $gostd
           - gateway/internal/...

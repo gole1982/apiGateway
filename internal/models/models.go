@@ -47,12 +47,12 @@ func TokenHash(token string) string {
 // PlatformID 是"归属平台"（管理分组/默认绑定范围，非身份）；label 为显示标签。
 // 跨平台同 token 只存一行；运行时的 key 池即本表行的投影（id 语义不变）。
 type Credential struct {
-	ID         int64     `json:"id"`
-	PlatformID int64     `json:"platform_id"` // 归属平台（home），非身份
-	TokenHash  string    `json:"token_hash"`  // 自然键；空 token → ""
-	Token      string    `json:"token"`
-	Label      string    `json:"label,omitempty"`
-	Enabled    bool      `json:"enabled"`
+	ID         int64  `json:"id"`
+	PlatformID int64  `json:"platform_id"` // 归属平台（home），非身份
+	TokenHash  string `json:"token_hash"`  // 自然键；空 token → ""
+	Token      string `json:"token"`
+	Label      string `json:"label,omitempty"`
+	Enabled    bool   `json:"enabled"`
 	// FailureType/FailureReason/FailedAt：代理本地健康态，不进中心、不进 bundle。
 	FailureType   int        `json:"failure_type"`
 	FailureReason string     `json:"failure_reason,omitempty"`
@@ -130,7 +130,7 @@ type Platform struct {
 	// The gateway prefers these URLs over BuildURL() so that aggregators with
 	// non-standard paths still get correct forwarding. Empty when no detection
 	// has been run; the gateway falls back to BuildURL() in that case.
-	FormatEndpoints string    `json:"format_endpoints,omitempty"`
+	FormatEndpoints string `json:"format_endpoints,omitempty"`
 	// BillingAddress is the provider's billing console URL — shown in the UI as
 	// a clickable external link (alerts can jump straight to the billing page).
 	BillingAddress string `json:"billing_address,omitempty"`
@@ -140,12 +140,12 @@ type Platform struct {
 	// LoginPassword is the provider console password. Stored encrypted
 	// (AES-256-GCM, same mechanism as Token) and NEVER selected on read —
 	// it is write-only: empty on read, set only via create/update payloads.
-	LoginPassword string `json:"login_password,omitempty"`
-	LastTokenFetch  time.Time `json:"last_token_fetch"`
-	Enabled         bool      `json:"enabled"`
-	Available       bool      `json:"available"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	LoginPassword  string    `json:"login_password,omitempty"`
+	LastTokenFetch time.Time `json:"last_token_fetch"`
+	Enabled        bool      `json:"enabled"`
+	Available      bool      `json:"available"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // RAPI is a specific model endpoint under a Platform.
@@ -155,11 +155,11 @@ type RAPI struct {
 	Alias             string `json:"alias"`
 	Model             string `json:"model"`
 	Notes             string `json:"notes"`
-	Vendor            string `json:"vendor"`  // 厂商 (e.g. "openai", "z.ai")
-	Series            string `json:"series"`  // 系列 (e.g. "glm", "claude")
+	Vendor            string `json:"vendor"`     // 厂商 (e.g. "openai", "z.ai")
+	Series            string `json:"series"`     // 系列 (e.g. "glm", "claude")
 	ModelName         string `json:"model_name"` // 名 (legacy, values migrated into Suffix)
-	Version           string `json:"version"` // 版本 (e.g. "5.2", "4.7")
-	Suffix            string `json:"suffix"`  // 后缀 (e.g. "luna xhigh", "sonnet")
+	Version           string `json:"version"`    // 版本 (e.g. "5.2", "4.7")
+	Suffix            string `json:"suffix"`     // 后缀 (e.g. "luna xhigh", "sonnet")
 	PlatformID        int64  `json:"platform_id"`
 	Enabled           bool   `json:"enabled"`
 	Available         bool   `json:"available"`
@@ -276,11 +276,11 @@ type LAPI struct {
 	ID        int64     `json:"id"`
 	Alias     string    `json:"alias"`
 	Notes     string    `json:"notes"`
-	Vendor    string    `json:"vendor"`  // 厂商
-	Series    string    `json:"series"`  // 系列
+	Vendor    string    `json:"vendor"`     // 厂商
+	Series    string    `json:"series"`     // 系列
 	ModelName string    `json:"model_name"` // 名 (legacy, values migrated into Suffix)
-	Version   string    `json:"version"` // 版本
-	Suffix    string    `json:"suffix"`  // 后缀
+	Version   string    `json:"version"`    // 版本
+	Suffix    string    `json:"suffix"`     // 后缀
 	Enabled   bool      `json:"enabled"`
 	CreatedAt time.Time `json:"created_at"`
 }

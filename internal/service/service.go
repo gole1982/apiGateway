@@ -1475,11 +1475,11 @@ func createWebHandler() http.Handler {
 			}
 		}
 
-	modelNames, errStatus, ferr := discoverUpstreamModels(r.Context(), baseURL, fetchToken)
-	if ferr != nil {
-		writeJSONError(w, errStatus, ferr)
-		return
-	}
+		modelNames, errStatus, ferr := discoverUpstreamModels(r.Context(), baseURL, fetchToken)
+		if ferr != nil {
+			writeJSONError(w, errStatus, ferr)
+			return
+		}
 
 		sort.Strings(modelNames)
 

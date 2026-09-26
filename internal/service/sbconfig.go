@@ -42,7 +42,7 @@ type sbConfigResponse struct {
 	Connected     bool           `json:"connected"`
 	Role          string         `json:"role"` // offline | proxy | management
 	URL           string         `json:"url"`
-	KeyMask       string         `json:"key_mask"`      // 脱敏回显
+	KeyMask       string         `json:"key_mask"`       // 脱敏回显
 	CenterKeySet  bool           `json:"center_key_set"` // center_key 是否已配置（settings 或 proxy.cfg）
 	Activated     bool           `json:"activated"`      // 保存后是否已热激活（免重启）
 	ActivateError string         `json:"activate_error,omitempty"`

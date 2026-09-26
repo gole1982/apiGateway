@@ -1831,7 +1831,7 @@ func (lw *limitedWriter) Write(p []byte) (int, error) {
 // forwards every write to next unchanged.
 type firstFrameRecorder struct {
 	firstSeen *time.Time
-	next     io.Writer
+	next      io.Writer
 }
 
 func (f *firstFrameRecorder) Write(p []byte) (int, error) {
