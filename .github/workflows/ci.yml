@@ -71,25 +71,31 @@ jobs:
           cache: true
 
       - name: Coverage floors
+        # 地板线 = 实测值向下留 3~5 个点缓冲。
+        #
+        # 为什么不贴着实测值设：贴太近的阈值会在"改了一行无关代码"时就变红，
+        # 而红的原因与真实退化无关 —— 这会训练团队忽略这个 job，等于没有门禁。
+        # 缓冲的作用是让它只在覆盖率真的掉了时才响。
+        # 提升覆盖率时请同步上调对应数值（别让它长期贴着缓冲边缘）。
         run: |
           go test ./... -cover > cover.txt 2>&1 || { cat cover.txt; exit 1; }
           cat cover.txt
           python3 - <<'EOF'
           import re, sys
           floors = {
-              "gateway/internal/apiformat": 34,
-              "gateway/internal/bundle": 76,
-              "gateway/internal/config": 62,
-              "gateway/internal/crypto": 68,
-              "gateway/internal/db": 65,
-              "gateway/internal/entity": 95,
-              "gateway/internal/fsm": 92,
-              "gateway/internal/gateway": 10,
-              "gateway/internal/logger": 32,
-              "gateway/internal/notify": 49,
-              "gateway/internal/scheduler": 71,
+              "gateway/internal/apiformat": 30,
+              "gateway/internal/bundle": 72,
+              "gateway/internal/config": 58,
+              "gateway/internal/crypto": 64,
+              "gateway/internal/db": 60,
+              "gateway/internal/entity": 90,
+              "gateway/internal/fsm": 88,
+              "gateway/internal/gateway": 8,
+              "gateway/internal/logger": 28,
+              "gateway/internal/notify": 44,
+              "gateway/internal/scheduler": 66,
               "gateway/internal/service": 5,
-              "gateway/internal/supabase": 44,
+              "gateway/internal/supabase": 40,
           }
           seen, failed = set(), False
           for line in open("cover.txt", encoding="utf-8", errors="replace"):
