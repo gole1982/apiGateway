@@ -126,8 +126,13 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	exeDir := filepath.Dir(exePath)
-	cfgPath := filepath.Join(exeDir, "proxy.cfg")
+	return LoadFrom(filepath.Join(exeDir, "proxy.cfg"))
+}
 
+// LoadFrom 从指定 ini 文件加载配置。文件缺失时返回全默认配置（与旧行为一致），
+// 以便无头/容器启动无需挂载配置文件。抽出纯路径参数版本，使配置解析可单测
+// （Load 写死 exe 目录，测试无法注入）。
+func LoadFrom(cfgPath string) (*Config, error) {
 	cfg, err := ini.Load(cfgPath)
 	if err != nil {
 		return &Config{
@@ -139,6 +144,7 @@ func Load() (*Config, error) {
 			BillingCooldownSec: 1800,
 			CapabilityBlockSec: 86400,
 			RequestMaxWaitSec:  120,
+			KeyCursorScope:     "session",
 			RetryOnStartup:     true,
 			RetryConcurrency:   8,
 			RetryTimeoutSec:    15,
@@ -150,7 +156,7 @@ func Load() (*Config, error) {
 		}, nil
 	}
 
-	return &Config{
+	c := &Config{
 		ProxyPort:          cfg.Section("").Key("proxy_port").MustInt(13579),
 		WebPort:            cfg.Section("").Key("web_port").MustInt(24680),
 		DialTimeoutSec:     cfg.Section("").Key("dial_timeout_sec").MustInt(30),
@@ -179,5 +185,11 @@ func Load() (*Config, error) {
 			ServiceKey:  cfg.Section("management").Key("service_key").MustString(""),
 			CenterKey:   cfg.Section("management").Key("center_key").MustString(""),
 		},
-	}, nil
+	}
+	// 未配置（缺键或显式留空）一律归一化为 session，与 scheduler.NewManager
+	// 的空值处理一致 —— 配置层不把空串继续往下传，避免"空"在别处被误读。
+	if c.KeyCursorScope == "" {
+		c.KeyCursorScope = "session"
+	}
+	return c, nil
 }

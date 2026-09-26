@@ -90,6 +90,22 @@ go build -o diaglog.exe ./cmd/diaglog
 
 Go 1.21+，纯 Go SQLite 驱动（modernc.org/sqlite），无 CGO 依赖。
 
+## Docker 部署
+
+```bash
+cp .env.example .env   # 填 APIGATEWAY_KEY（openssl rand -hex 32）
+docker compose up -d --build
+```
+
+- 代理 `http://宿主机:13579`，面板 `http://宿主机:24680`。
+- 配置文件是 `proxy.docker.cfg`（容器端口），**不是**仓库根的 `proxy.cfg`
+  （本地 Windows 直运的 43210/43211）—— 挂错则端口映射失效。
+- `APIGATEWAY_KEY` 生产必须设置：数据库 token 用它加密；容器重建后 key
+  变了历史密文就解不开。`gateway-data` 卷持久化 `gateway.db`。
+- 健康检查：`GET :13579/status`，`docker ps` 应显示 `healthy`。
+- 更新：`docker compose pull && docker compose up -d`（镜像由 CI 在
+  push main / tag 时自动构建推送到 GHCR）。
+
 ## 项目结构
 
 ```

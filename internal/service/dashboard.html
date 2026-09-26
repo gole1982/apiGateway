@@ -2991,9 +2991,14 @@
                                     <label style="font-weight:600;display:block;">API 密钥</label>
                                     <small class="u-muted">多个 Key 按顺序轮换，遭遇 429/503 自动切换</small>
                                 </div>
-                                <button v-if="platformModal.item" class="btn btn-primary" @click="openKeysTab(platformModal.item)">
-                                    🔑 管理密钥
-                                </button>
+                                <div style="display:flex;gap:8px;">
+                                    <button v-if="platformModal.item" class="btn btn-secondary btn-sm" @click="fetchPlatformModels(platformModal.item)" title="拉取该平台的上游模型列表并导入">
+                                        🔍 发现模型
+                                    </button>
+                                    <button v-if="platformModal.item" class="btn btn-primary" @click="openKeysTab(platformModal.item)">
+                                        🔑 管理密钥
+                                    </button>
+                                </div>
                             </div>
                         </div>
 
@@ -3594,10 +3599,6 @@
                                 </div>
                             </div>
                             <div class="form-group">
-                                <label>平台 Token（可空，建议在密钥管理中添加 Key）</label>
-                                <input type="text" class="form-control u-mono" placeholder="sk-..." v-model="addWizard.platForm.token">
-                            </div>
-                            <div class="form-group">
                                 <label>备注</label>
                                 <input type="text" class="form-control" placeholder="可选" v-model="addWizard.platForm.notes" maxlength="500">
                             </div>
@@ -3705,6 +3706,13 @@
                         <div style="display:flex;align-items:center;gap:10px;">
                             <button class="btn btn-secondary btn-sm" :disabled="addWizard.modelTest.running" @click="testWizardModel">测试模型可用</button>
                             <span v-if="addWizard.modelTest.status" :style="{ fontSize:'0.76rem', color: addWizard.modelTest.ok ? 'var(--color-success)' : 'var(--color-danger)' }">{{ addWizard.modelTest.msg }}</span>
+                            <button class="btn btn-secondary btn-sm" :disabled="addWizard.discover.running" @click="discoverWizardModels" title="用第①步地址 + 第②步密钥直接拉取上游模型列表（免入库），点选填入上方表单">发现模型</button>
+                            <span v-if="addWizard.discover.running" style="font-size:0.76rem;">拉取中…</span>
+                            <span v-if="addWizard.discover.error" style="font-size:0.76rem;color:var(--color-danger);">{{ addWizard.discover.error }}</span>
+                        </div>
+                        <div v-if="addWizard.discover.models.length" style="display:flex;flex-wrap:wrap;gap:6px;margin:8px 0;">
+                            <button v-for="m in addWizard.discover.models" :key="'wz-d-'+m" class="btn btn-secondary btn-sm"
+                                    @click="addWizard.modelMode = 'new'; addWizard.modelForm.model = m" :title="'填入：' + m">{{ m }}</button>
                         </div>
 
                         <!-- 确认清单 -->
@@ -5198,14 +5206,14 @@
                     show: false, busy: false, confirmMode: false, confirmItems: [],
                     platMode: 'existing', platId: '', platForm: { name: '', base_url: '', token: '', notes: '' }, platDomainWarn: '', platTest: { running: false, status: 0, ok: false, msg: '' },
                     keyMode: 'existing', keyId: '', keyForm: { token: '', label: '', is_free: false }, keyTest: { running: false, status: 0, ok: false, msg: '' },
-                    modelMode: 'existing', modelId: '', modelForm: { model: '', vendor: '', series: '', version: '', suffix: '', notes: '' }, modelTest: { running: false, status: 0, ok: false, msg: '' }
+                    modelMode: 'existing', modelId: '', modelForm: { model: '', vendor: '', series: '', version: '', suffix: '', notes: '' }, modelTest: { running: false, status: 0, ok: false, msg: '' }, discover: { running: false, models: [], error: '' }
                 });
                 const openAddWizard = () => {
                     Object.assign(addWizard, {
                         show: true, busy: false, confirmMode: false, confirmItems: [],
                         platMode: 'existing', platId: platforms.value[0] ? String(platforms.value[0].id) : '', platForm: { name: '', base_url: '', token: '', notes: '' }, platDomainWarn: '', platTest: { running: false, status: 0, ok: false, msg: '' },
                         keyMode: 'existing', keyId: '', keyForm: { token: '', label: '', is_free: false }, keyTest: { running: false, status: 0, ok: false, msg: '' },
-                        modelMode: 'existing', modelId: '', modelForm: { model: '', vendor: '', series: '', version: '', suffix: '', notes: '' }, modelTest: { running: false, status: 0, ok: false, msg: '' }
+                        modelMode: 'existing', modelId: '', modelForm: { model: '', vendor: '', series: '', version: '', suffix: '', notes: '' }, modelTest: { running: false, status: 0, ok: false, msg: '' }, discover: { running: false, models: [], error: '' }
                     });
                 };
                 const closeAddWizard = () => { addWizard.show = false; addWizard.confirmMode = false; };
@@ -5216,7 +5224,9 @@
                         const firstKey = (p._keys && p._keys[0]) ? p._keys[0] : null;
                         return { id: p.id, name: p.name, base_url: p.base_url, token: (firstKey && firstKey.token) || p.token };
                     }
-                    return { id: 0, name: addWizard.platForm.name || addWizard.platForm.base_url, base_url: addWizard.platForm.base_url, token: addWizard.platForm.token };
+                    // 新平台没有平台级 token（v2 起认证只在密钥上）：连通测试用
+                    // 第②步的密钥 token（已有选之，新建用之）。
+                    return { id: 0, name: addWizard.platForm.name || addWizard.platForm.base_url, base_url: addWizard.platForm.base_url, token: wizardKeyToken() };
                 };
                 const wizardKeyOptions = computed(() => keysList.value.filter(k => addWizard.platMode === 'existing' && String(k.platform_id) === String(addWizard.platId)));
                 const wizardModelOptions = computed(() => rapis.value.filter(r => addWizard.platMode === 'existing' && String(r.platform_id) === String(addWizard.platId)));
@@ -5250,7 +5260,7 @@
                 };
                 const testWizardPlatform = async () => {
                     const ctx = wizardPlatformContext();
-                    if (!ctx || !ctx.base_url || !ctx.token) { showToast('提示', '请先填写平台 base_url 与 token', 'warning'); return; }
+                    if (!ctx || !ctx.base_url || !ctx.token) { showToast('提示', '请先填写平台 base_url，并在第②步填写密钥 token', 'warning'); return; }
                     addWizard.platTest.running = true;
                     const d = await runWizardTest(ctx.base_url, ctx.token, '');
                     addWizard.platTest = { running: false, status: d.status || 0, ok: !!d.ok, msg: d.ok ? '连接正常' : (d.error || String(d.body || d.msg || '').slice(0, 200)) };
@@ -5275,6 +5285,34 @@
                     const d = await runWizardTest(ctx.base_url, token, model);
                     addWizard.modelTest = { running: false, status: d.status || 0, ok: !!d.ok, msg: d.ok ? '模型可用' : (d.error || String(d.body || d.msg || '').slice(0, 200)) };
                     if (d.ok) showToast('测试成功', '模型可用', 'success'); else showToast('测试失败', `状态 ${d.status || '—'}`, 'error');
+                };
+                // 向导内免入库发现模型：已有平台按 id，未入库的新平台按 base_url+token
+                // （后端 /api/platforms/fetch-models 双入口）。结果点选填入上方表单。
+                const discoverWizardModels = async () => {
+                    let body;
+                    if (addWizard.platMode === 'existing') {
+                        if (!addWizard.platId) { showToast('提示', '请先选择平台', 'warning'); return; }
+                        body = { id: Number(addWizard.platId) };
+                    } else {
+                        const base_url = (addWizard.platForm.base_url || '').trim();
+                        const token = wizardKeyToken();
+                        if (!base_url || !token) { showToast('提示', '请先在第①步填地址、第②步填密钥 token', 'warning'); return; }
+                        body = { base_url, token };
+                    }
+                    addWizard.discover = { running: true, models: [], error: '' };
+                    try {
+                        const r = await fetch('/api/platforms/fetch-models', { method: 'POST',
+                            headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+                        const d = await r.json().catch(() => ({}));
+                        if (r.ok) {
+                            addWizard.discover = { running: false, models: d.models || [], error: '' };
+                            if (!d.models || !d.models.length) showToast('提示', '上游返回空列表，可手动填写', 'warning');
+                        } else {
+                            addWizard.discover = { running: false, models: [], error: d.error || ('状态 ' + r.status) };
+                        }
+                    } catch (e) {
+                        addWizard.discover = { running: false, models: [], error: String(e) };
+                    }
                 };
                 const wizardHasNew = computed(() => addWizard.platMode === 'new' || addWizard.keyMode === 'new' || addWizard.modelMode === 'new');
                 const buildConfirmItems = () => {
@@ -6825,7 +6863,7 @@
                     appVersion, unread, totalUnread, unreadItems, unreadCounts, unreadPanelOpen, unreadGrouped, markMenuRead, markAllRead, markItemRead, openUnreadItem, unreadDotColor, unreadTitleColor, unreadTime, unreadRelTime, unreadFullTime,
                     globalSearchQuery, globalSearchCandidates, showSearchResults, searchSelection, onGlobalSearchInput, onSearchBlur, moveSearchSelection, chooseSearchResult, clearGlobalSearch, searchMenuLabel, searchMenuStyle,
                     keysList, keysSearchQuery, filteredKeys, sortedKeys, keyPlatformFilter, loadKeys, keyHealthLabel, keyCooldownTitle, keyCooldownRemaining, probeKeyFlat, discoverKeyModels, toggleKeyFlat, deleteKeyFlat, keyModal, openKeyModal, closeKeyModal, saveKeyModal, openKeysTab, jumpToPlatform,
-                    addWizard, openAddWizard, closeAddWizard, checkPlatDomain, testWizardPlatform, testWizardKey, testWizardModel, submitAddWizard, doWizardSave, wizardHasNew, wizardKeyOptions, wizardModelOptions,
+                    addWizard, openAddWizard, closeAddWizard, checkPlatDomain, testWizardPlatform, testWizardKey, testWizardModel, discoverWizardModels, submitAddWizard, doWizardSave, wizardHasNew, wizardKeyOptions, wizardModelOptions,
                     
                     // Log selection
                     selectedLog,

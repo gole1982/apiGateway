@@ -320,9 +320,27 @@ func (s *Service) Run() error {
 		WriteTimeout: 0,
 		IdleTimeout:  120 * time.Second,
 		ConnState:    sessionTracker.OnConnState,
+		// 会话 id 入 context 的唯一通道（见 logger.ConnContext 注释）。
+		// 缺了它 InjectSessionID 永远 stable=false，会话级 key 轮询不生效。
+		ConnContext: sessionTracker.ConnContext,
 	}
 
-	webAddr := fmt.Sprintf("127.0.0.1:%d", cfg.WebPort)
+	// 面板监听地址。默认 127.0.0.1（只给本机，暴露面最小）。
+	//
+	// 容器里必须绑 0.0.0.0：Docker 的端口映射是转发到容器网卡的，映射到容器内
+	// 的 127.0.0.1 上，宿主机/局域网都访问不到面板 —— 症状是"代理 13579 正常
+	// 但面板打不开"。故检测到容器（/.dockerenv 或 cgroup 提到 docker）时改绑
+	// 全网卡。APIGATEWAY_WEB_HOST 可显式覆盖（想让容器内面板只走回环时用）。
+	webHost := strings.TrimSpace(os.Getenv("APIGATEWAY_WEB_HOST"))
+	if webHost == "" {
+		webHost = "127.0.0.1"
+		if isContainerEnv() {
+			webHost = "0.0.0.0"
+			logger.DefaultConsole().Info("service",
+				"[STARTUP] container detected, dashboard binds 0.0.0.0 (override with APIGATEWAY_WEB_HOST)")
+		}
+	}
+	webAddr := fmt.Sprintf("%s:%d", webHost, cfg.WebPort)
 	webServer = &http.Server{
 		Addr:        webAddr,
 		Handler:     createWebHandler(),
@@ -502,6 +520,91 @@ func (s *Service) Stop() error {
 	}
 
 	return nil
+}
+
+// discoverUpstreamModels 拉取上游模型列表并解析出模型名（OpenAI /v1/models
+// 与 Google 原生接口双分支）。返回 (names, errStatus, err)：成功 err==nil；
+// 失败时 errStatus 是应返回给前端的 HTTP 状态（502 本地故障 / 上游原状态码）。
+// 无 DB 依赖，可单测（见 discover_test.go）。
+func discoverUpstreamModels(ctx context.Context, baseURL, fetchToken string) ([]string, int, error) {
+	client := &http.Client{Timeout: 15 * time.Second}
+	// Detect whether this is a real Google Generative Language API endpoint.
+	// Google uses /v1beta/models?key=..., the x-goog-api-key header, and returns
+	// {models:[{name:"models/..."}]} — completely different from OpenAI's
+	// /v1/models + Bearer + {data:[{id}]}. Branching here is required; the OpenAI
+	// path returns 401/404 against the genuine Google API.
+	googleNative := apiformat.IsGoogleNativeBaseURL(baseURL)
+
+	var modelsURL string
+	httpReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, "", nil)
+	if googleNative {
+		modelsURL = apiformat.BuildGoogleListModelsURL(baseURL, fetchToken)
+		httpReq.Header.Set(apiformat.GoogleAPIKeyHeader, fetchToken) // Google API key auth (not Bearer).
+	} else {
+		// OpenAI-compatible: normalise base URL and call /v1/models.
+		modelsURL = apiformat.NormalizeModelsBaseURL(baseURL) + "/v1/models"
+		httpReq.Header.Set("Authorization", "Bearer "+fetchToken)
+	}
+	httpReq.URL, _ = url.Parse(modelsURL)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	logger.DefaultConsole().Info("service", "[FETCH] fetching models", "url", modelsURL)
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return nil, 502, fmt.Errorf("fetch models failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, resp.StatusCode, fmt.Errorf("upstream returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	var modelNames []string
+	if googleNative {
+		bodyBytes, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return nil, 502, fmt.Errorf("read models response failed: %v", readErr)
+		}
+		modelNames = apiformat.ParseGoogleListModelsResponse(bodyBytes)
+		if modelNames == nil {
+			return nil, 502, fmt.Errorf("parse google models response failed")
+		}
+	} else {
+		var result struct {
+			Data []struct {
+				ID string `json:"id"`
+			} `json:"data"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			return nil, 502, fmt.Errorf("parse models response failed: %v", err)
+		}
+		modelNames = make([]string, 0, len(result.Data))
+		for _, m := range result.Data {
+			if m.ID != "" {
+				modelNames = append(modelNames, m.ID)
+			}
+		}
+	}
+	return modelNames, 0, nil
+}
+
+// isContainerEnv 判断是否跑在容器里。两种信号任一命中即算：
+//   - /.dockerenv：Docker 官方镜像（含 compose）会在根目录放这个标记文件；
+//   - /proc/1/cgroup 含 "docker"：containerd / 部分编排器没有该标记文件。
+//
+// 用来决定面板是否绑 0.0.0.0（见 Run 里的注释）。
+func isContainerEnv() bool {
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return true
+	}
+	if b, err := os.ReadFile("/proc/1/cgroup"); err == nil {
+		s := strings.ToLower(string(b))
+		if strings.Contains(s, "docker") || strings.Contains(s, "containerd") {
+			return true
+		}
+	}
+	return false
 }
 
 func createWebHandler() http.Handler {
@@ -1339,91 +1442,49 @@ func createWebHandler() http.Handler {
 		}
 		var req struct {
 			ID int64 `json:"id"`
+			// 一次性发现（新增向导里的新平台，尚未入库）：直接给 base_url + token
+			// 探测，不读 DB。id 与 base_url 二选一，id 优先。
+			BaseURL string `json:"base_url"`
+			Token   string `json:"token"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, `{"error":"invalid json"}`, 400)
 			return
 		}
-		platform, err := store.A().GetPlatformByID(req.ID)
-		if err != nil {
-			writeJSONError(w, 404, fmt.Errorf("platform not found"))
-			return
-		}
-		// Task 19: Use the first (index=0) PlatformKey token instead of platform.Token.
-		client := &http.Client{Timeout: 15 * time.Second}
-		fetchToken := platform.Token
-		if keys, err := store.A().GetPlatformKeys(platform.ID); err == nil && len(keys) > 0 {
-			fetchToken = keys[0].Token
-		}
-
-		// Detect whether this is a real Google Generative Language API endpoint.
-		// Google uses /v1beta/models?key=..., the x-goog-api-key header, and returns
-		// {models:[{name:"models/..."}]} — completely different from OpenAI's
-		// /v1/models + Bearer + {data:[{id}]}. Branching here is required; the OpenAI
-		// path returns 401/404 against the genuine Google API.
-		googleNative := apiformat.IsGoogleNativeBaseURL(platform.BaseURL)
-
-		var modelsURL string
-		httpReq, _ := http.NewRequestWithContext(r.Context(), http.MethodGet, "", nil)
-		if googleNative {
-			modelsURL = apiformat.BuildGoogleListModelsURL(platform.BaseURL, fetchToken)
-			httpReq.Header.Set(apiformat.GoogleAPIKeyHeader, fetchToken) // Google API key auth (not Bearer).
-		} else {
-			// OpenAI-compatible: normalise base URL and call /v1/models.
-			modelsURL = apiformat.NormalizeModelsBaseURL(platform.BaseURL) + "/v1/models"
-			httpReq.Header.Set("Authorization", "Bearer "+fetchToken)
-		}
-		httpReq.URL, _ = url.Parse(modelsURL)
-		httpReq.Header.Set("Content-Type", "application/json")
-
-		logger.DefaultConsole().Info("service", "[FETCH] fetching models", "url", modelsURL)
-		resp, err := client.Do(httpReq)
-		if err != nil {
-			writeJSONError(w, 502, fmt.Errorf("fetch models failed: %v", err))
-			return
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != 200 {
-			body, _ := io.ReadAll(resp.Body)
-			writeJSONError(w, resp.StatusCode, fmt.Errorf("upstream returned %d: %s", resp.StatusCode, string(body)))
-			return
-		}
-
-		var modelNames []string
-		if googleNative {
-			bodyBytes, readErr := io.ReadAll(resp.Body)
-			if readErr != nil {
-				writeJSONError(w, 502, fmt.Errorf("read models response failed: %v", readErr))
+		var baseURL, fetchToken, platName string
+		if req.ID != 0 {
+			platform, err := store.A().GetPlatformByID(req.ID)
+			if err != nil {
+				writeJSONError(w, 404, fmt.Errorf("platform not found"))
 				return
 			}
-			modelNames = apiformat.ParseGoogleListModelsResponse(bodyBytes)
-			if modelNames == nil {
-				writeJSONError(w, 502, fmt.Errorf("parse google models response failed"))
-				return
+			baseURL, platName = platform.BaseURL, platform.Name
+			// Task 19: Use the first (index=0) PlatformKey token instead of platform.Token.
+			fetchToken = platform.Token
+			if keys, err := store.A().GetPlatformKeys(platform.ID); err == nil && len(keys) > 0 {
+				fetchToken = keys[0].Token
 			}
 		} else {
-			var result struct {
-				Data []struct {
-					ID string `json:"id"`
-				} `json:"data"`
-			}
-			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-				writeJSONError(w, 502, fmt.Errorf("parse models response failed: %v", err))
+			baseURL = strings.TrimSpace(req.BaseURL)
+			fetchToken = req.Token
+			platName = baseURL
+			if baseURL == "" || fetchToken == "" {
+				writeJSONError(w, http.StatusBadRequest,
+					errors.New("一次性发现需要 base_url 与 token（请在向导第①步填地址、第②步填密钥）"))
 				return
 			}
-			modelNames = make([]string, 0, len(result.Data))
-			for _, m := range result.Data {
-				if m.ID != "" {
-					modelNames = append(modelNames, m.ID)
-				}
-			}
 		}
+
+	modelNames, errStatus, ferr := discoverUpstreamModels(r.Context(), baseURL, fetchToken)
+	if ferr != nil {
+		writeJSONError(w, errStatus, ferr)
+		return
+	}
 
 		sort.Strings(modelNames)
 
 		logger.DefaultConsole().Info("service", "[FETCH] models fetched",
-			"count", len(modelNames), "platform", platform.Name)
+			"count", len(modelNames), "platform", platName)
 		resp2, _ := json.Marshal(map[string]interface{}{
 			"success": true,
 			"models":  modelNames,

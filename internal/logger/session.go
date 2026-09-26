@@ -27,24 +27,34 @@ func NewSessionTracker(logger *Logger) *SessionTracker {
 	}
 }
 
+// ensureSessionLocked 返回该连接的会话，不存在即创建（与 StateNew 等价）。
+// 调用方必须持有 t.mu（写锁）。
+func (t *SessionTracker) ensureSessionLocked(conn net.Conn) *Session {
+	if s, ok := t.sessions[conn]; ok {
+		return s
+	}
+	clientIP, clientPort := parseConnAddr(conn.RemoteAddr())
+	s := &Session{
+		ID:            uuid.New().String(),
+		ClientIP:      clientIP,
+		ClientPort:    clientPort,
+		StartedAt:     time.Now(),
+		TotalRequests: 0,
+	}
+	t.sessions[conn] = s
+	if t.logger != nil && t.logger.Storage != nil {
+		go t.logger.Storage.SaveSession(s)
+	}
+	return s
+}
+
 func (t *SessionTracker) OnConnState(conn net.Conn, state http.ConnState) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	switch state {
 	case http.StateNew:
-		clientIP, clientPort := parseConnAddr(conn.RemoteAddr())
-		session := &Session{
-			ID:            uuid.New().String(),
-			ClientIP:      clientIP,
-			ClientPort:    clientPort,
-			StartedAt:     time.Now(),
-			TotalRequests: 0,
-		}
-		t.sessions[conn] = session
-		if t.logger != nil && t.logger.Storage != nil {
-			go t.logger.Storage.SaveSession(session)
-		}
+		t.ensureSessionLocked(conn)
 
 	case http.StateClosed, http.StateHijacked:
 		if session, ok := t.sessions[conn]; ok {
@@ -57,6 +67,25 @@ func (t *SessionTracker) OnConnState(conn net.Conn, state http.ConnState) {
 	}
 }
 
+// ConnContext 供 http.Server.ConnContext：在首个请求到达前就把该连接的会话 id
+// 注入请求 context，后续 InjectSessionID 读到即 stable=true。
+//
+// 为什么必须有它：只靠 OnConnState 建表是不够的 —— 表以 net.Conn 为键，
+// 而 handler 拿到的是 *http.Request；不经 ConnContext 搭桥，InjectSessionID
+// 永远只能拿到现造的 fallback id（stable 恒为 false），会话级 key 轮询在
+// 生产上形同虚设（2026-09-26 事故：scheduler 单测全绿，特性实际未生效）。
+//
+// 创建兜底（不存在即建）使实现不依赖 StateNew 与 ConnContext 的触发顺序。
+func (t *SessionTracker) ConnContext(ctx context.Context, conn net.Conn) context.Context {
+	if t == nil {
+		return ctx
+	}
+	t.mu.Lock()
+	s := t.ensureSessionLocked(conn)
+	t.mu.Unlock()
+	return context.WithValue(ctx, sessionIDKey, s.ID)
+}
+
 func (t *SessionTracker) GetSessionID(r *http.Request) string {
 	if val := r.Context().Value(sessionIDKey); val != nil {
 		return val.(string)
@@ -67,8 +96,8 @@ func (t *SessionTracker) GetSessionID(r *http.Request) string {
 // InjectSessionID stamps a session id onto the request context and returns
 // (sessionID, stable).
 //
-// stable=true 意味着该 id 由 OnConnState 在 StateNew 时铸造、绑定一条
-// 长连接 —— 同一连接上的后续请求会拿到同一个 id。
+// stable=true 意味着该 id 来自连接表（经 http.Server.ConnContext 在首个
+// 请求前注入，见 ConnContext）—— 同一长连接上的后续请求拿到同一个 id。
 //
 // stable=false 意味着这是 generateFallbackSessionID 现造的 UUID
 // （RemoteAddr + 纳秒时间戳），**每个请求都是全新值**。调用方绝不能把它
@@ -107,8 +136,10 @@ func parseConnAddr(addr net.Addr) (string, int) {
 	return tcpAddr.IP.String(), tcpAddr.Port
 }
 
+// generateFallbackSessionID 为未跟踪连接现造会话 id。必须是真随机：
+// 旧实现是 clientIP + 纳秒时间戳的确定性 SHA1 —— Windows 时钟粒度粗时两次
+// 调用拿到同一 UnixNano 即撞车；且 string(rune(now)) 把 int64 截成单个码点，
+// 熵所剩无几。调用方（InjectSessionID stable=false 路径）依赖"每次全新"。
 func generateFallbackSessionID(r *http.Request) string {
-	clientIP := r.RemoteAddr
-	now := time.Now().UnixNano()
-	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(clientIP+string(rune(now)))).String()
+	return uuid.New().String()
 }

@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -25,6 +26,7 @@ type restRouter struct {
 	tables  map[string][]map[string]any // GET 返回
 	writes  []recordedWrite             // POST/PATCH 记录
 	deleted map[string]string           // 表 → DELETE 的 query
+	gets    []string                    // GET 过的表（按序，可重复）
 	seq     map[string]int64            // 表 → 自增 id 分配游标
 }
 
@@ -59,7 +61,12 @@ func (rt *restRouter) serve(t *testing.T) *httptest.Server {
 		switch r.Method {
 		case http.MethodGet:
 			rows := rt.tables[table]
+			rt.gets = append(rt.gets, table)
 			rt.mu.Unlock()
+			// 与真实 PostgREST 一致：按 id=eq./id=in. 过滤。
+			// 不实现则 GetRAPIByID(不存在) 这类用例永远命中首行，
+			// mock 会给出与生产相反的答案。
+			rows = filterMockRows(rows, r.URL.RawQuery)
 			w.Header().Set("Content-Type", "application/json")
 			if rows == nil {
 				_ = json.NewEncoder(w).Encode([]map[string]any{})
@@ -121,6 +128,64 @@ func (rt *restRouter) deleteQuery(table string) string {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	return rt.deleted[table]
+}
+
+// gotGets 返回记录到的 GET 表序列（断言 DumpAll / listRAPIs 是否读全）。
+func (rt *restRouter) gotGets() []string {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	return append([]string(nil), rt.gets...)
+}
+
+// filterMockRows 实现 PostgREST 的 id=eq.N / id=in.(a,b) 子集语义。
+// 只解析 id 列 —— 本 mock 只需要它；其他过滤一律不过滤（返回全量），
+// 调用方不得依赖未实现的过滤。
+func filterMockRows(rows []map[string]any, rawQuery string) []map[string]any {
+	var eq *int64
+	in := map[int64]bool{}
+	hasIn := false
+	for _, p := range strings.Split(rawQuery, "&") {
+		if v, ok := strings.CutPrefix(p, "id=eq."); ok {
+			if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+				c := n
+				eq = &c
+			}
+		} else if v, ok := strings.CutPrefix(p, "id=in."); ok {
+			v = strings.Trim(v, "()")
+			for _, s := range strings.Split(v, ",") {
+				if n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64); err == nil {
+					in[n] = true
+					hasIn = true
+				}
+			}
+		}
+	}
+	if eq == nil && !hasIn {
+		return rows
+	}
+	var out []map[string]any
+	for _, r := range rows {
+		// seed 行里的 id 可能是 Go int（手写）或 float64（JSON 解码形态），
+		// 真实 PostgREST 永远返回后者 —— 两种都认。
+		var id int64
+		switch v := r["id"].(type) {
+		case float64:
+			id = int64(v)
+		case int:
+			id = int64(v)
+		case int64:
+			id = v
+		default:
+			continue
+		}
+		if (eq != nil && id == *eq) || in[id] {
+			out = append(out, r)
+		}
+	}
+	if out == nil {
+		return []map[string]any{}
+	}
+	return out
 }
 
 // keyRow 必须用明文算 token_hash，且把 v1 的 key_index 换成 sort_order。

@@ -54,7 +54,102 @@ jobs:
           if-no-files-found: warn
 
   # ===========================================================================
-  # Job 2: 静态分析 (golangci-lint)
+  # Job 2: 覆盖率门禁 —— 每个有测试的包不得低于地板线。
+  # 地板线 = 2026-09-26 实测值向下取整（内联在下面的 floors 表）。
+  # 加未测代码会拉低百分比 → CI 红 → 补测试或（有理由时）下调地板线。
+  # 这是对"全绿但漏 bug"的回答：绿必须附带覆盖率。
+  # ===========================================================================
+  coverage:
+    name: Coverage gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: true
+
+      - name: Coverage floors
+        run: |
+          go test ./... -cover > cover.txt 2>&1 || { cat cover.txt; exit 1; }
+          cat cover.txt
+          python3 - <<'EOF'
+          import re, sys
+          floors = {
+              "gateway/internal/apiformat": 34,
+              "gateway/internal/bundle": 76,
+              "gateway/internal/config": 62,
+              "gateway/internal/crypto": 68,
+              "gateway/internal/db": 65,
+              "gateway/internal/entity": 95,
+              "gateway/internal/fsm": 92,
+              "gateway/internal/gateway": 10,
+              "gateway/internal/logger": 32,
+              "gateway/internal/notify": 49,
+              "gateway/internal/scheduler": 71,
+              "gateway/internal/service": 5,
+              "gateway/internal/supabase": 44,
+          }
+          seen, failed = set(), False
+          for line in open("cover.txt", encoding="utf-8", errors="replace"):
+              m = re.search(r"^(ok\s+)?(\S+)\s+.*coverage: ([0-9.]+)%", line)
+              if not m:
+                  continue
+              pkg, pct = m.group(2), float(m.group(3))
+              if pkg not in floors:
+                  continue
+              seen.add(pkg)
+              status = "OK " if pct >= floors[pkg] else "FAIL"
+              if pct < floors[pkg]:
+                  failed = True
+              print(f"{status} {pkg}: {pct}% (floor {floors[pkg]}%)")
+          missing = set(floors) - seen
+          if missing:
+              print(f"FAIL no coverage reported for: {sorted(missing)}")
+              failed = True
+          sys.exit(1 if failed else 0)
+          EOF
+
+      - name: Upload coverage log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-log
+          path: cover.txt
+          if-no-files-found: warn
+
+  # ===========================================================================
+  # Job 3: gofmt —— 只检查本分支改动过的 Go 文件（仓库有历史 CRLF 漂移，
+  # 全量 gofmt -l 会误伤存量文件，所以限定 diff 范围）。
+  # ===========================================================================
+  gofmt:
+    name: gofmt (changed files)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: gofmt changed Go files
+        run: |
+          if [ -n "${{ github.event.pull_request.base.sha }}" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+          else
+            BASE="HEAD~1"
+          fi
+          files=$(git diff --name-only "$BASE" HEAD -- '*.go')
+          files="$files $(git ls-files --others --exclude-standard -- '*.go')"
+          files=$(echo "$files" | sed '/^$/d' | sort -u)
+          if [ -z "$files" ]; then echo "no Go files changed"; exit 0; fi
+          echo "checking:"; echo "$files"
+          # shellcheck disable=SC2086
+          bad=$(gofmt -l $files)
+          if [ -n "$bad" ]; then echo "NOT FORMATTED:"; echo "$bad"; exit 1; fi
+          echo "gofmt clean"
+
+  # ===========================================================================
+  # Job 4: 静态分析 (golangci-lint)
   #
   # 说明：本仓库 .golangci.yml 启用了较严格的 linter 集合（gosec / staticcheck
   # / lll / gocyclo 等）。为让 CI 先稳定跑起来，此 job 当前【允许失败】——
@@ -83,7 +178,49 @@ jobs:
           args: --timeout=5m
 
   # ===========================================================================
-  # Job 3: Docker 镜像构建
+  # Job 5: 发版 —— push tag（v*）时交叉编译各平台二进制并建 GitHub Release。
+  # CGO_ENABLED=0（modernc sqlite 是纯 Go），无需交叉工具链。
+  # ===========================================================================
+  release:
+    name: Release binaries
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test, coverage]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: true
+
+      - name: Cross-compile
+        run: |
+          mkdir -p dist
+          for os in linux windows darwin; do
+            for arch in amd64 arm64; do
+              if [ "$os" = "windows" ] && [ "$arch" = "arm64" ]; then continue; fi
+              ext=""; [ "$os" = "windows" ] && ext=".exe"
+              for app in gateway diaglog; do
+                echo "building $app $os/$arch"
+                CGO_ENABLED=0 GOOS=$os GOARCH=$arch \
+                  go build -ldflags="-s -w" -o dist/${app}-${os}-${arch}${ext} ./cmd/$app
+              done
+            done
+          done
+          (cd dist && sha256sum * > SHA256SUMS.txt)
+          ls -la dist/
+
+      - name: GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+
+  # ===========================================================================
+  # Job 6: Docker 镜像构建
   # ===========================================================================
   docker:
     name: Docker image
@@ -107,11 +244,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # 镜像名必须全小写：Docker 拒绝含大写字母的 repository name
+      # （本仓库 apiGateway → apigateway）。metadata-action 不会自动小写化，
+      # 故先算出小写名再喂给它。docker-compose.yml 里写死同一个名字。
+      - name: Resolve image name (lowercase)
+        id: imgn
+        run: echo "name=$(echo '${{ github.event.repository.name }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
       - name: Extract image metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ghcr.io/${{ github.repository_owner }}/${{ steps.imgn.outputs.name }}
           tags: |
             type=ref,event=tag
             type=sha
