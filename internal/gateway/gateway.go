@@ -622,7 +622,9 @@ func (g *ProxyGateway) HandleChatCompletions(w http.ResponseWriter, r *http.Requ
 	// 流量钉死在排序最靠前的 key 上。详见 scheduler.PickAvailableKey。
 	keyCursorSession := ""
 	fallbackUsed := false
-	clientStatusCode := http.StatusOK
+	// 零值声明而非 := http.StatusOK：下面 if/else 两个分支都会用 handler 的返回值
+	// 覆盖它，初值从未被读到（ineffassign）。
+	var clientStatusCode int
 
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -1326,15 +1328,12 @@ func (g *ProxyGateway) handleStreamingRequest(w http.ResponseWriter, r *http.Req
 		resp.Body.Close()
 
 		if g.log != nil {
-			// TTFT：流式首帧延迟；除首 token 延迟 = 总延迟 - TTFT。
+			// TTFT：流式首帧延迟。除首 token 延迟 = 总延迟 - TTFT，由消费端
+			// （RecordUpstreamResponseDetail）按两个值相减得出，这里不再单独算。
 			// token 明细从 32KB 日志缓冲解析（三协议，最后 usage 帧生效）。
 			ttftMs := latencyMs
 			if !firstFrameAt.IsZero() {
 				ttftMs = int(firstFrameAt.Sub(startTime).Milliseconds())
-			}
-			restMs := latencyMs - ttftMs
-			if restMs < 0 {
-				restMs = 0
 			}
 			in, out, cached := extractUsageDetail(streamLogBuf.String())
 			g.log.RecordUpstreamResponseDetail(requestID, resp.StatusCode, respHeaders(resp), streamLogBuf.String(),

@@ -264,12 +264,9 @@ type RAPIWithPlatform struct {
 func (r *RAPIWithPlatform) SupportsAPIFormat(format string) bool {
 	if r.PlatformSupportedFormats != "" && r.PlatformSupportedFormats != "[]" {
 		formats := apiformat.ParseFormats(r.PlatformSupportedFormats)
-		if apiformat.SupportsFormat(formats, apiformat.APIFormat(format)) {
-			return true
-		}
 		// Platform authority is non-empty and does NOT contain this format:
 		// trust it as authoritative (do not fall back to a stale RAPI cache).
-		return false
+		return apiformat.SupportsFormat(formats, apiformat.APIFormat(format))
 	}
 	formats := apiformat.ParseFormats(r.SupportedFormats)
 	return apiformat.SupportsFormat(formats, apiformat.APIFormat(format))

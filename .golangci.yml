@@ -41,6 +41,18 @@ linters-settings:
           - $gostd
           - gateway/internal/...
           - github.com/...
+      # cmd/naturalmigrate 是一次性迁移 CLI：它必须在库代码之外直接开 SQLite
+      # 读旧库做 dry-run 预览（internal/db 的迁移入口会先建新表，破坏"只读分析
+      # 旧库"这个前提）。这是正当例外，不是绕过检查。
+      naturalmigrate:
+        files:
+          - $all
+          - !$_test\.go
+        allow:
+          - $gostd
+          - gateway/internal/...
+          - github.com/...
+          - modernc.org/sqlite
   
   forbidigo:
     forbid:
@@ -64,6 +76,11 @@ issues:
         - errcheck
         - gocyclo
         - lll
+    # 一次性迁移 CLI（cmd/naturalmigrate）直连 SQLite 属正当例外，见上方
+    # depguard.naturalmigrate 规则；这条兜住 depguard 对该目录的旧规则命中。
+    - path: cmd/naturalmigrate/
+      linters:
+        - depguard
 
   max-issues-per-linter: 0
   max-same-issues: 0

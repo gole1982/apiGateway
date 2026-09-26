@@ -71,12 +71,13 @@ jobs:
           cache: true
 
       - name: Coverage floors
-        # 地板线 = 实测值向下留 3~5 个点缓冲。
+        # 地板线基准 = **CI 首次实跑**（ubuntu-latest）的实测值，不是本地值。
+        # 两者会差好几个点（config 本地 Windows 62.5% vs CI linux 57.1%）——
+        # 拿本地数字设阈值必然误报。
         #
-        # 为什么不贴着实测值设：贴太近的阈值会在"改了一行无关代码"时就变红，
-        # 而红的原因与真实退化无关 —— 这会训练团队忽略这个 job，等于没有门禁。
-        # 缓冲的作用是让它只在覆盖率真的掉了时才响。
-        # 提升覆盖率时请同步上调对应数值（别让它长期贴着缓冲边缘）。
+        # 每条向下留 2~4 个点缓冲：贴着实测值设会在"改了一行无关代码"时变红，
+        # 而红的原因与真实退化无关，这会训练团队忽略这个 job。
+        # 提升覆盖率时请同步上调；重跑 CI 看实测再定，不要凭本地推断。
         run: |
           go test ./... -cover > cover.txt 2>&1 || { cat cover.txt; exit 1; }
           cat cover.txt
@@ -84,16 +85,16 @@ jobs:
           import re, sys
           floors = {
               "gateway/internal/apiformat": 30,
-              "gateway/internal/bundle": 72,
-              "gateway/internal/config": 58,
+              "gateway/internal/bundle": 70,
+              "gateway/internal/config": 55,
               "gateway/internal/crypto": 64,
               "gateway/internal/db": 60,
-              "gateway/internal/entity": 90,
+              "gateway/internal/entity": 88,
               "gateway/internal/fsm": 88,
-              "gateway/internal/gateway": 8,
+              "gateway/internal/gateway": 10,
               "gateway/internal/logger": 28,
-              "gateway/internal/notify": 44,
-              "gateway/internal/scheduler": 66,
+              "gateway/internal/notify": 42,
+              "gateway/internal/scheduler": 64,
               "gateway/internal/service": 5,
               "gateway/internal/supabase": 40,
           }
@@ -144,9 +145,13 @@ jobs:
           else
             BASE="HEAD~1"
           fi
-          files=$(git diff --name-only "$BASE" HEAD -- '*.go')
+          files=$(git diff --name-only --diff-filter=d "$BASE" HEAD -- '*.go')
           files="$files $(git ls-files --others --exclude-standard -- '*.go')"
-          files=$(echo "$files" | sed '/^$/d' | sort -u)
+          # 只保留 HEAD 里仍存在的文件：--diff-filter=d 已排除删除，
+          # 这里再挡一次未跟踪文件里指向已删路径的情况。
+          files=$(echo "$files" | sed '/^$/d' | sort -u | while read -r f; do
+            [ -f "$f" ] && echo "$f"
+          done)
           if [ -z "$files" ]; then echo "no Go files changed"; exit 0; fi
           echo "checking:"; echo "$files"
           # shellcheck disable=SC2086
