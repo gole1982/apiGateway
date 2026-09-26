@@ -194,10 +194,10 @@ func TestParseConnAddr(t *testing.T) {
 }
 
 func TestFallbackIDsLookLikeUUIDs(t *testing.T) {
-	r := httptest.NewRequest(http.MethodPost, "/", nil)
-	r.RemoteAddr = "1.2.3.4:5678"
-	a := generateFallbackSessionID(r)
-	b := generateFallbackSessionID(r)
+	// 同一条未跟踪连接上的两次调用必须拿到不同 id —— 旧实现用纳秒时间戳派生，
+	// Windows 时钟粒度粗时会直接撞车。
+	a := generateFallbackSessionID()
+	b := generateFallbackSessionID()
 	if a == b {
 		t.Error("two fallbacks in the same nanosecond window collided; expected unique")
 	}

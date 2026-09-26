@@ -90,7 +90,7 @@ func (t *SessionTracker) GetSessionID(r *http.Request) string {
 	if val := r.Context().Value(sessionIDKey); val != nil {
 		return val.(string)
 	}
-	return generateFallbackSessionID(r)
+	return generateFallbackSessionID()
 }
 
 // InjectSessionID stamps a session id onto the request context and returns
@@ -99,8 +99,8 @@ func (t *SessionTracker) GetSessionID(r *http.Request) string {
 // stable=true 意味着该 id 来自连接表（经 http.Server.ConnContext 在首个
 // 请求前注入，见 ConnContext）—— 同一长连接上的后续请求拿到同一个 id。
 //
-// stable=false 意味着这是 generateFallbackSessionID 现造的 UUID
-// （RemoteAddr + 纳秒时间戳），**每个请求都是全新值**。调用方绝不能把它
+// stable=false 意味着这是 generateFallbackSessionID 现造的 UUID，
+// **每个请求都是全新值**。调用方绝不能把它
 // 当作会话身份长期持有（见 scheduler.PickAvailableKey 的游标作用域）：
 // 拿它做 key 会让每张游标都从 0 开始，等于把全部流量固定到排序最靠前的
 // 那一个 key 上。
@@ -139,7 +139,8 @@ func parseConnAddr(addr net.Addr) (string, int) {
 // generateFallbackSessionID 为未跟踪连接现造会话 id。必须是真随机：
 // 旧实现是 clientIP + 纳秒时间戳的确定性 SHA1 —— Windows 时钟粒度粗时两次
 // 调用拿到同一 UnixNano 即撞车；且 string(rune(now)) 把 int64 截成单个码点，
-// 熵所剩无几。调用方（InjectSessionID stable=false 路径）依赖"每次全新"。
-func generateFallbackSessionID(r *http.Request) string {
+// 熵所剩无几。uuid.New() 内部走 crypto/rand。调用方（InjectSessionID
+// stable=false 路径）依赖"每次全新"。
+func generateFallbackSessionID() string {
 	return uuid.New().String()
 }

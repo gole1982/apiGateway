@@ -193,16 +193,16 @@ type MetricRow struct {
 
 // DimensionMetrics 是一个维度（platform/key/model/interface）的全部 10 类指标。
 type DimensionMetrics struct {
-	TotalTokens     []MetricRow `json:"total_tokens"`      // 最多总 token
-	InputTokens     []MetricRow `json:"input_tokens"`      // 最多输入 token
-	CachedTokens    []MetricRow `json:"cached_tokens"`     // 最多命中缓存 token
-	OutputTokens    []MetricRow `json:"output_tokens"`     // 最多输出 token
-	Attempts        []MetricRow `json:"attempts"`          // 最多尝试访问
-	Errors          []MetricRow `json:"errors"`            // 最多报错
-	TTFTLowest      []MetricRow `json:"ttft_lowest"`       // 首 token 延迟最低
-	RestLatLowest   []MetricRow `json:"rest_lat_lowest"`   // 除首 token 平均延迟最低
-	TTFTHighest     []MetricRow `json:"ttft_highest"`      // 首 token 延迟最高
-	RestLatHighest  []MetricRow `json:"rest_lat_highest"`  // 除首 token 平均延迟最高
+	TotalTokens    []MetricRow `json:"total_tokens"`     // 最多总 token
+	InputTokens    []MetricRow `json:"input_tokens"`     // 最多输入 token
+	CachedTokens   []MetricRow `json:"cached_tokens"`    // 最多命中缓存 token
+	OutputTokens   []MetricRow `json:"output_tokens"`    // 最多输出 token
+	Attempts       []MetricRow `json:"attempts"`         // 最多尝试访问
+	Errors         []MetricRow `json:"errors"`           // 最多报错
+	TTFTLowest     []MetricRow `json:"ttft_lowest"`      // 首 token 延迟最低
+	RestLatLowest  []MetricRow `json:"rest_lat_lowest"`  // 除首 token 平均延迟最低
+	TTFTHighest    []MetricRow `json:"ttft_highest"`     // 首 token 延迟最高
+	RestLatHighest []MetricRow `json:"rest_lat_highest"` // 除首 token 平均延迟最高
 }
 
 // MetricsResponse 是 /api/dashboard/metrics 的响应体。
@@ -220,18 +220,18 @@ type MetricsResponse struct {
 
 // metricAggRow 承载一次分组聚合扫描的输出列。
 type metricAggRow struct {
-	DimID   string // 维度分组值（平台/key 是数字 id 字符串；模型/接口是别名）
-	DimName string
-	Attempt int64
-	Errors  int64
-	TotalTok int64
-	InTok   int64
+	DimID     string // 维度分组值（平台/key 是数字 id 字符串；模型/接口是别名）
+	DimName   string
+	Attempt   int64
+	Errors    int64
+	TotalTok  int64
+	InTok     int64
 	CachedTok int64
-	OutTok  int64
-	TTFTSum int64
-	TTFTN   int64
-	RestSum int64
-	RestN   int64
+	OutTok    int64
+	TTFTSum   int64
+	TTFTN     int64
+	RestSum   int64
+	RestN     int64
 }
 
 // minLatencySamples 防小样本：延迟类 TOP 榜要求至少 3 个样本。
@@ -248,8 +248,8 @@ func (db *DB) GetDashboardMetrics(since time.Time) (*MetricsResponse, error) {
 	// dims 的 group 列必须来自下面的硬编码白名单（列名是 SQL 拼接进查询的，
 	// 禁止接受任何外部/用户输入，否则注入风险）。
 	dims := []struct {
-		key    string // 维度槽位标识
-		group  string // SQL 分组列
+		key   string // 维度槽位标识
+		group string // SQL 分组列
 	}{
 		{"platform", "selected_platform_id"},
 		{"key", "selected_key_id"},
@@ -258,9 +258,11 @@ func (db *DB) GetDashboardMetrics(since time.Time) (*MetricsResponse, error) {
 	}
 
 	for _, d := range dims {
+		// G202 命中的是字符串拼接进 SQL，但 d.group 只能取自上方 dims 里
+		// 四个硬编码列名，没有任何用户输入参与。SQL 标识符本来就不能用 ? 占位。
 		rows, err := db.conn.Query(`
-			SELECT `+d.group+` AS dim_id,
-			       COALESCE(NULLIF(`+d.group+`, ''), '') AS raw_dim,
+			SELECT `+d.group+` AS dim_id, //nolint:gosec
+			       COALESCE(NULLIF(`+d.group+`, ''), '') AS raw_dim, //nolint:gosec
 			       COUNT(*) AS attempts,
 			       SUM(CASE WHEN response_status >= 400 OR status = 'failed' THEN 1 ELSE 0 END) AS errors,
 			       COALESCE(SUM(tokens_used), 0) AS total_tok,
@@ -292,16 +294,16 @@ func (db *DB) GetDashboardMetrics(since time.Time) (*MetricsResponse, error) {
 		rows.Close()
 
 		dm := DimensionMetrics{
-			TotalTokens:   topBy(agg, func(r metricAggRow) (int64, int) { return r.TotalTok, int(r.Attempt) }, false, 3),
-			InputTokens:   topBy(agg, func(r metricAggRow) (int64, int) { return r.InTok, int(r.Attempt) }, false, 3),
-			CachedTokens:  topBy(agg, func(r metricAggRow) (int64, int) { return r.CachedTok, int(r.Attempt) }, false, 3),
-			OutputTokens:  topBy(agg, func(r metricAggRow) (int64, int) { return r.OutTok, int(r.Attempt) }, false, 3),
-			Attempts:      topBy(agg, func(r metricAggRow) (int64, int) { return r.Attempt, int(r.Attempt) }, false, 3),
-			Errors:        topBy(agg, func(r metricAggRow) (int64, int) { return r.Errors, int(r.Attempt) }, false, 3),
-			TTFTLowest:    topLat(agg, func(r metricAggRow) (int64, int64) { return r.TTFTSum, r.TTFTN }, true, 3),
-			RestLatLowest: topLat(agg, func(r metricAggRow) (int64, int64) { return r.RestSum, r.RestN }, true, 3),
-			TTFTHighest:   topLat(agg, func(r metricAggRow) (int64, int64) { return r.TTFTSum, r.TTFTN }, false, 3),
-			RestLatHighest: topLat(agg, func(r metricAggRow) (int64, int64) { return r.RestSum, r.RestN }, false, 3),
+			TotalTokens:    topBy(agg, func(r metricAggRow) (int64, int) { return r.TotalTok, int(r.Attempt) }),
+			InputTokens:    topBy(agg, func(r metricAggRow) (int64, int) { return r.InTok, int(r.Attempt) }),
+			CachedTokens:   topBy(agg, func(r metricAggRow) (int64, int) { return r.CachedTok, int(r.Attempt) }),
+			OutputTokens:   topBy(agg, func(r metricAggRow) (int64, int) { return r.OutTok, int(r.Attempt) }),
+			Attempts:       topBy(agg, func(r metricAggRow) (int64, int) { return r.Attempt, int(r.Attempt) }),
+			Errors:         topBy(agg, func(r metricAggRow) (int64, int) { return r.Errors, int(r.Attempt) }),
+			TTFTLowest:     topLat(agg, func(r metricAggRow) (int64, int64) { return r.TTFTSum, r.TTFTN }, true),
+			RestLatLowest:  topLat(agg, func(r metricAggRow) (int64, int64) { return r.RestSum, r.RestN }, true),
+			TTFTHighest:    topLat(agg, func(r metricAggRow) (int64, int64) { return r.TTFTSum, r.TTFTN }, false),
+			RestLatHighest: topLat(agg, func(r metricAggRow) (int64, int64) { return r.RestSum, r.RestN }, false),
 		}
 		switch d.key {
 		case "platform":
@@ -317,15 +319,20 @@ func (db *DB) GetDashboardMetrics(since time.Time) (*MetricsResponse, error) {
 	return resp, nil
 }
 
-// topBy 取 sum/sum 类指标 TOP n（值 >0 才上榜）。
-func topBy(rows []metricAggRow, pick func(metricAggRow) (int64, int), lowest bool, n int) []MetricRow {
+// topLimit 是每个维度在面板上展示的名次数量。
+const topLimit = 3
+
+// topBy 取 sum/sum 类指标 TOP topLimit（值 >0 才上榜），恒为降序（最多）。
+// sum 类指标（token/尝试/报错）不存在"最少"这种有意义的排序，故不带
+// lowest 参数；需要最低值语义的是延迟类，走 topLat。
+func topBy(rows []metricAggRow, pick func(metricAggRow) (int64, int)) []MetricRow {
 	type pair struct {
 		name  string
 		id    string
 		val   int64
 		count int
 	}
-	var ps []pair
+	ps := make([]pair, 0, len(rows))
 	for _, r := range rows {
 		v, c := pick(r)
 		if v <= 0 {
@@ -333,32 +340,28 @@ func topBy(rows []metricAggRow, pick func(metricAggRow) (int64, int), lowest boo
 		}
 		ps = append(ps, pair{r.DimName, r.DimID, v, c})
 	}
-	// 降序（最多）；lowest 用于潜在扩展，此处 token/尝试/报错恒为最多。
 	sort.Slice(ps, func(i, j int) bool {
 		if ps[i].val != ps[j].val {
-			if lowest {
-				return ps[i].val < ps[j].val
-			}
 			return ps[i].val > ps[j].val
 		}
 		return ps[i].name < ps[j].name
 	})
-	out := make([]MetricRow, 0, n)
-	for i := 0; i < len(ps) && i < n; i++ {
+	out := make([]MetricRow, 0, topLimit)
+	for i := 0; i < len(ps) && i < topLimit; i++ {
 		out = append(out, MetricRow{Name: ps[i].name, Value: ps[i].val, Count: ps[i].count})
 	}
 	return out
 }
 
-// topLat 取平均延迟类指标 TOP n；minSamples 防小样本，lowest=true 取最低。
-func topLat(rows []metricAggRow, pick func(metricAggRow) (int64, int64), lowest bool, n int) []MetricRow {
+// topLat 取平均延迟类指标 TOP topLimit；minSamples 防小样本，lowest=true 取最低。
+func topLat(rows []metricAggRow, pick func(metricAggRow) (int64, int64), lowest bool) []MetricRow {
 	type pair struct {
 		name string
 		id   string
 		avg  float64
 		n    int64
 	}
-	var ps []pair
+	ps := make([]pair, 0, len(rows))
 	for _, r := range rows {
 		sum, cnt := pick(r)
 		if cnt < minLatencySamples {
@@ -375,8 +378,8 @@ func topLat(rows []metricAggRow, pick func(metricAggRow) (int64, int64), lowest 
 		}
 		return ps[i].name < ps[j].name
 	})
-	out := make([]MetricRow, 0, n)
-	for i := 0; i < len(ps) && i < n; i++ {
+	out := make([]MetricRow, 0, topLimit)
+	for i := 0; i < len(ps) && i < topLimit; i++ {
 		out = append(out, MetricRow{Name: ps[i].name, Value: int64(ps[i].avg), Count: int(ps[i].n)})
 	}
 	return out

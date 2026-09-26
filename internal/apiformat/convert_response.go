@@ -245,7 +245,9 @@ func fromCanonicalResponse(body []byte, to APIFormat, model string) ([]byte, err
 	case FormatAnthropic:
 		return openaiToAnthropicResponse(body, model)
 	case FormatGemini:
-		return openaiToGeminiResponse(body, model)
+		// Gemini 响应体（candidates / usageMetadata）没有 model 字段，
+		// 与 Anthropic 响应不同，所以这里没有 model 可用，也不需要。
+		return openaiToGeminiResponse(body)
 	default:
 		return body, nil
 	}
@@ -337,7 +339,7 @@ func openaiToAnthropicResponse(body []byte, model string) ([]byte, error) {
 	return json.Marshal(dst)
 }
 
-func openaiToGeminiResponse(body []byte, model string) ([]byte, error) {
+func openaiToGeminiResponse(body []byte) ([]byte, error) {
 	var src map[string]interface{}
 	if err := json.Unmarshal(body, &src); err != nil {
 		return nil, err

@@ -2021,6 +2021,49 @@ func (db *DB) RecordRequest(rapiID, lapiID int64, statusCode int, latencyMs int,
 	return err
 }
 
+// scanRAPIStats drains a rows set produced by one of the RAPIStat queries and
+// materialises it. Both GetRAPIStats (all RAPIs, metrics aggregated per rapi_id)
+// and GetRAPIsForLAPIWithStats (per-LAPI view, LEFT JOIN so unmeasured RAPIs
+// still appear) select the identical column list in the identical order, so the
+// scan-and-shape half is shared rather than kept in sync by hand.
+//
+// Callers own the rows lifetime: they defer rows.Close() before calling this.
+func scanRAPIStats(rows *sql.Rows) ([]RAPIStat, error) {
+	stats := make([]RAPIStat, 0)
+	for rows.Next() {
+		var s RAPIStat
+		var totalReq, successReq, fail401, fail429, fail500, failOther, totalLatency, tokenCount int
+		var lastUsed string
+
+		err := rows.Scan(&s.RapiID, &s.Alias, &totalReq, &successReq, &fail401, &fail429, &fail500, &failOther, &totalLatency, &tokenCount, &lastUsed)
+		if err != nil {
+			return nil, err
+		}
+
+		s.TotalRequests = totalReq
+		s.SuccessRequests = successReq
+		s.Fail401 = fail401
+		s.Fail429 = fail429
+		s.Fail500 = fail500
+		s.FailOther = failOther
+		s.TokenCount = tokenCount
+
+		if totalReq > 0 {
+			s.SuccessRate = float64(successReq) / float64(totalReq) * 100
+			s.AvgLatencyMs = float64(totalLatency) / float64(totalReq)
+		}
+
+		if lastUsed != "" {
+			s.LastUsed = lastUsed
+		} else {
+			s.LastUsed = "Never"
+		}
+
+		stats = append(stats, s)
+	}
+	return stats, rows.Err()
+}
+
 // migrateFailOtherDedup corrects historical fail_other inflation from the
 // pre-fix RecordRequest, which double-counted every 5xx into both fail500
 // and fail_other. The inflation equals the 5xx count exactly (fail_500), so
@@ -2073,39 +2116,7 @@ func (db *DB) GetRAPIStats() ([]RAPIStat, error) {
 	}
 	defer rows.Close()
 
-	stats := make([]RAPIStat, 0)
-	for rows.Next() {
-		var s RAPIStat
-		var totalReq, successReq, fail401, fail429, fail500, failOther, totalLatency, tokenCount int
-		var lastUsed string
-
-		err := rows.Scan(&s.RapiID, &s.Alias, &totalReq, &successReq, &fail401, &fail429, &fail500, &failOther, &totalLatency, &tokenCount, &lastUsed)
-		if err != nil {
-			return nil, err
-		}
-
-		s.TotalRequests = totalReq
-		s.SuccessRequests = successReq
-		s.Fail401 = fail401
-		s.Fail429 = fail429
-		s.Fail500 = fail500
-		s.FailOther = failOther
-		s.TokenCount = tokenCount
-
-		if totalReq > 0 {
-			s.SuccessRate = float64(successReq) / float64(totalReq) * 100
-			s.AvgLatencyMs = float64(totalLatency) / float64(totalReq)
-		}
-
-		if lastUsed != "" {
-			s.LastUsed = lastUsed
-		} else {
-			s.LastUsed = "Never"
-		}
-
-		stats = append(stats, s)
-	}
-	return stats, nil
+	return scanRAPIStats(rows)
 }
 
 func (db *DB) GetLAPIStats() ([]LAPIStat, error) {
@@ -2180,39 +2191,7 @@ func (db *DB) GetRAPIsForLAPIWithStats(lapiID int64) ([]RAPIStat, error) {
 	}
 	defer rows.Close()
 
-	stats := make([]RAPIStat, 0)
-	for rows.Next() {
-		var s RAPIStat
-		var totalReq, successReq, fail401, fail429, fail500, failOther, totalLatency, tokenCount int
-		var lastUsed string
-
-		err := rows.Scan(&s.RapiID, &s.Alias, &totalReq, &successReq, &fail401, &fail429, &fail500, &failOther, &totalLatency, &tokenCount, &lastUsed)
-		if err != nil {
-			return nil, err
-		}
-
-		s.TotalRequests = totalReq
-		s.SuccessRequests = successReq
-		s.Fail401 = fail401
-		s.Fail429 = fail429
-		s.Fail500 = fail500
-		s.FailOther = failOther
-		s.TokenCount = tokenCount
-
-		if totalReq > 0 {
-			s.SuccessRate = float64(successReq) / float64(totalReq) * 100
-			s.AvgLatencyMs = float64(totalLatency) / float64(totalReq)
-		}
-
-		if lastUsed != "" {
-			s.LastUsed = lastUsed
-		} else {
-			s.LastUsed = "Never"
-		}
-
-		stats = append(stats, s)
-	}
-	return stats, nil
+	return scanRAPIStats(rows)
 }
 
 func (db *DB) GetTokenCount(rapiID int64) (int, error) {
@@ -2650,19 +2629,21 @@ func (db *DB) migrateAddSortOrderColumns() {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
+	// tbl 只能取自上面三个硬编码表名，不含用户输入；SQL 标识符不能用 ? 占位，
+	// 拼接是唯一写法。错误本身是有处理的（下面 slog.Warn + continue）。
 	for _, tbl := range []string{"platform", "rapi", "lapi"} {
 		row := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name='sort_order'`, tbl)
 		var cnt int
 		if err := row.Scan(&cnt); err != nil || cnt > 0 {
 			continue // already exists
 		}
-		if _, err := db.conn.Exec(`ALTER TABLE ` + tbl + ` ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0`); err != nil {
+		if _, err := db.conn.Exec(`ALTER TABLE ` + tbl + ` ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0`); err != nil { //nolint:gosec // G202：见上方注释
 			slog.Warn("[DB] migrateAddSortOrderColumns: add column failed",
 				"component", "db", "table", tbl, "error", err.Error())
 			continue
 		}
 		// Initialise sort_order = rowid so existing rows keep their original order
-		if _, err := db.conn.Exec(`UPDATE ` + tbl + ` SET sort_order = id`); err != nil {
+		if _, err := db.conn.Exec(`UPDATE ` + tbl + ` SET sort_order = id`); err != nil { //nolint:gosec // G202：见上方注释
 			slog.Warn("[DB] migrateAddSortOrderColumns: init order failed",
 				"component", "db", "table", tbl, "error", err.Error())
 		}

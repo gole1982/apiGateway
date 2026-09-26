@@ -419,7 +419,7 @@ func (m *Manager) PickAvailableKey(keys []models.PlatformKey, sessionID string) 
 			m.evictCursorsLocked(now)
 		}
 		cur.lastUsed = now
-		rot := int(cur.n % uint64(len(sorted)))
+		rot := int(cur.n % uint64(len(sorted))) //nolint:gosec // G115：取模后被 len(sorted)-1 约束，int 必然装得下
 		cur.n++
 		if rot > 0 {
 			rotated := make([]models.PlatformKey, len(sorted))

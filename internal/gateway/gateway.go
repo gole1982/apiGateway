@@ -856,7 +856,7 @@ func (g *ProxyGateway) tryKeyForRAPI(
 	retryCount int,
 	keyCursorSession string,
 	targetFormat string,
-) (*http.Response, int64, error) {
+) (*http.Response, error) {
 	keys := rapi.Keys
 	// Fallback: if no credential keys loaded, use legacy platform.Token as a synthetic key.
 	if len(keys) == 0 {
@@ -879,7 +879,7 @@ func (g *ProxyGateway) tryKeyForRAPI(
 			// Every key is capability-blocked for this model — escalate so the
 			// caller surfaces the block reason (handleAllKeysUnavailable) and
 			// persists the model as unavailable instead of spinning on 404s.
-			return nil, 0, scheduler.ErrAllKeysUnavailable
+			return nil, scheduler.ErrAllKeysUnavailable
 		}
 		key, keyNextAvail, err := g.scheduler.PickAvailableKey(keys, keyCursorSession)
 		if err != nil {
@@ -888,7 +888,7 @@ func (g *ProxyGateway) tryKeyForRAPI(
 			// then escalate; the caller proceeds to the next chain node
 			// instead of spinning on this pool.
 			g.markPoolExhausted(rapi, keys, keyNextAvail, requestID)
-			return nil, 0, scheduler.ErrAllKeysUnavailable
+			return nil, scheduler.ErrAllKeysUnavailable
 		}
 
 		token := key.Token
@@ -916,7 +916,7 @@ func (g *ProxyGateway) tryKeyForRAPI(
 			if key.ID > 0 {
 				g.UnblockKeyForModel(key.ID, rapi.ID)
 			}
-			return resp, key.ID, nil
+			return resp, nil
 		}
 
 		// Read and log the upstream error body for all non-2xx responses.
@@ -1227,7 +1227,7 @@ func (g *ProxyGateway) handleStreamingRequest(w http.ResponseWriter, r *http.Req
 		startTime := time.Now()
 		// keyID 现在经 tryKeyForRAPI → doUpstreamRequest → RecordUpstreamSent 落库
 		// （request_logs.selected_key_id，指标 key 维度埋点）。
-		resp, _, err := g.tryKeyForRAPI(r.Context(), rapi, effectiveURL, upstreamBody, requestID, retryCount, keyCursorSession, targetFormat)
+		resp, err := g.tryKeyForRAPI(r.Context(), rapi, effectiveURL, upstreamBody, requestID, retryCount, keyCursorSession, targetFormat)
 		latencyMs := int(time.Since(startTime).Milliseconds())
 
 		if err != nil {
@@ -1436,7 +1436,7 @@ func (g *ProxyGateway) handleNonStreamingRequest(w http.ResponseWriter, r *http.
 		startTime := time.Now()
 		// keyID 现在经 tryKeyForRAPI → doUpstreamRequest → RecordUpstreamSent 落库
 		// （request_logs.selected_key_id，指标 key 维度埋点）。
-		resp, _, err := g.tryKeyForRAPI(reqCtx, rapi, effectiveURL, upstreamBody, requestID, retryCount, keyCursorSession, targetFormat)
+		resp, err := g.tryKeyForRAPI(reqCtx, rapi, effectiveURL, upstreamBody, requestID, retryCount, keyCursorSession, targetFormat)
 		latencyMs := int(time.Since(startTime).Milliseconds())
 
 		if err != nil {

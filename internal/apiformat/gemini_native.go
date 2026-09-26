@@ -115,7 +115,8 @@ func supportsContentGeneration(methods []string) bool {
 }
 
 // GoogleAPIKeyHeader is the header name Google uses for API-key auth.
-const GoogleAPIKeyHeader = "x-goog-api-key"
+// G101 是把常量名里的 "APIKey" 当成硬编码凭据，实际这是 HTTP 头名称。
+const GoogleAPIKeyHeader = "x-goog-api-key" //nolint:gosec
 
 // SetGoogleAuth applies Google-native auth (x-goog-api-key header) to the
 // given request header set. It is the Gemini equivalent of OpenAI's

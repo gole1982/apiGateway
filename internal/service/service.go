@@ -120,14 +120,6 @@ func recordUnread(menu, kind string, entityID int64, title, detail string) {
 	}
 }
 
-// platformName returns a platform's display name, falling back to its id.
-func platformName(pid int64) string {
-	if p, err := store.A().GetPlatformByID(pid); err == nil && p != nil {
-		return p.Name
-	}
-	return fmt.Sprintf("%d", pid)
-}
-
 // parseKeyIDs parses a comma-separated RAPI key_ids whitelist into a slice.
 func parseKeyIDs(s string) []int64 {
 	parts := strings.Split(s, ",")

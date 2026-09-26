@@ -191,11 +191,14 @@ func timePtr(t time.Time) any {
 
 func nowPtr() any { return time.Now().UTC() }
 
-func f64ToID(rows []map[string]any, key string) int64 {
+// f64ToID 取 PostgREST 返回首行的 id。PostgREST 把 bigint 序列化成 JSON
+// 数字，解进 any 变成 float64，故需要这层转换。原实现带一个 key 参数，
+// 但 8 个调用点全部传 "id"。
+func f64ToID(rows []map[string]any) int64 {
 	if len(rows) == 0 {
 		return 0
 	}
-	if f, ok := rows[0][key].(float64); ok {
+	if f, ok := rows[0]["id"].(float64); ok {
 		return int64(f)
 	}
 	return 0
@@ -266,7 +269,7 @@ func (s *Store) CreatePlatform(p *models.Platform) error {
 	if err := s.call(http.MethodPost, tblPlatform, "", row, &out); err != nil {
 		return err
 	}
-	p.ID = f64ToID(out, "id")
+	p.ID = f64ToID(out)
 	s.changed()
 	return nil
 }
@@ -407,7 +410,7 @@ func (s *Store) AddPlatformKey(k *models.PlatformKey) error {
 	if err := s.call(http.MethodPost, tblCred, "", row, &out); err != nil {
 		return err
 	}
-	k.ID = f64ToID(out, "id")
+	k.ID = f64ToID(out)
 	s.changed()
 	return nil
 }
@@ -718,7 +721,7 @@ func (s *Store) CreateRAPI(r *models.RAPI) error {
 	if err := s.call(http.MethodPost, tblRAPI, "", rapiRow(r), &out); err != nil {
 		return err
 	}
-	r.ID = f64ToID(out, "id")
+	r.ID = f64ToID(out)
 	// v2：绑定独立成表。KeyIDs 已是中心 credential id（中心模式下
 	// 上层拿到的就是中心 id），无需换算。
 	if err := s.replaceBindings(r.ID, r.KeyIDs); err != nil {
@@ -862,7 +865,7 @@ func (s *Store) CreateLAPI(u *models.LAPI) error {
 	if err := s.call(http.MethodPost, tblLAPI, "", lapiRow(u), &out); err != nil {
 		return err
 	}
-	u.ID = f64ToID(out, "id")
+	u.ID = f64ToID(out)
 	s.changed()
 	return nil
 }
@@ -1017,7 +1020,7 @@ func (s *Store) ReplaceAll(local LocalSnapshot) (map[string]int, error) {
 		if err := s.call(http.MethodPost, tblPlatform, "", row, &out); err != nil {
 			return nil, fmt.Errorf("insert platform %q: %w", p.Name, err)
 		}
-		platMap[p.ID] = f64ToID(out, "id")
+		platMap[p.ID] = f64ToID(out)
 	}
 
 	// 3) credential：remap platform_id。token_hash 由**明文**算（keyRow 内
@@ -1045,7 +1048,7 @@ func (s *Store) ReplaceAll(local LocalSnapshot) (map[string]int, error) {
 		if err := s.call(http.MethodPost, tblCred, "", row, &out); err != nil {
 			return nil, fmt.Errorf("insert credential platform=%d idx=%d: %w", k.PlatformID, k.KeyIndex, err)
 		}
-		keyMap[k.ID] = f64ToID(out, "id")
+		keyMap[k.ID] = f64ToID(out)
 	}
 
 	// 4) rapi：remap platform_id。v2 的 rapi 表无 key_ids 列，绑定见第 5 步。
@@ -1061,7 +1064,7 @@ func (s *Store) ReplaceAll(local LocalSnapshot) (map[string]int, error) {
 		if err := s.call(http.MethodPost, tblRAPI, "", row, &out); err != nil {
 			return nil, fmt.Errorf("insert rapi %q: %w", wp.Alias, err)
 		}
-		rapiMap[wp.ID] = f64ToID(out, "id")
+		rapiMap[wp.ID] = f64ToID(out)
 	}
 
 	// 5) endpoint_credential：本地 key id CSV → 中心 credential_id。
@@ -1099,7 +1102,7 @@ func (s *Store) ReplaceAll(local LocalSnapshot) (map[string]int, error) {
 		if err := s.call(http.MethodPost, tblLAPI, "", lapiRow(&l), &out); err != nil {
 			return nil, fmt.Errorf("insert lapi %q: %w", l.Alias, err)
 		}
-		lapiMap[l.ID] = f64ToID(out, "id")
+		lapiMap[l.ID] = f64ToID(out)
 	}
 
 	// 7) lapi_rapi_order：remap lapi_id / rapi_id；悬空引用丢弃。
