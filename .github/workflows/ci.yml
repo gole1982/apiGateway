@@ -269,17 +269,20 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # 镜像名必须全小写：Docker 拒绝含大写字母的 repository name
-      # （本仓库 apiGateway → apigateway）。metadata-action 不会自动小写化，
-      # 故先算出小写名再喂给它。docker-compose.yml 里写死同一个名字。
+      # （本仓库 apiGateway → apigateway，owner 同理）。metadata-action
+      # 不会自动小写化，故 owner 和仓库名都先算出小写再喂给它。
+      # docker-compose.yml 里写死同一个名字。
       - name: Resolve image name (lowercase)
         id: imgn
-        run: echo "name=$(echo '${{ github.event.repository.name }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+          echo "name=$(echo '${{ github.event.repository.name }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
       - name: Extract image metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/${{ steps.imgn.outputs.name }}
+          images: ghcr.io/${{ steps.imgn.outputs.owner }}/${{ steps.imgn.outputs.name }}
           tags: |
             type=ref,event=tag
             type=sha
