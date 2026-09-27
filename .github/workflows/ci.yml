@@ -145,13 +145,20 @@ jobs:
           else
             BASE="HEAD~1"
           fi
-          files=$(git diff --name-only --diff-filter=d "$BASE" HEAD -- '*.go')
-          files="$files $(git ls-files --others --exclude-standard -- '*.go')"
+          # git 自身失败必须继续让 job 变红 —— 只有最后的 while-read
+          # 需要容忍（见下）。所以分开写，不把 || true 套在 git 外面。
+          diff_list=$(git diff --name-only --diff-filter=d "$BASE" HEAD -- '*.go')
+          untracked=$(git ls-files --others --exclude-standard -- '*.go')
           # 只保留 HEAD 里仍存在的文件：--diff-filter=d 已排除删除，
           # 这里再挡一次未跟踪文件里指向已删路径的情况。
-          files=$(echo "$files" | sed '/^$/d' | sort -u | while read -r f; do
+          #
+          # 末尾的 || true 只接 while-read 的 EOF：输入耗尽时它返回非零，
+          # bash -e 会直接杀掉整个 step 且不打印任何东西。"no Go files
+          # changed" 这条分支在纯 YAML/文档 PR 之前一次都没走过 —— 之前
+          # 所有跑通的 run 恰好都有 Go 文件变更，空列表路径从未被执行。
+          files=$(printf '%s\n%s\n' "$diff_list" "$untracked" | sed '/^$/d' | sort -u | while read -r f; do
             [ -f "$f" ] && echo "$f"
-          done)
+          done || true)
           if [ -z "$files" ]; then echo "no Go files changed"; exit 0; fi
           echo "checking:"; echo "$files"
           # shellcheck disable=SC2086
