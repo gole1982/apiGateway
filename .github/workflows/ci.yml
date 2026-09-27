@@ -2,11 +2,14 @@ name: CI
 
 # 触发：
 #  - 针对 master/main 的 push（含合并）
+#  - v* tag 的 push（发版：release job 只认 refs/tags/v*，不加这行它永不执行 ——
+#    v0.1.20260928 已经验证过一次：tag 推上去了，workflow 一次没跑）
 #  - 所有 pull request
 #  - 手动触发（workflow_dispatch，便于重新跑）
 on:
   push:
     branches: [master, main]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
