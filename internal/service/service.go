@@ -129,9 +129,8 @@ func parseKeyIDs(s string) []int64 {
 		if p == "" {
 			continue
 		}
-		var id int64
-		fmt.Sscanf(p, "%d", &id)
-		if id > 0 {
+		// 非法片段直接丢弃。parseID 比 Sscanf 严格："12abc" 不算 12。
+		if id, ok := parseID(p); ok && id > 0 {
 			out = append(out, id)
 		}
 	}
@@ -368,7 +367,10 @@ func (s *Service) Run() error {
 		ticker := time.NewTicker(1 * time.Hour)
 		defer ticker.Stop()
 		for range ticker.C {
-			db.Get().CleanupOldTrends(120)
+			if err := db.Get().CleanupOldTrends(120); err != nil {
+				logger.DefaultConsole().Warn("service", "[TRENDS] cleanup old trends failed",
+					"error", err.Error())
+			}
 		}
 	}()
 
@@ -483,8 +485,16 @@ func (s *Service) Run() error {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 
-	httpServer.Shutdown(shutdownCtx)
-	webServer.Shutdown(shutdownCtx)
+	// Shutdown errors mean connections didn't drain in time — worth one
+	// log line, not a startup-blocking failure (we're already stopping).
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		logger.DefaultConsole().Warn("service", "proxy server shutdown failed",
+			"error", err.Error())
+	}
+	if err := webServer.Shutdown(shutdownCtx); err != nil {
+		logger.DefaultConsole().Warn("service", "web server shutdown failed",
+			"error", err.Error())
+	}
 
 	// Flush in-flight request logs so the last requests before shutdown are not lost.
 	if logInstance != nil {
@@ -731,8 +741,13 @@ func createWebHandler() http.Handler {
 			// bypasses the enabled/available guard (the model may still be
 			// "effective") and always cascades (removes LAPI refs + metrics).
 			sync := r.URL.Query().Get("sync") == "true"
-			var rapiID int64
-			fmt.Sscanf(id, "%d", &rapiID)
+			// 非法 id 答 400 而不是拿着 id=0 去查库再答 404 —— "不存在"
+			// 会误导调用方以为 id 合法只是没这条记录。
+			rapiID, ok := parseID(id)
+			if !ok {
+				writeJSONError(w, 400, fmt.Errorf("invalid id"))
+				return
+			}
 
 			// State-based delete: active RAPIs cannot be deleted
 			rapiInfo, err := store.A().GetRAPIByID(rapiID)
@@ -929,10 +944,9 @@ func createWebHandler() http.Handler {
 		case http.MethodDelete:
 			keyIDStr := r.URL.Query().Get("key_id")
 			rapiIDStr := r.URL.Query().Get("rapi_id")
-			var keyID, rapiID int64
-			fmt.Sscanf(keyIDStr, "%d", &keyID)
-			fmt.Sscanf(rapiIDStr, "%d", &rapiID)
-			if keyID == 0 || rapiID == 0 {
+			keyID, keyOK := parseID(keyIDStr)
+			rapiID, rapiOK := parseID(rapiIDStr)
+			if !keyOK || !rapiOK || keyID == 0 || rapiID == 0 {
 				http.Error(w, `{"error":"missing key_id or rapi_id"}`, 400)
 				return
 			}
@@ -972,11 +986,18 @@ func createWebHandler() http.Handler {
 		// Sync all RAPIs for this platform: disable+invalidate or enable+revalidate.
 		rapis, _ := store.A().GetRAPIsByPlatform(req.ID)
 		for _, r := range rapis {
+			// 级联开关：中途失败直接 500 而不是继续把剩下的一半也改了还报成功。
 			if !req.Enabled {
-				store.A().SetRAPIEnabled(r.ID, false)
+				if err := store.A().SetRAPIEnabled(r.ID, false); err != nil {
+					writeJSONError(w, 500, err)
+					return
+				}
 				proxyGateway.InvalidateRAPI(r.ID)
 			} else {
-				store.A().SetRAPIEnabled(r.ID, true)
+				if err := store.A().SetRAPIEnabled(r.ID, true); err != nil {
+					writeJSONError(w, 500, err)
+					return
+				}
 				proxyGateway.RevalidateRAPI(r.ID)
 			}
 		}
@@ -1055,7 +1076,12 @@ func createWebHandler() http.Handler {
 			return
 		}
 		if len(supported) > 0 {
-			store.A().UpdateRAPIFormats(req.ID, apiformat.FormatsToJSON(supported))
+			// 探测出的协议 support 已返回给调用方，这里落库失败不能静默：
+			// 否则面板显示"支持"而网关行为还是旧的。
+			if err := store.A().UpdateRAPIFormats(req.ID, apiformat.FormatsToJSON(supported)); err != nil {
+				writeJSONError(w, 500, err)
+				return
+			}
 		}
 		proxyGateway.RevalidateRAPI(req.ID)
 		logger.DefaultConsole().Info("service", "[API] restoreRAPI probed ok",
@@ -1134,7 +1160,8 @@ func createWebHandler() http.Handler {
 			return
 		}
 		defer resp.Body.Close()
-		io.ReadAll(resp.Body) // drain
+		// Drain for connection reuse; only the status code matters here.
+		_, _ = io.ReadAll(resp.Body)
 
 		if resp.StatusCode != 200 {
 			writeJSONError(w, 502, fmt.Errorf("平台返回 %d，恢复失败", resp.StatusCode))
@@ -1148,7 +1175,10 @@ func createWebHandler() http.Handler {
 		pe.OnDetectSuccess()
 		rapis, _ := store.A().GetRAPIsByPlatform(req.ID)
 		for _, rapi := range rapis {
-			db.Get().SetRAPIUnavailableWithReason(rapi.ID, true, "")
+			if err := db.Get().SetRAPIUnavailableWithReason(rapi.ID, true, ""); err != nil {
+				writeJSONError(w, 500, err)
+				return
+			}
 			proxyGateway.RevalidateRAPI(rapi.ID)
 		}
 		logger.DefaultConsole().Info("service", "[RESTORE] platform restored",
@@ -1161,9 +1191,8 @@ func createWebHandler() http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 
 		id := r.URL.Query().Get("id")
-		var rapiID int64
-		fmt.Sscanf(id, "%d", &rapiID)
-		if rapiID == 0 {
+		rapiID, ok := parseID(id)
+		if !ok || rapiID == 0 {
 			http.Error(w, `{"error":"missing id"}`, 400)
 			return
 		}
@@ -1294,8 +1323,11 @@ func createWebHandler() http.Handler {
 		case http.MethodDelete:
 			id := r.URL.Query().Get("id")
 			force := r.URL.Query().Get("force") == "true"
-			var pID int64
-			fmt.Sscanf(id, "%d", &pID)
+			pID, ok := parseID(id)
+			if !ok {
+				writeJSONError(w, 400, fmt.Errorf("invalid id"))
+				return
+			}
 
 			// State-based delete: active platforms cannot be deleted
 			platform, err := store.A().GetPlatformByID(pID)
@@ -1613,9 +1645,8 @@ func createWebHandler() http.Handler {
 			return
 		}
 
-		var platformID int64
-		fmt.Sscanf(parts[0], "%d", &platformID)
-		if platformID == 0 {
+		platformID, ok := parseID(parts[0])
+		if !ok || platformID == 0 {
 			http.Error(w, `{"error":"invalid platform id"}`, 400)
 			return
 		}
@@ -1669,8 +1700,11 @@ func createWebHandler() http.Handler {
 			// without replacing the whole list). An empty token keeps the stored one,
 			// so the client never has to echo the plaintext secret back.
 			if keyIDStr := r.URL.Query().Get("key_id"); keyIDStr != "" {
-				var kid int64
-				fmt.Sscanf(keyIDStr, "%d", &kid)
+				kid, ok := parseID(keyIDStr)
+				if !ok {
+					http.Error(w, `{"error":"invalid key_id"}`, 400)
+					return
+				}
 				var k models.PlatformKey
 				if err := json.NewDecoder(r.Body).Decode(&k); err != nil {
 					http.Error(w, `{"error":"invalid json"}`, 400)
@@ -1766,9 +1800,8 @@ func createWebHandler() http.Handler {
 
 		case http.MethodDelete:
 			keyID := r.URL.Query().Get("key_id")
-			var kid int64
-			fmt.Sscanf(keyID, "%d", &kid)
-			if kid == 0 {
+			kid, ok := parseID(keyID)
+			if !ok || kid == 0 {
 				http.Error(w, `{"error":"missing key_id"}`, 400)
 				return
 			}
@@ -1895,8 +1928,11 @@ func createWebHandler() http.Handler {
 
 		case http.MethodDelete:
 			id := r.URL.Query().Get("id")
-			var lapiID int64
-			fmt.Sscanf(id, "%d", &lapiID)
+			lapiID, ok := parseID(id)
+			if !ok {
+				writeJSONError(w, 400, fmt.Errorf("invalid id"))
+				return
+			}
 
 			// State-based delete: active LAPIs cannot be deleted
 			lapiInfo, err := store.A().GetLAPIByID(lapiID)
@@ -1951,8 +1987,13 @@ func createWebHandler() http.Handler {
 			return
 		}
 
-		var lapiID int64
-		fmt.Sscanf(parts[0], "%d", &lapiID)
+		// 路径首段非数字时答 400：之前会拿着 lapiID=0 继续走，
+		// 在 GET 分支里变成 500（GetRAPIsForLAPI(0) 的错误直接 500）。
+		lapiID, ok := parseID(parts[0])
+		if !ok {
+			http.Error(w, `{"error":"invalid path"}`, 400)
+			return
+		}
 
 		if strings.Contains(r.URL.Path, "/rapis") {
 			if r.Method == http.MethodGet {
@@ -2030,7 +2071,10 @@ func createWebHandler() http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		days := 7
 		if d := r.URL.Query().Get("days"); d != "" {
-			fmt.Sscanf(d, "%d", &days)
+			// 非法值保留默认 7（面板日期框只会发数字，这里是容错不是校验）。
+			if v, ok := parseID(d); ok {
+				days = int(v)
+			}
 		}
 		buckets, err := db.Get().GetHourlyDistribution(days)
 		if err != nil {
@@ -2052,7 +2096,10 @@ func createWebHandler() http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		days := 7
 		if d := r.URL.Query().Get("days"); d != "" {
-			fmt.Sscanf(d, "%d", &days)
+			// 非法值保留默认 7（同 /api/analytics/hourly）。
+			if v, ok := parseID(d); ok {
+				days = int(v)
+			}
 		}
 		trends, err := db.Get().GetDailyTokenTrend(days)
 		if err != nil {
@@ -2073,7 +2120,10 @@ func createWebHandler() http.Handler {
 		// 获取刷新间隔参数（默认10秒）
 		refreshInterval := 10
 		if intervalStr := r.URL.Query().Get("interval"); intervalStr != "" {
-			fmt.Sscanf(intervalStr, "%d", &refreshInterval)
+			// 非法值保留默认 10（面板只会发数字，这里是容错不是校验）。
+			if v, ok := parseID(intervalStr); ok {
+				refreshInterval = int(v)
+			}
 		}
 
 		// 计算时间窗口：当前时间往前推刷新间隔
@@ -2297,9 +2347,8 @@ func createWebHandler() http.Handler {
 			return
 		}
 		idStr := strings.TrimPrefix(r.URL.Path, "/api/platforms/peek-token/")
-		var platformID int64
-		fmt.Sscanf(idStr, "%d", &platformID)
-		if platformID == 0 {
+		platformID, ok := parseID(idStr)
+		if !ok || platformID == 0 {
 			http.Error(w, `{"error":"invalid platform id"}`, 400)
 			return
 		}
@@ -2594,7 +2643,13 @@ func restorePlatformAvailability(platformID int64) {
 		for _, ra := range rapis {
 			// Clear persisted unavailable state (written by the gateway when all keys
 			// were dead) so the RAPI re-enters GetEnabledRAPIsForLAPI immediately.
-			db.Get().SetRAPIUnavailableWithReason(ra.ID, true, "")
+			// Best-effort in background: no caller to report to, so failures
+			// go to the process log instead of vanishing.
+			if err := db.Get().SetRAPIUnavailableWithReason(ra.ID, true, ""); err != nil {
+				logger.DefaultConsole().Warn("service", "[KEY] clear unavailable state failed",
+					"rapi_id", ra.ID, "error", err.Error())
+				continue
+			}
 			proxyGateway.RevalidateRAPI(ra.ID)
 		}
 	}
@@ -2605,9 +2660,8 @@ func restorePlatformAvailability(platformID int64) {
 // handleKeyProbe tests a specific platform key by calling /v1/models (or /v1beta/models
 // for Google native). On success: clears key failure_type. On failure: keeps failure_type=2.
 func handleKeyProbe(w http.ResponseWriter, r *http.Request, platformID int64, keyIDStr string) {
-	var keyID int64
-	fmt.Sscanf(keyIDStr, "%d", &keyID)
-	if keyID == 0 {
+	keyID, ok := parseID(keyIDStr)
+	if !ok || keyID == 0 {
 		writeJSONError(w, 400, fmt.Errorf("invalid key id"))
 		return
 	}

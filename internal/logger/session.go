@@ -43,7 +43,13 @@ func (t *SessionTracker) ensureSessionLocked(conn net.Conn) *Session {
 	}
 	t.sessions[conn] = s
 	if t.logger != nil && t.logger.Storage != nil {
-		go t.logger.Storage.SaveSession(s)
+		// 后台落库：失败只记日志（会话跟踪不能因为日志库阻塞连接建立）。
+		go func() {
+			if err := t.logger.Storage.SaveSession(s); err != nil {
+				DefaultConsole().Warn("logger", "[SESSION] save session failed",
+					"session_id", s.ID, "error", err.Error())
+			}
+		}()
 	}
 	return s
 }
@@ -60,7 +66,12 @@ func (t *SessionTracker) OnConnState(conn net.Conn, state http.ConnState) {
 		if session, ok := t.sessions[conn]; ok {
 			session.EndedAt = time.Now()
 			if t.logger != nil && t.logger.Storage != nil {
-				go t.logger.Storage.EndSession(session.ID)
+				go func(id string) {
+					if err := t.logger.Storage.EndSession(id); err != nil {
+						DefaultConsole().Warn("logger", "[SESSION] end session failed",
+							"session_id", id, "error", err.Error())
+					}
+				}(session.ID)
 			}
 			delete(t.sessions, conn)
 		}
@@ -118,7 +129,12 @@ func (t *SessionTracker) InjectSessionID(r *http.Request) (sessionID string, sta
 			session.LastRequestAt = time.Now()
 			stable = true
 			if t.logger != nil && t.logger.Storage != nil {
-				go t.logger.Storage.UpdateSessionRequestCount(session.ID)
+				go func(id string) {
+					if err := t.logger.Storage.UpdateSessionRequestCount(id); err != nil {
+						DefaultConsole().Warn("logger", "[SESSION] update request count failed",
+							"session_id", id, "error", err.Error())
+					}
+				}(session.ID)
 			}
 			break
 		}

@@ -1,6 +1,7 @@
 package db
 
 import (
+	"fmt"
 	"sort"
 	"time"
 )
@@ -258,11 +259,16 @@ func (db *DB) GetDashboardMetrics(since time.Time) (*MetricsResponse, error) {
 	}
 
 	for _, d := range dims {
-		// G202 命中的是字符串拼接进 SQL，但 d.group 只能取自上方 dims 里
-		// 四个硬编码列名，没有任何用户输入参与。SQL 标识符本来就不能用 ? 占位。
-		rows, err := db.conn.Query(`
-			SELECT `+d.group+` AS dim_id, //nolint:gosec
-			       COALESCE(NULLIF(`+d.group+`, ''), '') AS raw_dim, //nolint:gosec
+		// G202 命中的是列名拼进 SQL：d.group 只能取自上方 dims 里四个硬编码
+		// 列名，没有任何用户输入参与；SQL 标识符本来就不能用 ? 占位。
+		// 用 Sprintf 先组装再传参（而不是行内拼接），生成的 SQL 与原来逐字节
+		// 一致 —— 行内 `//nolint` 会掉进 raw string 字面量变成 SQL 的一部分，
+		// 2026-09-27 已经因此搞坏过一次这个查询。
+		// G201（Sprintf 组装 SQL）同样是白名单列名，见上。
+		//nolint:gosec
+		query := fmt.Sprintf(`
+			SELECT %s AS dim_id,
+			       COALESCE(NULLIF(%s, ''), '') AS raw_dim,
 			       COUNT(*) AS attempts,
 			       SUM(CASE WHEN response_status >= 400 OR status = 'failed' THEN 1 ELSE 0 END) AS errors,
 			       COALESCE(SUM(tokens_used), 0) AS total_tok,
@@ -274,9 +280,10 @@ func (db *DB) GetDashboardMetrics(since time.Time) (*MetricsResponse, error) {
 			       COALESCE(SUM(rest_latency_ms), 0) AS rest_sum,
 			       SUM(CASE WHEN rest_latency_ms > 0 THEN 1 ELSE 0 END) AS rest_n
 			FROM request_logs
-			WHERE timestamp >= ? AND `+d.group+` IS NOT NULL AND `+d.group+` != '' AND `+d.group+` != '0'
+			WHERE timestamp >= ? AND %s IS NOT NULL AND %s != '' AND %s != '0'
 			GROUP BY dim_id
-		`, since)
+		`, d.group, d.group, d.group, d.group, d.group) //nolint:gosec
+		rows, err := db.conn.Query(query, since)
 		if err != nil {
 			return nil, err
 		}

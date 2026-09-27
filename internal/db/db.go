@@ -252,7 +252,7 @@ func initAtPath(dbPath string) error {
 
 	// Drop the legacy persisted change_log table: unread notifications are now
 	// kept in-memory only (see notify.NotificationService unread feed).
-	conn.Exec(`DROP TABLE IF EXISTS change_log`)
+	instance.execMigrationDDL("drop legacy change_log", `DROP TABLE IF EXISTS change_log`)
 
 	// Migration: if old rapi table had url/token columns, migrate them to platform
 	if err := instance.migrateOldRAPISchema(); err != nil {
@@ -549,6 +549,25 @@ func tableColumnsTx(tx *sql.Tx, tbl string) (map[string]bool, error) {
 	return cols, rows.Err()
 }
 
+// execMigrationDDL runs one guarded migration statement and makes failure
+// visible. Every call site checks existence first (pragma_table_info), so
+// reaching Exec means "this change must be applied": a failure is unexpected
+// and is logged at Error with the step name instead of vanishing silently.
+//
+// It deliberately does not return the error: these migrations run inside
+// initAtPath's best-effort chain where most steps are individually
+// non-fatal, and switching that to fail-fast would change startup behaviour
+// for existing deployments. What this fixes is the silence -- a failed
+// ADD COLUMN used to leave the schema half-migrated with zero trace,
+// and the next failure would surface far away from its cause.
+// A step that needs fail-fast semantics must handle its error explicitly
+// at the call site instead of using this helper.
+func (db *DB) execMigrationDDL(step, stmt string) {
+	if _, err := db.conn.Exec(stmt); err != nil {
+		slog.Error("[DB] migration step failed", "component", "db", "step", step, "error", err.Error())
+	}
+}
+
 func (db *DB) migrateAddStatusColumns() {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -557,15 +576,15 @@ func (db *DB) migrateAddStatusColumns() {
 	row := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('platform') WHERE name='enabled'`)
 	var count int
 	if err := row.Scan(&count); err == nil && count == 0 {
-		db.conn.Exec(`ALTER TABLE platform ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1`)
-		db.conn.Exec(`ALTER TABLE platform ADD COLUMN available INTEGER NOT NULL DEFAULT 1`)
+		db.execMigrationDDL("migrateAddStatusColumns/platform.enabled", `ALTER TABLE platform ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1`)
+		db.execMigrationDDL("migrateAddStatusColumns/platform.available", `ALTER TABLE platform ADD COLUMN available INTEGER NOT NULL DEFAULT 1`)
 	}
 
 	// Check if rapi has enabled column
 	row = db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('rapi') WHERE name='enabled'`)
 	if err := row.Scan(&count); err == nil && count == 0 {
-		db.conn.Exec(`ALTER TABLE rapi ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1`)
-		db.conn.Exec(`ALTER TABLE rapi ADD COLUMN available INTEGER NOT NULL DEFAULT 1`)
+		db.execMigrationDDL("migrateAddStatusColumns/rapi.enabled", `ALTER TABLE rapi ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1`)
+		db.execMigrationDDL("migrateAddStatusColumns/rapi.available", `ALTER TABLE rapi ADD COLUMN available INTEGER NOT NULL DEFAULT 1`)
 	}
 }
 
@@ -585,7 +604,7 @@ func (db *DB) migrateAddCostColumns() {
 		var count int
 		row := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('rapi') WHERE name=?`, name)
 		if row.Scan(&count) == nil && count == 0 {
-			db.conn.Exec("ALTER TABLE rapi ADD COLUMN " + name + " " + definition)
+			db.execMigrationDDL("migrateAddCostColumns/rapi."+name, "ALTER TABLE rapi ADD COLUMN "+name+" "+definition)
 		}
 	}
 }
@@ -595,19 +614,19 @@ func (db *DB) migrateAddSupportedFormatsColumn() {
 	var count int
 	row := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('rapi') WHERE name='supported_formats'`)
 	if row.Scan(&count) == nil && count == 0 {
-		db.conn.Exec(`ALTER TABLE rapi ADD COLUMN supported_formats TEXT NOT NULL DEFAULT '["openai"]'`)
+		db.execMigrationDDL("migrateAddSupportedFormatsColumn/rapi.supported_formats", `ALTER TABLE rapi ADD COLUMN supported_formats TEXT NOT NULL DEFAULT '["openai"]'`)
 	}
 	// Fix any NULL or empty supported_formats values from older schemas
-	db.conn.Exec(`UPDATE rapi SET supported_formats = '["openai"]' WHERE supported_formats IS NULL OR supported_formats = ''`)
+	db.execMigrationDDL("migrateAddSupportedFormatsColumn/rapi.supported_formats backfill", `UPDATE rapi SET supported_formats = '["openai"]' WHERE supported_formats IS NULL OR supported_formats = ''`)
 }
 
 func (db *DB) migrateAddPlatformSupportedFormats() {
 	var count int
 	row := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('platform') WHERE name='supported_formats'`)
 	if row.Scan(&count) == nil && count == 0 {
-		db.conn.Exec(`ALTER TABLE platform ADD COLUMN supported_formats TEXT NOT NULL DEFAULT '["openai"]'`)
+		db.execMigrationDDL("migrateAddPlatformSupportedFormats/platform.supported_formats", `ALTER TABLE platform ADD COLUMN supported_formats TEXT NOT NULL DEFAULT '["openai"]'`)
 	}
-	db.conn.Exec(`UPDATE platform SET supported_formats = '["openai"]' WHERE supported_formats IS NULL OR supported_formats = ''`)
+	db.execMigrationDDL("migrateAddPlatformSupportedFormats/platform.supported_formats backfill", `UPDATE platform SET supported_formats = '["openai"]' WHERE supported_formats IS NULL OR supported_formats = ''`)
 }
 
 // migrateAddPlatformFormatEndpoints adds the format_endpoints column to the
@@ -617,16 +636,16 @@ func (db *DB) migrateAddPlatformFormatEndpoints() {
 	var count int
 	row := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('platform') WHERE name='format_endpoints'`)
 	if row.Scan(&count) == nil && count == 0 {
-		db.conn.Exec(`ALTER TABLE platform ADD COLUMN format_endpoints TEXT NOT NULL DEFAULT ''`)
+		db.execMigrationDDL("migrateAddPlatformFormatEndpoints/platform.format_endpoints", `ALTER TABLE platform ADD COLUMN format_endpoints TEXT NOT NULL DEFAULT ''`)
 	}
-	db.conn.Exec(`UPDATE platform SET format_endpoints = '' WHERE format_endpoints IS NULL`)
+	db.execMigrationDDL("migrateAddPlatformFormatEndpoints/platform.format_endpoints backfill", `UPDATE platform SET format_endpoints = '' WHERE format_endpoints IS NULL`)
 }
 
 func (db *DB) migrateAddRAPISource() {
 	var count int
 	row := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('rapi') WHERE name='source'`)
 	if row.Scan(&count) == nil && count == 0 {
-		db.conn.Exec(`ALTER TABLE rapi ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'`)
+		db.execMigrationDDL("migrateAddRAPISource/rapi.source", `ALTER TABLE rapi ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'`)
 	}
 }
 
@@ -639,7 +658,7 @@ func (db *DB) migrateAddRAPIKeyIDs() {
 	var count int
 	row := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('rapi') WHERE name='key_ids'`)
 	if row.Scan(&count) == nil && count == 0 {
-		db.conn.Exec(`ALTER TABLE rapi ADD COLUMN key_ids TEXT NOT NULL DEFAULT ''`)
+		db.execMigrationDDL("migrateAddRAPIKeyIDs/rapi.key_ids", `ALTER TABLE rapi ADD COLUMN key_ids TEXT NOT NULL DEFAULT ''`)
 	}
 }
 
@@ -648,7 +667,7 @@ func (db *DB) migrateAddRAPIKeyIDs() {
 func (db *DB) migrateKeyModelBlocks() {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	db.conn.Exec(`
+	db.execMigrationDDL("migrateKeyModelBlocks/create key_model_blocks", `
 		CREATE TABLE IF NOT EXISTS key_model_blocks (
 			key_id INTEGER NOT NULL,
 			rapi_id INTEGER NOT NULL,
@@ -675,7 +694,7 @@ func (db *DB) migrateAddPlatformAccountColumns() {
 		var count int
 		row := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('platform') WHERE name=?`, name)
 		if row.Scan(&count) == nil && count == 0 {
-			db.conn.Exec("ALTER TABLE platform ADD COLUMN " + name + " " + definition)
+			db.execMigrationDDL("migrateAddPlatformAccountColumns/platform."+name, "ALTER TABLE platform ADD COLUMN "+name+" "+definition)
 		}
 	}
 }
@@ -745,7 +764,7 @@ func (db *DB) migrateAddNotesColumn() {
 	var count int
 	row := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('platform') WHERE name='notes'`)
 	if row.Scan(&count) == nil && count == 0 {
-		db.conn.Exec(`ALTER TABLE platform ADD COLUMN notes TEXT NOT NULL DEFAULT ''`)
+		db.execMigrationDDL("migrateAddNotesColumn/platform.notes", `ALTER TABLE platform ADD COLUMN notes TEXT NOT NULL DEFAULT ''`)
 	}
 }
 
@@ -753,7 +772,7 @@ func (db *DB) migrateAddLAPIEnabledColumn() {
 	var count int
 	row := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('lapi') WHERE name='enabled'`)
 	if row.Scan(&count) == nil && count == 0 {
-		db.conn.Exec(`ALTER TABLE lapi ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1`)
+		db.execMigrationDDL("migrateAddLAPIEnabledColumn/lapi.enabled", `ALTER TABLE lapi ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1`)
 	}
 }
 
@@ -761,7 +780,7 @@ func (db *DB) migrateAddCustomHeadersColumn() {
 	var count int
 	row := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('rapi') WHERE name='custom_headers'`)
 	if row.Scan(&count) == nil && count == 0 {
-		db.conn.Exec(`ALTER TABLE rapi ADD COLUMN custom_headers TEXT NOT NULL DEFAULT ''`)
+		db.execMigrationDDL("migrateAddCustomHeadersColumn/rapi.custom_headers", `ALTER TABLE rapi ADD COLUMN custom_headers TEXT NOT NULL DEFAULT ''`)
 	}
 }
 
@@ -833,7 +852,7 @@ func (db *DB) migrateAddPlatformKeys() error {
 		}
 	} else {
 		// Ensure index exists even if table was created earlier without it.
-		db.conn.Exec(`CREATE INDEX IF NOT EXISTS idx_platform_keys_platform ON platform_keys(platform_id)`)
+		db.execMigrationDDL("migrateAddPlatformKeys/ensure index", `CREATE INDEX IF NOT EXISTS idx_platform_keys_platform ON platform_keys(platform_id)`)
 	}
 
 	// Migrate existing platform.token → platform_keys row with key_index=0.
@@ -885,7 +904,7 @@ func (db *DB) migrateTokenCacheToPlatformKeyID() error {
 
 func (db *DB) cleanupOrphanedRAPIs() {
 	// Remove lapi_rapi_order entries for orphaned RAPIs (platform doesn't exist)
-	db.conn.Exec(`
+	db.execMigrationDDL("cleanupOrphanedRAPIs/delete orphan order rows", `
 		DELETE FROM lapi_rapi_order WHERE rapi_id IN (
 			SELECT r.id FROM rapi r
 			LEFT JOIN platform p ON r.platform_id = p.id
@@ -893,7 +912,7 @@ func (db *DB) cleanupOrphanedRAPIs() {
 		)
 	`)
 	// Remove rapi_metrics entries for orphaned RAPIs
-	db.conn.Exec(`
+	db.execMigrationDDL("cleanupOrphanedRAPIs/delete orphan metrics", `
 		DELETE FROM rapi_metrics WHERE rapi_id IN (
 			SELECT r.id FROM rapi r
 			LEFT JOIN platform p ON r.platform_id = p.id
@@ -2267,7 +2286,7 @@ func (db *DB) migrateAddRAPIUnavailableReason() {
 	var count int
 	row := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('rapi') WHERE name='unavailable_reason'`)
 	if row.Scan(&count) == nil && count == 0 {
-		db.conn.Exec(`ALTER TABLE rapi ADD COLUMN unavailable_reason TEXT NOT NULL DEFAULT ''`)
+		db.execMigrationDDL("migrateAddRAPIUnavailableReason/rapi.unavailable_reason", `ALTER TABLE rapi ADD COLUMN unavailable_reason TEXT NOT NULL DEFAULT ''`)
 	}
 }
 
@@ -2275,7 +2294,7 @@ func (db *DB) migrateAddRAPINotesColumn() {
 	var count int
 	row := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('rapi') WHERE name='notes'`)
 	if row.Scan(&count) == nil && count == 0 {
-		db.conn.Exec(`ALTER TABLE rapi ADD COLUMN notes TEXT NOT NULL DEFAULT ''`)
+		db.execMigrationDDL("migrateAddRAPINotesColumn/rapi.notes", `ALTER TABLE rapi ADD COLUMN notes TEXT NOT NULL DEFAULT ''`)
 	}
 }
 
@@ -2283,7 +2302,7 @@ func (db *DB) migrateAddPlatformCustomHeadersColumn() {
 	var count int
 	row := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('platform') WHERE name='custom_headers'`)
 	if row.Scan(&count) == nil && count == 0 {
-		db.conn.Exec(`ALTER TABLE platform ADD COLUMN custom_headers TEXT NOT NULL DEFAULT ''`)
+		db.execMigrationDDL("migrateAddPlatformCustomHeadersColumn/platform.custom_headers", `ALTER TABLE platform ADD COLUMN custom_headers TEXT NOT NULL DEFAULT ''`)
 	}
 }
 
@@ -2315,9 +2334,9 @@ func (db *DB) migrateAddPlatformKeyFailureColumns() {
 	var count int
 	row := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('platform_keys') WHERE name='failure_type'`)
 	if row.Scan(&count) == nil && count == 0 {
-		db.conn.Exec(`ALTER TABLE platform_keys ADD COLUMN failure_type INTEGER NOT NULL DEFAULT 0`)
-		db.conn.Exec(`ALTER TABLE platform_keys ADD COLUMN failure_reason TEXT NOT NULL DEFAULT ''`)
-		db.conn.Exec(`ALTER TABLE platform_keys ADD COLUMN failed_at DATETIME`)
+		db.execMigrationDDL("migrateAddPlatformKeyFailureColumns/platform_keys.failure_type", `ALTER TABLE platform_keys ADD COLUMN failure_type INTEGER NOT NULL DEFAULT 0`)
+		db.execMigrationDDL("migrateAddPlatformKeyFailureColumns/platform_keys.failure_reason", `ALTER TABLE platform_keys ADD COLUMN failure_reason TEXT NOT NULL DEFAULT ''`)
+		db.execMigrationDDL("migrateAddPlatformKeyFailureColumns/platform_keys.failed_at", `ALTER TABLE platform_keys ADD COLUMN failed_at DATETIME`)
 	}
 }
 
@@ -2330,7 +2349,7 @@ func (db *DB) migrateAddPlatformKeyExpiryColumns() {
 		var count int
 		row := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('platform_keys') WHERE name=?`, col)
 		if row.Scan(&count) == nil && count == 0 {
-			db.conn.Exec(ddl)
+			db.execMigrationDDL("migrateAddPlatformKeyExpiryColumns/platform_keys."+col, ddl)
 		}
 	}
 	// DATETIME allows NULL; no DEFAULT so existing rows get NULL (never expires).
@@ -2343,7 +2362,7 @@ func (db *DB) migrateAddLAPINotesColumn() {
 	var count int
 	row := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('lapi') WHERE name='notes'`)
 	if row.Scan(&count) == nil && count == 0 {
-		db.conn.Exec(`ALTER TABLE lapi ADD COLUMN notes TEXT NOT NULL DEFAULT ''`)
+		db.execMigrationDDL("migrateAddLAPINotesColumn/lapi.notes", `ALTER TABLE lapi ADD COLUMN notes TEXT NOT NULL DEFAULT ''`)
 	}
 }
 
@@ -2359,7 +2378,7 @@ func (db *DB) migrateAddModelIdentityColumns() {
 				fmt.Sprintf(`SELECT COUNT(*) FROM pragma_table_info('%s') WHERE name='%s'`, table, col),
 			)
 			if row.Scan(&count) == nil && count == 0 {
-				db.conn.Exec(fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s TEXT NOT NULL DEFAULT ''`, table, col))
+				db.execMigrationDDL("migrateAddModelIdentityColumns/"+table+"."+col, fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s TEXT NOT NULL DEFAULT ''`, table, col))
 			}
 		}
 	}
@@ -2377,19 +2396,19 @@ func (db *DB) migrateUnifiedModelNaming() {
 				fmt.Sprintf(`SELECT COUNT(*) FROM pragma_table_info('%s') WHERE name='%s'`, table, col),
 			)
 			if row.Scan(&count) == nil && count == 0 {
-				db.conn.Exec(fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s TEXT NOT NULL DEFAULT ''`, table, col))
+				db.execMigrationDDL("migrateUnifiedModelNaming/"+table+"."+col, fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s TEXT NOT NULL DEFAULT ''`, table, col))
 			}
 		}
 		// Legacy "名 (model_name)" values become the suffix (e.g. sonnet),
 		// preserving display data such as claude-sonnet-4.7 → claude-4.7-sonnet.
-		db.conn.Exec(fmt.Sprintf(`UPDATE %s SET suffix = model_name WHERE suffix = '' AND model_name != ''`, table))
+		db.execMigrationDDL("migrateUnifiedModelNaming/"+table+".suffix backfill", fmt.Sprintf(`UPDATE %s SET suffix = model_name WHERE suffix = '' AND model_name != ''`, table))
 	}
 	// Backfill empty rapi.notes as the model remark (模型备注):
 	// - auto-discovered models keep their original upstream name as the remark;
 	// - manually added models whose alias differs from the upstream name keep
 	//   the user's own naming (用户命名) as the remark.
-	db.conn.Exec(`UPDATE rapi SET notes = model WHERE notes = '' AND model != '' AND (source != 'manual' OR alias = '' OR alias = LOWER(model))`)
-	db.conn.Exec(`UPDATE rapi SET notes = alias WHERE notes = '' AND alias != '' AND source = 'manual' AND alias != LOWER(model)`)
+	db.execMigrationDDL("migrateUnifiedModelNaming/rapi.notes model backfill", `UPDATE rapi SET notes = model WHERE notes = '' AND model != '' AND (source != 'manual' OR alias = '' OR alias = LOWER(model))`)
+	db.execMigrationDDL("migrateUnifiedModelNaming/rapi.notes alias backfill", `UPDATE rapi SET notes = alias WHERE notes = '' AND alias != '' AND source = 'manual' AND alias != LOWER(model)`)
 }
 
 // migrateRAPIUniqueAliasToPerPlatform changes the rapi.alias uniqueness constraint from

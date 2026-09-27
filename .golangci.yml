@@ -50,6 +50,22 @@ linters:
 
 linters-settings:
   errcheck:
+    # exclude-functions 是业界惯例项，不是放水：
+    #
+    #   (*net/http.ResponseWriter).Write / (*encoding/json.Encoder).Encode
+    #     写 HTTP 响应。客户端断开时返回错误是常态，且此刻已无任何可做的
+    #     事（响应头可能已发出，连 500 都写不回去）。Go 社区几乎所有项目
+    #     都排除这两项。需要区分的是：读请求体（io.ReadAll / json.Decode）
+    #     的错误必须处理，不在此列。
+    #   (*database/sql.Tx).Rollback
+    #     defer 出来的 Rollback 在 Commit 成功后是 no-op。唯一能返回错误的
+    #     场景是"事务已经结束"，而这恰恰是期望状态。本仓库 20 处全是此模式。
+    exclude-functions:
+      # 注意：http.ResponseWriter 是 interface，handler 签名里按值传递，
+      # 所以这里不能写 *（写成指针就匹配不上，56 处原样报出来 —— 已踩过）。
+      - (net/http.ResponseWriter).Write
+      - (*encoding/json.Encoder).Encode
+      - (*database/sql.Tx).Rollback
     # check-blank / check-type-assertions 都恢复默认（关）。
     #
     # 它们之所以是 opt-in，正是因为噪声压倒信号：开启后 350 个发现里，

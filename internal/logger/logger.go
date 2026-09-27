@@ -443,7 +443,10 @@ func (l *Logger) startCleanup() {
 		select {
 		case <-ticker.C:
 			if l.Storage != nil {
-				l.Storage.CleanupOldRecords(l.config.MaxAgeDays, l.config.MaxRecords)
+				if err := l.Storage.CleanupOldRecords(l.config.MaxAgeDays, l.config.MaxRecords); err != nil {
+					DefaultConsole().Warn("logger", "[LOGGER] cleanup old records failed",
+						"error", err.Error())
+				}
 			}
 		case <-l.ctx.Done():
 			return

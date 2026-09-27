@@ -376,9 +376,18 @@ func (g *ProxyGateway) recoverRAPIs(ctx context.Context, unhealthy []models.RAPI
 			}
 
 			// Recovered: clear unavailable state, refresh formats, revalidate.
-			g.db.SetRAPIUnavailableWithReason(r.ID, true, "")
+			// Best-effort inside a recovery worker: persistence failures are
+			// logged, not returned (the worker has no caller to report to),
+			// and the in-memory revalidate below still runs.
+			if err := g.db.SetRAPIUnavailableWithReason(r.ID, true, ""); err != nil {
+				logger.DefaultConsole().Warn("gateway", "[RECOVER] clear unavailable state failed",
+					"rapi", r.Alias, "rapi_id", r.ID, "error", err.Error())
+			}
 			if len(supported) > 0 {
-				g.db.UpdateRAPIFormats(r.ID, apiformat.FormatsToJSON(supported))
+				if err := g.db.UpdateRAPIFormats(r.ID, apiformat.FormatsToJSON(supported)); err != nil {
+					logger.DefaultConsole().Warn("gateway", "[RECOVER] refresh formats failed",
+						"rapi", r.Alias, "rapi_id", r.ID, "error", err.Error())
+				}
 			}
 			g.RevalidateRAPI(r.ID)
 			mu.Lock()
@@ -456,7 +465,9 @@ func (g *ProxyGateway) probePlatform(ctx context.Context, p models.Platform, cli
 		return false, err.Error()
 	}
 	defer resp.Body.Close()
-	io.ReadAll(resp.Body)
+	// Drain the probe body for connection reuse; a drain error carries no
+	// information (status is what this probe reports).
+	_, _ = io.ReadAll(resp.Body)
 
 	if resp.StatusCode != 200 {
 		return false, fmt.Sprintf("platform returned %d", resp.StatusCode)
@@ -782,7 +793,11 @@ func (g *ProxyGateway) HandleChatCompletions(w http.ResponseWriter, r *http.Requ
 		fallbackUsed, clientStatusCode = g.handleNonStreamingRequest(w, r, body, canonicalBody, &req, lapi, rapis, requestID, sessionID, keyCursorSession, string(clientFormat))
 	}
 
-	g.db.RecordTrend(lapi.ID)
+	// 趋势统计写库失败不能静默：面板图表会停更，而运维看到的只是一张
+	// 不动的图，找不到原因。请求级错误走 rl（带 request_id 便于关联）。
+	if err := g.db.RecordTrend(lapi.ID); err != nil {
+		reqLog.Warn("gateway", "[METRICS] record trend failed", "error", err.Error())
+	}
 
 	if g.log != nil {
 		latencyMS := int(time.Since(startTime).Milliseconds())
@@ -1264,7 +1279,9 @@ func (g *ProxyGateway) handleStreamingRequest(w http.ResponseWriter, r *http.Req
 			"status", resp.StatusCode, "latency_ms", latencyMs)
 		g.scheduler.RecordRequest(rapi.ID, tokensUsed)
 		// Bug 8.5: record to persistent DB metrics.
-		g.db.RecordRequest(rapi.ID, lapi.ID, resp.StatusCode, latencyMs, tokensUsed)
+		if err := g.db.RecordRequest(rapi.ID, lapi.ID, resp.StatusCode, latencyMs, tokensUsed); err != nil {
+			rl.Warn("gateway", "[METRICS] record request failed", "error", err.Error())
+		}
 
 		if g.notifyService != nil {
 			g.notifyService.PublishAsync("info", fmt.Sprintf("Streaming from %s", rapi.Alias), "Active Route")
@@ -1308,7 +1325,8 @@ func (g *ProxyGateway) handleStreamingRequest(w http.ResponseWriter, r *http.Req
 			if err := converter.Run(); err != nil {
 				rl.Error("gateway", "[ERR] stream convert error", "error", err.Error())
 				// Bug 8.4: drain remaining body to avoid leaking the connection.
-				io.Copy(io.Discard, teeBody)
+				// Already on the convert-error path; a drain error adds nothing.
+				_, _ = io.Copy(io.Discard, teeBody)
 				// If the converter had already flushed one or more data: frames to the
 				// client before erroring, the HTTP response is committed: we CANNOT retry
 				// against another RAPI, otherwise a second stream's message_start/deltas
@@ -1473,7 +1491,9 @@ func (g *ProxyGateway) handleNonStreamingRequest(w http.ResponseWriter, r *http.
 		g.scheduler.RecordRequest(rapi.ID, tokensUsed)
 		g.scheduler.MarkSuccess(rapi.ID)
 		// Bug 8.5: record to persistent DB metrics.
-		g.db.RecordRequest(rapi.ID, lapi.ID, resp.StatusCode, latencyMs, tokensUsed)
+		if err := g.db.RecordRequest(rapi.ID, lapi.ID, resp.StatusCode, latencyMs, tokensUsed); err != nil {
+			rl.Warn("gateway", "[METRICS] record request failed", "error", err.Error())
+		}
 
 		if g.log != nil {
 			// 非流式：TTFT = 总延迟（整包一次返回），除首 token 延迟 = 0。

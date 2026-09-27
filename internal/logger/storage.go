@@ -98,7 +98,8 @@ func (s *LogStorage) InitTables() error {
 		"ALTER TABLE request_logs ADD COLUMN selected_key_id INTEGER DEFAULT 0",
 		"ALTER TABLE request_logs ADD COLUMN selected_platform_id INTEGER DEFAULT 0",
 	} {
-		s.db.Conn().Exec(col) // ignore "duplicate column" errors
+		// 已存在的列会报 "duplicate column" —— 这是预期的（幂等迁移），故意忽略。
+		s.db.Conn().Exec(col) //nolint:errcheck
 	}
 	return nil
 }
