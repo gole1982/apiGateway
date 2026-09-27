@@ -237,6 +237,12 @@ jobs:
     name: Docker image
     needs: [test]
     runs-on: ubuntu-latest
+    # GHCR 推送要 packages: write。缺了就是这次的样子：
+    # "denied: installation not allowed to Create organization package"。
+    # 构建本身能过、push 那一步才挂 —— 首跑之前没人知道。
+    permissions:
+      contents: read
+      packages: write
     # 仅 push 到主分支 / push tag 时构建镜像（PR 阶段不做镜像，节省时间）
     if: github.event_name == 'push' && (startsWith(github.ref, 'refs/heads/') || startsWith(github.ref, 'refs/tags/'))
     steps:
