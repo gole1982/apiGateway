@@ -788,9 +788,9 @@ func (g *ProxyGateway) HandleChatCompletions(w http.ResponseWriter, r *http.Requ
 	}
 
 	if isStream {
-		fallbackUsed, clientStatusCode = g.handleStreamingRequest(w, r, body, canonicalBody, &req, lapi, rapis, requestID, sessionID, keyCursorSession, string(clientFormat))
+		fallbackUsed, clientStatusCode = g.handleStreamingRequest(w, r, body, canonicalBody, &req, lapi, rapis, requestID, keyCursorSession, string(clientFormat))
 	} else {
-		fallbackUsed, clientStatusCode = g.handleNonStreamingRequest(w, r, body, canonicalBody, &req, lapi, rapis, requestID, sessionID, keyCursorSession, string(clientFormat))
+		fallbackUsed, clientStatusCode = g.handleNonStreamingRequest(w, r, body, canonicalBody, &req, lapi, rapis, requestID, keyCursorSession, string(clientFormat))
 	}
 
 	// 趋势统计写库失败不能静默：面板图表会停更，而运维看到的只是一张
@@ -1142,7 +1142,10 @@ func (g *ProxyGateway) handleAllKeysUnavailable(rapi models.RAPIWithPlatform, re
 }
 
 // handleStreamingRequest handles streaming (SSE) requests with full error absorption.
-func (g *ProxyGateway) handleStreamingRequest(w http.ResponseWriter, r *http.Request, originalBody []byte, canonicalBody []byte, req *models.ProxyRequest, lapi *models.LAPI, rapis []models.RAPIWithPlatform, requestID string, sessionID string, keyCursorSession string, clientFormat string) (bool, int) {
+// 注意：签名里没有 sessionID —— 会话轮询只认 keyCursorSession（连接稳定
+// 的 id，未跟踪连接传 "" 由 scheduler 内部退回平台级游标）。之前版本把
+// sessionID 也传进来但从未使用，unparam 抓了出来。
+func (g *ProxyGateway) handleStreamingRequest(w http.ResponseWriter, r *http.Request, originalBody []byte, canonicalBody []byte, req *models.ProxyRequest, lapi *models.LAPI, rapis []models.RAPIWithPlatform, requestID string, keyCursorSession string, clientFormat string) (bool, int) {
 	fallbackUsed := false
 	retryCount := 0
 	estimatedTokens := scheduler.EstimateCost(req)
@@ -1371,7 +1374,7 @@ func (g *ProxyGateway) handleStreamingRequest(w http.ResponseWriter, r *http.Req
 }
 
 // handleNonStreamingRequest handles non-streaming requests with full error absorption.
-func (g *ProxyGateway) handleNonStreamingRequest(w http.ResponseWriter, r *http.Request, originalBody []byte, canonicalBody []byte, req *models.ProxyRequest, lapi *models.LAPI, rapis []models.RAPIWithPlatform, requestID string, sessionID string, keyCursorSession string, clientFormat string) (bool, int) {
+func (g *ProxyGateway) handleNonStreamingRequest(w http.ResponseWriter, r *http.Request, originalBody []byte, canonicalBody []byte, req *models.ProxyRequest, lapi *models.LAPI, rapis []models.RAPIWithPlatform, requestID string, keyCursorSession string, clientFormat string) (bool, int) {
 	fallbackUsed := false
 	retryCount := 0
 	estimatedTokens := scheduler.EstimateCost(req)

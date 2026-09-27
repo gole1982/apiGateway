@@ -49,9 +49,9 @@ type UnreadItem struct {
 	EntityID  int64     `json:"entity_id,omitempty"`
 	Title     string    `json:"title"`
 	Detail    string    `json:"detail,omitempty"`
-	Count     int       `json:"count"`            // 同状态合并次数（1 = 首次）
-	FirstAt   time.Time `json:"first_at"`         // 该状态首次出现时刻
-	CreatedAt time.Time `json:"created_at"`       // 最近一次出现时刻
+	Count     int       `json:"count"`      // 同状态合并次数（1 = 首次）
+	FirstAt   time.Time `json:"first_at"`   // 该状态首次出现时刻
+	CreatedAt time.Time `json:"created_at"` // 最近一次出现时刻
 }
 
 // maxUnreadItems caps the in-memory feed so a runaway stream of events can not
