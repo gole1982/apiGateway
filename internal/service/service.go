@@ -120,14 +120,6 @@ func recordUnread(menu, kind string, entityID int64, title, detail string) {
 	}
 }
 
-// platformName returns a platform's display name, falling back to its id.
-func platformName(pid int64) string {
-	if p, err := store.A().GetPlatformByID(pid); err == nil && p != nil {
-		return p.Name
-	}
-	return fmt.Sprintf("%d", pid)
-}
-
 // parseKeyIDs parses a comma-separated RAPI key_ids whitelist into a slice.
 func parseKeyIDs(s string) []int64 {
 	parts := strings.Split(s, ",")
@@ -137,9 +129,8 @@ func parseKeyIDs(s string) []int64 {
 		if p == "" {
 			continue
 		}
-		var id int64
-		fmt.Sscanf(p, "%d", &id)
-		if id > 0 {
+		// 非法片段直接丢弃。parseID 比 Sscanf 严格："12abc" 不算 12。
+		if id, ok := parseID(p); ok && id > 0 {
 			out = append(out, id)
 		}
 	}
@@ -250,7 +241,7 @@ func (s *Service) Run() error {
 
 	sessionTracker = logger.NewSessionTracker(logInstance)
 
-	schedulerCfg := scheduler.ConfigFromAppConfig(cfg.CooldownSec, cfg.MaxCooldownSec, cfg.RequestMaxWaitSec, cfg.BillingCooldownSec, cfg.CapabilityBlockSec)
+	schedulerCfg := scheduler.ConfigFromAppConfig(cfg.CooldownSec, cfg.MaxCooldownSec, cfg.RequestMaxWaitSec, cfg.BillingCooldownSec, cfg.CapabilityBlockSec, cfg.KeyCursorScope)
 	proxyGateway = gateway.NewProxyGatewayWithConfig(notifySvc, logInstance, sessionTracker, cfg.DialTimeoutSec, cfg.ResponseTimeoutSec, schedulerCfg)
 
 	proxyAddr := fmt.Sprintf("0.0.0.0:%d", cfg.ProxyPort)
@@ -320,9 +311,27 @@ func (s *Service) Run() error {
 		WriteTimeout: 0,
 		IdleTimeout:  120 * time.Second,
 		ConnState:    sessionTracker.OnConnState,
+		// 会话 id 入 context 的唯一通道（见 logger.ConnContext 注释）。
+		// 缺了它 InjectSessionID 永远 stable=false，会话级 key 轮询不生效。
+		ConnContext: sessionTracker.ConnContext,
 	}
 
-	webAddr := fmt.Sprintf("127.0.0.1:%d", cfg.WebPort)
+	// 面板监听地址。默认 127.0.0.1（只给本机，暴露面最小）。
+	//
+	// 容器里必须绑 0.0.0.0：Docker 的端口映射是转发到容器网卡的，映射到容器内
+	// 的 127.0.0.1 上，宿主机/局域网都访问不到面板 —— 症状是"代理 13579 正常
+	// 但面板打不开"。故检测到容器（/.dockerenv 或 cgroup 提到 docker）时改绑
+	// 全网卡。APIGATEWAY_WEB_HOST 可显式覆盖（想让容器内面板只走回环时用）。
+	webHost := strings.TrimSpace(os.Getenv("APIGATEWAY_WEB_HOST"))
+	if webHost == "" {
+		webHost = "127.0.0.1"
+		if isContainerEnv() {
+			webHost = "0.0.0.0"
+			logger.DefaultConsole().Info("service",
+				"[STARTUP] container detected, dashboard binds 0.0.0.0 (override with APIGATEWAY_WEB_HOST)")
+		}
+	}
+	webAddr := fmt.Sprintf("%s:%d", webHost, cfg.WebPort)
 	webServer = &http.Server{
 		Addr:        webAddr,
 		Handler:     createWebHandler(),
@@ -358,7 +367,10 @@ func (s *Service) Run() error {
 		ticker := time.NewTicker(1 * time.Hour)
 		defer ticker.Stop()
 		for range ticker.C {
-			db.Get().CleanupOldTrends(120)
+			if err := db.Get().CleanupOldTrends(120); err != nil {
+				logger.DefaultConsole().Warn("service", "[TRENDS] cleanup old trends failed",
+					"error", err.Error())
+			}
 		}
 	}()
 
@@ -473,8 +485,16 @@ func (s *Service) Run() error {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 
-	httpServer.Shutdown(shutdownCtx)
-	webServer.Shutdown(shutdownCtx)
+	// Shutdown errors mean connections didn't drain in time — worth one
+	// log line, not a startup-blocking failure (we're already stopping).
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		logger.DefaultConsole().Warn("service", "proxy server shutdown failed",
+			"error", err.Error())
+	}
+	if err := webServer.Shutdown(shutdownCtx); err != nil {
+		logger.DefaultConsole().Warn("service", "web server shutdown failed",
+			"error", err.Error())
+	}
 
 	// Flush in-flight request logs so the last requests before shutdown are not lost.
 	if logInstance != nil {
@@ -502,6 +522,91 @@ func (s *Service) Stop() error {
 	}
 
 	return nil
+}
+
+// discoverUpstreamModels 拉取上游模型列表并解析出模型名（OpenAI /v1/models
+// 与 Google 原生接口双分支）。返回 (names, errStatus, err)：成功 err==nil；
+// 失败时 errStatus 是应返回给前端的 HTTP 状态（502 本地故障 / 上游原状态码）。
+// 无 DB 依赖，可单测（见 discover_test.go）。
+func discoverUpstreamModels(ctx context.Context, baseURL, fetchToken string) ([]string, int, error) {
+	client := &http.Client{Timeout: 15 * time.Second}
+	// Detect whether this is a real Google Generative Language API endpoint.
+	// Google uses /v1beta/models?key=..., the x-goog-api-key header, and returns
+	// {models:[{name:"models/..."}]} — completely different from OpenAI's
+	// /v1/models + Bearer + {data:[{id}]}. Branching here is required; the OpenAI
+	// path returns 401/404 against the genuine Google API.
+	googleNative := apiformat.IsGoogleNativeBaseURL(baseURL)
+
+	var modelsURL string
+	httpReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, "", nil)
+	if googleNative {
+		modelsURL = apiformat.BuildGoogleListModelsURL(baseURL, fetchToken)
+		httpReq.Header.Set(apiformat.GoogleAPIKeyHeader, fetchToken) // Google API key auth (not Bearer).
+	} else {
+		// OpenAI-compatible: normalise base URL and call /v1/models.
+		modelsURL = apiformat.NormalizeModelsBaseURL(baseURL) + "/v1/models"
+		httpReq.Header.Set("Authorization", "Bearer "+fetchToken)
+	}
+	httpReq.URL, _ = url.Parse(modelsURL)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	logger.DefaultConsole().Info("service", "[FETCH] fetching models", "url", modelsURL)
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return nil, 502, fmt.Errorf("fetch models failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, resp.StatusCode, fmt.Errorf("upstream returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	var modelNames []string
+	if googleNative {
+		bodyBytes, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return nil, 502, fmt.Errorf("read models response failed: %v", readErr)
+		}
+		modelNames = apiformat.ParseGoogleListModelsResponse(bodyBytes)
+		if modelNames == nil {
+			return nil, 502, fmt.Errorf("parse google models response failed")
+		}
+	} else {
+		var result struct {
+			Data []struct {
+				ID string `json:"id"`
+			} `json:"data"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			return nil, 502, fmt.Errorf("parse models response failed: %v", err)
+		}
+		modelNames = make([]string, 0, len(result.Data))
+		for _, m := range result.Data {
+			if m.ID != "" {
+				modelNames = append(modelNames, m.ID)
+			}
+		}
+	}
+	return modelNames, 0, nil
+}
+
+// isContainerEnv 判断是否跑在容器里。两种信号任一命中即算：
+//   - /.dockerenv：Docker 官方镜像（含 compose）会在根目录放这个标记文件；
+//   - /proc/1/cgroup 含 "docker"：containerd / 部分编排器没有该标记文件。
+//
+// 用来决定面板是否绑 0.0.0.0（见 Run 里的注释）。
+func isContainerEnv() bool {
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return true
+	}
+	if b, err := os.ReadFile("/proc/1/cgroup"); err == nil {
+		s := strings.ToLower(string(b))
+		if strings.Contains(s, "docker") || strings.Contains(s, "containerd") {
+			return true
+		}
+	}
+	return false
 }
 
 func createWebHandler() http.Handler {
@@ -636,8 +741,13 @@ func createWebHandler() http.Handler {
 			// bypasses the enabled/available guard (the model may still be
 			// "effective") and always cascades (removes LAPI refs + metrics).
 			sync := r.URL.Query().Get("sync") == "true"
-			var rapiID int64
-			fmt.Sscanf(id, "%d", &rapiID)
+			// 非法 id 答 400 而不是拿着 id=0 去查库再答 404 —— "不存在"
+			// 会误导调用方以为 id 合法只是没这条记录。
+			rapiID, ok := parseID(id)
+			if !ok {
+				writeJSONError(w, 400, fmt.Errorf("invalid id"))
+				return
+			}
 
 			// State-based delete: active RAPIs cannot be deleted
 			rapiInfo, err := store.A().GetRAPIByID(rapiID)
@@ -834,10 +944,9 @@ func createWebHandler() http.Handler {
 		case http.MethodDelete:
 			keyIDStr := r.URL.Query().Get("key_id")
 			rapiIDStr := r.URL.Query().Get("rapi_id")
-			var keyID, rapiID int64
-			fmt.Sscanf(keyIDStr, "%d", &keyID)
-			fmt.Sscanf(rapiIDStr, "%d", &rapiID)
-			if keyID == 0 || rapiID == 0 {
+			keyID, keyOK := parseID(keyIDStr)
+			rapiID, rapiOK := parseID(rapiIDStr)
+			if !keyOK || !rapiOK || keyID == 0 || rapiID == 0 {
 				http.Error(w, `{"error":"missing key_id or rapi_id"}`, 400)
 				return
 			}
@@ -877,11 +986,18 @@ func createWebHandler() http.Handler {
 		// Sync all RAPIs for this platform: disable+invalidate or enable+revalidate.
 		rapis, _ := store.A().GetRAPIsByPlatform(req.ID)
 		for _, r := range rapis {
+			// 级联开关：中途失败直接 500 而不是继续把剩下的一半也改了还报成功。
 			if !req.Enabled {
-				store.A().SetRAPIEnabled(r.ID, false)
+				if err := store.A().SetRAPIEnabled(r.ID, false); err != nil {
+					writeJSONError(w, 500, err)
+					return
+				}
 				proxyGateway.InvalidateRAPI(r.ID)
 			} else {
-				store.A().SetRAPIEnabled(r.ID, true)
+				if err := store.A().SetRAPIEnabled(r.ID, true); err != nil {
+					writeJSONError(w, 500, err)
+					return
+				}
 				proxyGateway.RevalidateRAPI(r.ID)
 			}
 		}
@@ -960,7 +1076,12 @@ func createWebHandler() http.Handler {
 			return
 		}
 		if len(supported) > 0 {
-			store.A().UpdateRAPIFormats(req.ID, apiformat.FormatsToJSON(supported))
+			// 探测出的协议 support 已返回给调用方，这里落库失败不能静默：
+			// 否则面板显示"支持"而网关行为还是旧的。
+			if err := store.A().UpdateRAPIFormats(req.ID, apiformat.FormatsToJSON(supported)); err != nil {
+				writeJSONError(w, 500, err)
+				return
+			}
 		}
 		proxyGateway.RevalidateRAPI(req.ID)
 		logger.DefaultConsole().Info("service", "[API] restoreRAPI probed ok",
@@ -1039,7 +1160,8 @@ func createWebHandler() http.Handler {
 			return
 		}
 		defer resp.Body.Close()
-		io.ReadAll(resp.Body) // drain
+		// Drain for connection reuse; only the status code matters here.
+		_, _ = io.ReadAll(resp.Body)
 
 		if resp.StatusCode != 200 {
 			writeJSONError(w, 502, fmt.Errorf("平台返回 %d，恢复失败", resp.StatusCode))
@@ -1053,7 +1175,10 @@ func createWebHandler() http.Handler {
 		pe.OnDetectSuccess()
 		rapis, _ := store.A().GetRAPIsByPlatform(req.ID)
 		for _, rapi := range rapis {
-			db.Get().SetRAPIUnavailableWithReason(rapi.ID, true, "")
+			if err := db.Get().SetRAPIUnavailableWithReason(rapi.ID, true, ""); err != nil {
+				writeJSONError(w, 500, err)
+				return
+			}
 			proxyGateway.RevalidateRAPI(rapi.ID)
 		}
 		logger.DefaultConsole().Info("service", "[RESTORE] platform restored",
@@ -1066,9 +1191,8 @@ func createWebHandler() http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 
 		id := r.URL.Query().Get("id")
-		var rapiID int64
-		fmt.Sscanf(id, "%d", &rapiID)
-		if rapiID == 0 {
+		rapiID, ok := parseID(id)
+		if !ok || rapiID == 0 {
 			http.Error(w, `{"error":"missing id"}`, 400)
 			return
 		}
@@ -1199,8 +1323,11 @@ func createWebHandler() http.Handler {
 		case http.MethodDelete:
 			id := r.URL.Query().Get("id")
 			force := r.URL.Query().Get("force") == "true"
-			var pID int64
-			fmt.Sscanf(id, "%d", &pID)
+			pID, ok := parseID(id)
+			if !ok {
+				writeJSONError(w, 400, fmt.Errorf("invalid id"))
+				return
+			}
 
 			// State-based delete: active platforms cannot be deleted
 			platform, err := store.A().GetPlatformByID(pID)
@@ -1339,91 +1466,49 @@ func createWebHandler() http.Handler {
 		}
 		var req struct {
 			ID int64 `json:"id"`
+			// 一次性发现（新增向导里的新平台，尚未入库）：直接给 base_url + token
+			// 探测，不读 DB。id 与 base_url 二选一，id 优先。
+			BaseURL string `json:"base_url"`
+			Token   string `json:"token"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, `{"error":"invalid json"}`, 400)
 			return
 		}
-		platform, err := store.A().GetPlatformByID(req.ID)
-		if err != nil {
-			writeJSONError(w, 404, fmt.Errorf("platform not found"))
-			return
-		}
-		// Task 19: Use the first (index=0) PlatformKey token instead of platform.Token.
-		client := &http.Client{Timeout: 15 * time.Second}
-		fetchToken := platform.Token
-		if keys, err := store.A().GetPlatformKeys(platform.ID); err == nil && len(keys) > 0 {
-			fetchToken = keys[0].Token
-		}
-
-		// Detect whether this is a real Google Generative Language API endpoint.
-		// Google uses /v1beta/models?key=..., the x-goog-api-key header, and returns
-		// {models:[{name:"models/..."}]} — completely different from OpenAI's
-		// /v1/models + Bearer + {data:[{id}]}. Branching here is required; the OpenAI
-		// path returns 401/404 against the genuine Google API.
-		googleNative := apiformat.IsGoogleNativeBaseURL(platform.BaseURL)
-
-		var modelsURL string
-		httpReq, _ := http.NewRequestWithContext(r.Context(), http.MethodGet, "", nil)
-		if googleNative {
-			modelsURL = apiformat.BuildGoogleListModelsURL(platform.BaseURL, fetchToken)
-			httpReq.Header.Set(apiformat.GoogleAPIKeyHeader, fetchToken) // Google API key auth (not Bearer).
-		} else {
-			// OpenAI-compatible: normalise base URL and call /v1/models.
-			modelsURL = apiformat.NormalizeModelsBaseURL(platform.BaseURL) + "/v1/models"
-			httpReq.Header.Set("Authorization", "Bearer "+fetchToken)
-		}
-		httpReq.URL, _ = url.Parse(modelsURL)
-		httpReq.Header.Set("Content-Type", "application/json")
-
-		logger.DefaultConsole().Info("service", "[FETCH] fetching models", "url", modelsURL)
-		resp, err := client.Do(httpReq)
-		if err != nil {
-			writeJSONError(w, 502, fmt.Errorf("fetch models failed: %v", err))
-			return
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != 200 {
-			body, _ := io.ReadAll(resp.Body)
-			writeJSONError(w, resp.StatusCode, fmt.Errorf("upstream returned %d: %s", resp.StatusCode, string(body)))
-			return
-		}
-
-		var modelNames []string
-		if googleNative {
-			bodyBytes, readErr := io.ReadAll(resp.Body)
-			if readErr != nil {
-				writeJSONError(w, 502, fmt.Errorf("read models response failed: %v", readErr))
+		var baseURL, fetchToken, platName string
+		if req.ID != 0 {
+			platform, err := store.A().GetPlatformByID(req.ID)
+			if err != nil {
+				writeJSONError(w, 404, fmt.Errorf("platform not found"))
 				return
 			}
-			modelNames = apiformat.ParseGoogleListModelsResponse(bodyBytes)
-			if modelNames == nil {
-				writeJSONError(w, 502, fmt.Errorf("parse google models response failed"))
-				return
+			baseURL, platName = platform.BaseURL, platform.Name
+			// Task 19: Use the first (index=0) PlatformKey token instead of platform.Token.
+			fetchToken = platform.Token
+			if keys, err := store.A().GetPlatformKeys(platform.ID); err == nil && len(keys) > 0 {
+				fetchToken = keys[0].Token
 			}
 		} else {
-			var result struct {
-				Data []struct {
-					ID string `json:"id"`
-				} `json:"data"`
-			}
-			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-				writeJSONError(w, 502, fmt.Errorf("parse models response failed: %v", err))
+			baseURL = strings.TrimSpace(req.BaseURL)
+			fetchToken = req.Token
+			platName = baseURL
+			if baseURL == "" || fetchToken == "" {
+				writeJSONError(w, http.StatusBadRequest,
+					errors.New("一次性发现需要 base_url 与 token（请在向导第①步填地址、第②步填密钥）"))
 				return
 			}
-			modelNames = make([]string, 0, len(result.Data))
-			for _, m := range result.Data {
-				if m.ID != "" {
-					modelNames = append(modelNames, m.ID)
-				}
-			}
+		}
+
+		modelNames, errStatus, ferr := discoverUpstreamModels(r.Context(), baseURL, fetchToken)
+		if ferr != nil {
+			writeJSONError(w, errStatus, ferr)
+			return
 		}
 
 		sort.Strings(modelNames)
 
 		logger.DefaultConsole().Info("service", "[FETCH] models fetched",
-			"count", len(modelNames), "platform", platform.Name)
+			"count", len(modelNames), "platform", platName)
 		resp2, _ := json.Marshal(map[string]interface{}{
 			"success": true,
 			"models":  modelNames,
@@ -1472,7 +1557,7 @@ func createWebHandler() http.Handler {
 		// (important for aggregators with non-standard paths).
 		logger.DefaultConsole().Info("service", "[BATCH] detecting formats for platform", "platform", platform.Name)
 		// Use the first usable platform key (not platform.Token, which may be empty
-		// when keys live in platform_keys) so format detection exercises the same
+		// when keys live in credential) so format detection exercises the same
 		// credentials as real requests.
 		detectResults := apiformat.DetectFormats(r.Context(), platform.BaseURL, req.Models[0], platformKeyToken(req.PlatformID, platform.Token), nil)
 		var supportedFormats []apiformat.APIFormat
@@ -1560,9 +1645,8 @@ func createWebHandler() http.Handler {
 			return
 		}
 
-		var platformID int64
-		fmt.Sscanf(parts[0], "%d", &platformID)
-		if platformID == 0 {
+		platformID, ok := parseID(parts[0])
+		if !ok || platformID == 0 {
 			http.Error(w, `{"error":"invalid platform id"}`, 400)
 			return
 		}
@@ -1616,8 +1700,11 @@ func createWebHandler() http.Handler {
 			// without replacing the whole list). An empty token keeps the stored one,
 			// so the client never has to echo the plaintext secret back.
 			if keyIDStr := r.URL.Query().Get("key_id"); keyIDStr != "" {
-				var kid int64
-				fmt.Sscanf(keyIDStr, "%d", &kid)
+				kid, ok := parseID(keyIDStr)
+				if !ok {
+					http.Error(w, `{"error":"invalid key_id"}`, 400)
+					return
+				}
 				var k models.PlatformKey
 				if err := json.NewDecoder(r.Body).Decode(&k); err != nil {
 					http.Error(w, `{"error":"invalid json"}`, 400)
@@ -1713,9 +1800,8 @@ func createWebHandler() http.Handler {
 
 		case http.MethodDelete:
 			keyID := r.URL.Query().Get("key_id")
-			var kid int64
-			fmt.Sscanf(keyID, "%d", &kid)
-			if kid == 0 {
+			kid, ok := parseID(keyID)
+			if !ok || kid == 0 {
 				http.Error(w, `{"error":"missing key_id"}`, 400)
 				return
 			}
@@ -1842,8 +1928,11 @@ func createWebHandler() http.Handler {
 
 		case http.MethodDelete:
 			id := r.URL.Query().Get("id")
-			var lapiID int64
-			fmt.Sscanf(id, "%d", &lapiID)
+			lapiID, ok := parseID(id)
+			if !ok {
+				writeJSONError(w, 400, fmt.Errorf("invalid id"))
+				return
+			}
 
 			// State-based delete: active LAPIs cannot be deleted
 			lapiInfo, err := store.A().GetLAPIByID(lapiID)
@@ -1898,8 +1987,13 @@ func createWebHandler() http.Handler {
 			return
 		}
 
-		var lapiID int64
-		fmt.Sscanf(parts[0], "%d", &lapiID)
+		// 路径首段非数字时答 400：之前会拿着 lapiID=0 继续走，
+		// 在 GET 分支里变成 500（GetRAPIsForLAPI(0) 的错误直接 500）。
+		lapiID, ok := parseID(parts[0])
+		if !ok {
+			http.Error(w, `{"error":"invalid path"}`, 400)
+			return
+		}
 
 		if strings.Contains(r.URL.Path, "/rapis") {
 			if r.Method == http.MethodGet {
@@ -1977,7 +2071,10 @@ func createWebHandler() http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		days := 7
 		if d := r.URL.Query().Get("days"); d != "" {
-			fmt.Sscanf(d, "%d", &days)
+			// 非法值保留默认 7（面板日期框只会发数字，这里是容错不是校验）。
+			if v, ok := parseID(d); ok {
+				days = int(v)
+			}
 		}
 		buckets, err := db.Get().GetHourlyDistribution(days)
 		if err != nil {
@@ -1999,7 +2096,10 @@ func createWebHandler() http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		days := 7
 		if d := r.URL.Query().Get("days"); d != "" {
-			fmt.Sscanf(d, "%d", &days)
+			// 非法值保留默认 7（同 /api/analytics/hourly）。
+			if v, ok := parseID(d); ok {
+				days = int(v)
+			}
 		}
 		trends, err := db.Get().GetDailyTokenTrend(days)
 		if err != nil {
@@ -2020,7 +2120,10 @@ func createWebHandler() http.Handler {
 		// 获取刷新间隔参数（默认10秒）
 		refreshInterval := 10
 		if intervalStr := r.URL.Query().Get("interval"); intervalStr != "" {
-			fmt.Sscanf(intervalStr, "%d", &refreshInterval)
+			// 非法值保留默认 10（面板只会发数字，这里是容错不是校验）。
+			if v, ok := parseID(intervalStr); ok {
+				refreshInterval = int(v)
+			}
 		}
 
 		// 计算时间窗口：当前时间往前推刷新间隔
@@ -2244,9 +2347,8 @@ func createWebHandler() http.Handler {
 			return
 		}
 		idStr := strings.TrimPrefix(r.URL.Path, "/api/platforms/peek-token/")
-		var platformID int64
-		fmt.Sscanf(idStr, "%d", &platformID)
-		if platformID == 0 {
+		platformID, ok := parseID(idStr)
+		if !ok || platformID == 0 {
 			http.Error(w, `{"error":"invalid platform id"}`, 400)
 			return
 		}
@@ -2541,7 +2643,13 @@ func restorePlatformAvailability(platformID int64) {
 		for _, ra := range rapis {
 			// Clear persisted unavailable state (written by the gateway when all keys
 			// were dead) so the RAPI re-enters GetEnabledRAPIsForLAPI immediately.
-			db.Get().SetRAPIUnavailableWithReason(ra.ID, true, "")
+			// Best-effort in background: no caller to report to, so failures
+			// go to the process log instead of vanishing.
+			if err := db.Get().SetRAPIUnavailableWithReason(ra.ID, true, ""); err != nil {
+				logger.DefaultConsole().Warn("service", "[KEY] clear unavailable state failed",
+					"rapi_id", ra.ID, "error", err.Error())
+				continue
+			}
 			proxyGateway.RevalidateRAPI(ra.ID)
 		}
 	}
@@ -2552,9 +2660,8 @@ func restorePlatformAvailability(platformID int64) {
 // handleKeyProbe tests a specific platform key by calling /v1/models (or /v1beta/models
 // for Google native). On success: clears key failure_type. On failure: keeps failure_type=2.
 func handleKeyProbe(w http.ResponseWriter, r *http.Request, platformID int64, keyIDStr string) {
-	var keyID int64
-	fmt.Sscanf(keyIDStr, "%d", &keyID)
-	if keyID == 0 {
+	keyID, ok := parseID(keyIDStr)
+	if !ok || keyID == 0 {
 		writeJSONError(w, 400, fmt.Errorf("invalid key id"))
 		return
 	}

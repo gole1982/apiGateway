@@ -17,7 +17,9 @@ func main() {
 	go func() {
 		<-sigCh
 		slog.Info("Received termination signal, shutting down...", "component", "main")
-		svc.Stop()
+		if err := svc.Stop(); err != nil {
+			slog.Warn("Shutdown did not complete cleanly", "component", "main", "error", err.Error())
+		}
 	}()
 
 	if err := svc.Run(); err != nil {

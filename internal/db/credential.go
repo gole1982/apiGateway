@@ -18,6 +18,9 @@ import (
 )
 
 // credentialSelectCols 是 credential 表的标准投影列（顺序与 scanCredentialRows 对应）。
+// G101 是把常量名里的 "token" 当成硬编码凭据，实际这是列名清单。
+//
+//nolint:gosec
 const credentialSelectCols = `id, platform_id, sort_order, token, label, enabled,
 	failure_type, failure_reason, failed_at, created_at, updated_at, expires_at, is_free`
 
@@ -624,7 +627,7 @@ func (db *DB) MarkKeyTemporaryFailure(keyID int64, reason string) error {
 	return err
 }
 
-// ClearKeyFailure resets failure_type=0, reason='', failed_at=NULL.
+// ClearKeyFailure resets failure_type=0, failure_reason to empty, failed_at=NULL.
 // Called on successful request, or after successful probe.
 func (db *DB) ClearKeyFailure(keyID int64) error {
 	db.mu.Lock()

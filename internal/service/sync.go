@@ -40,10 +40,10 @@ var (
 	syncCenterKey  []byte
 	syncSourceURL  string
 	syncConfigured bool
-	syncStarted    bool           // 轮询 goroutine 是否已启动（热激活复用）
+	syncStarted    bool            // 轮询 goroutine 是否已启动（热激活复用）
 	syncStopCh     <-chan struct{} // Run 启动时记录，热激活启动轮询用
-	syncPollSec    int            // 轮询间隔（热激活沿用）
-	manageMode     atomic.Bool    // 管理模式：定义类写直写中心，只读守卫放行
+	syncPollSec    int             // 轮询间隔（热激活沿用）
+	manageMode     atomic.Bool     // 管理模式：定义类写直写中心，只读守卫放行
 )
 
 // syncSnapshot 在读锁内取同步配置的当前快照，供 syncOnce / 状态接口使用——
@@ -54,7 +54,7 @@ func syncSnapshot() (client *bundle.Client, centerKey []byte, sourceURL string, 
 	return syncClient, syncCenterKey, syncSourceURL, syncConfigured
 }
 
-// startupLocalCounts 是网关启动那一刻本地 SQLite 5 张定义表的行数快照，
+// startupLocalCounts 是网关启动那一刻本地 SQLite 6 张定义表的行数快照，
 // 用于仪表盘「中心连接信息」卡的「启动以来变化量」列（当前本地 − 启动快照）。
 // 在 service.Run 里 db.Init 之后捕获一次；db.Get() 在 manage 模式下仍是本地
 // SQLite（运行时读一律走本地，store 切换只影响定义类 CRUD 写）。
@@ -193,12 +193,14 @@ func syncOnce(force bool) error {
 	logger.DefaultConsole().Info("service", "[SYNC] applied new config",
 		"version", env.Version,
 		"platforms", len(env.Bundle.Platforms),
-		"keys", len(env.Bundle.PlatformKeys),
+		"credentials", len(env.Bundle.Credentials),
 		"rapis", len(env.Bundle.RAPIs),
-		"lapis", len(env.Bundle.LAPIs))
+		"lapis", len(env.Bundle.LAPIs),
+		"bindings", len(env.Bundle.Bindings))
 	sbSystemLog("info", "已应用新配置 v"+itoa(int(env.Version))+
-		"（平台×"+itoa(len(env.Bundle.Platforms))+" / 密钥×"+itoa(len(env.Bundle.PlatformKeys))+
-		" / 模型×"+itoa(len(env.Bundle.RAPIs))+" / 接口×"+itoa(len(env.Bundle.LAPIs))+"）")
+		"（平台×"+itoa(len(env.Bundle.Platforms))+" / 凭据×"+itoa(len(env.Bundle.Credentials))+
+		" / 模型×"+itoa(len(env.Bundle.RAPIs))+" / 接口×"+itoa(len(env.Bundle.LAPIs))+
+		" / 绑定×"+itoa(len(env.Bundle.Bindings))+"）")
 	return nil
 }
 
@@ -214,26 +216,90 @@ func pullMode() string {
 // localTableCounts 统计本地 SQLite 5 张定义表的当前行数。
 // 一律走 db.Get()（本地），绝不走 store.A()——manage 模式下 store 是中心库，
 // 用 store.A() 会把中心行数当成本地，使仪表盘「中心 vs 本地」对比失去意义。
+// centerDefinitionTables 是中心 6 张定义表的规范表名。三个计数源必须用
+// 同一套键，前端三列（中心/本地/启动快照）共用一个表名数组取数：
+//   - fillSBTables（sb-config 卡中心列）：按此表名逐个 REST 查数；
+//   - handleSyncCenter tables（sync 卡中心列）：按此表名从 bundle 取数；
+//   - localTableCounters（两卡的本地列 + 启动快照）：本地 SQLite 同名表。
+//
+// 2026-09-26 事故：三处各写各的字面量（platform_keys 旧名、bundle 复数键
+// credentials/bindings），面板密钥行显示"—"、推送 toast 显示 0，而全部单测
+// 全绿 —— 因为 service 包覆盖率仅 1.8%，根本没覆盖到接线处。
+// TestDefinitionTableKeysConsistent 把"三处一致"锁死，此后加表只改这一处。
+var centerDefinitionTables = []string{
+	"platform", "credential", "endpoint_credential",
+	"rapi", "lapi", "lapi_rapi_order",
+}
+
+// bundleTableCount 按规范表名从 bundle 取行数。switch 显式列出全部 6 张表，
+// 未知表名返回 -1（调用方跳过），而不是静默计 0 —— 拼错表名时 0 会伪装成
+// "空表"，-1 会在面板上暴露为缺失。
+func bundleTableCount(b *bundle.Bundle, table string) int {
+	if b == nil {
+		return -1
+	}
+	switch table {
+	case "platform":
+		return len(b.Platforms)
+	case "credential":
+		return len(b.Credentials)
+	case "endpoint_credential":
+		return len(b.Bindings)
+	case "rapi":
+		return len(b.RAPIs)
+	case "lapi":
+		return len(b.LAPIs)
+	case "lapi_rapi_order":
+		return len(b.LAPIRapiOrder)
+	}
+	return -1
+}
+
+// localTableCounter 把本地计数键与取值函数绑在一起。键集合可独立断言
+// （TestDefinitionTableKeysConsistent），无需 DB；取值失败时跳过该键，
+// 与旧行为一致（前端把缺失渲染为"—"）。
+type localTableCounter struct {
+	key   string
+	count func(d *db.DB) (int, bool)
+}
+
+var localTableCounters = []localTableCounter{
+	{"platform", func(d *db.DB) (int, bool) {
+		ps, err := d.GetPlatforms()
+		return len(ps), err == nil
+	}},
+	{"credential", func(d *db.DB) (int, bool) {
+		ks, err := d.GetAllPlatformKeys()
+		return len(ks), err == nil
+	}},
+	{"endpoint_credential", func(d *db.DB) (int, bool) {
+		bs, err := d.GetAllEndpointCredentials()
+		return len(bs), err == nil
+	}},
+	{"rapi", func(d *db.DB) (int, bool) {
+		rs, err := d.GetRAPIs()
+		return len(rs), err == nil
+	}},
+	{"lapi", func(d *db.DB) (int, bool) {
+		ls, err := d.GetLAPIs()
+		return len(ls), err == nil
+	}},
+	{"lapi_rapi_order", func(d *db.DB) (int, bool) {
+		os, err := d.GetAllLAPIRAPIOrders()
+		return len(os), err == nil
+	}},
+}
+
 func localTableCounts() map[string]int {
 	d := db.Get()
 	if d == nil {
 		return map[string]int{}
 	}
 	out := map[string]int{}
-	if ps, err := d.GetPlatforms(); err == nil {
-		out["platform"] = len(ps)
-	}
-	if ks, err := d.GetAllPlatformKeys(); err == nil {
-		out["platform_keys"] = len(ks)
-	}
-	if rs, err := d.GetRAPIs(); err == nil {
-		out["rapi"] = len(rs)
-	}
-	if ls, err := d.GetLAPIs(); err == nil {
-		out["lapi"] = len(ls)
-	}
-	if os, err := d.GetAllLAPIRAPIOrders(); err == nil {
-		out["lapi_rapi_order"] = len(os)
+	for _, c := range localTableCounters {
+		if n, ok := c.count(d); ok {
+			out[c.key] = n
+		}
 	}
 	return out
 }
@@ -370,13 +436,14 @@ func handleSyncCenter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out["connected"] = true
-	out["tables"] = map[string]int{
-		"platform":        len(env.Bundle.Platforms),
-		"platform_keys":   len(env.Bundle.PlatformKeys),
-		"rapi":            len(env.Bundle.RAPIs),
-		"lapi":            len(env.Bundle.LAPIs),
-		"lapi_rapi_order": len(env.Bundle.LAPIRapiOrder),
+	// 中心列的键与 centerDefinitionTables 同源（见该变量注释里的事故）。
+	tables := map[string]int{}
+	for _, t := range centerDefinitionTables {
+		if n := bundleTableCount(&env.Bundle, t); n >= 0 {
+			tables[t] = n
+		}
 	}
+	out["tables"] = tables
 
 	st, err := db.Get().GetSyncState()
 	if err != nil {
@@ -546,7 +613,8 @@ func handleSyncPush(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sbSystemLog("info", "本地→中心推送完成：平台×"+itoa(counts["platform"])+
-		" / 密钥×"+itoa(counts["platform_keys"])+" / 模型×"+itoa(counts["rapi"])+
+		" / 凭据×"+itoa(counts["credential"])+" / 模型×"+itoa(counts["rapi"])+
+		" / 绑定×"+itoa(counts["endpoint_credential"])+
 		" / 接口×"+itoa(counts["lapi"])+" / 路由链×"+itoa(counts["lapi_rapi_order"]))
 	// 拉回刷新本地镜像：让本地 id 与中心对齐、应用中心版本号。
 	_ = syncOnce(true)
@@ -617,4 +685,3 @@ func activateCenter(sbURL, sbKey, centerKeyHex string) (string, error) {
 	logger.DefaultConsole().Info("service", "[SYNC] proxy mode hot-activated", "center", base)
 	return role, nil
 }
-

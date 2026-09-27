@@ -376,9 +376,18 @@ func (g *ProxyGateway) recoverRAPIs(ctx context.Context, unhealthy []models.RAPI
 			}
 
 			// Recovered: clear unavailable state, refresh formats, revalidate.
-			g.db.SetRAPIUnavailableWithReason(r.ID, true, "")
+			// Best-effort inside a recovery worker: persistence failures are
+			// logged, not returned (the worker has no caller to report to),
+			// and the in-memory revalidate below still runs.
+			if err := g.db.SetRAPIUnavailableWithReason(r.ID, true, ""); err != nil {
+				logger.DefaultConsole().Warn("gateway", "[RECOVER] clear unavailable state failed",
+					"rapi", r.Alias, "rapi_id", r.ID, "error", err.Error())
+			}
 			if len(supported) > 0 {
-				g.db.UpdateRAPIFormats(r.ID, apiformat.FormatsToJSON(supported))
+				if err := g.db.UpdateRAPIFormats(r.ID, apiformat.FormatsToJSON(supported)); err != nil {
+					logger.DefaultConsole().Warn("gateway", "[RECOVER] refresh formats failed",
+						"rapi", r.Alias, "rapi_id", r.ID, "error", err.Error())
+				}
 			}
 			g.RevalidateRAPI(r.ID)
 			mu.Lock()
@@ -456,7 +465,9 @@ func (g *ProxyGateway) probePlatform(ctx context.Context, p models.Platform, cli
 		return false, err.Error()
 	}
 	defer resp.Body.Close()
-	io.ReadAll(resp.Body)
+	// Drain the probe body for connection reuse; a drain error carries no
+	// information (status is what this probe reports).
+	_, _ = io.ReadAll(resp.Body)
 
 	if resp.StatusCode != 200 {
 		return false, fmt.Sprintf("platform returned %d", resp.StatusCode)
@@ -617,8 +628,14 @@ func (g *ProxyGateway) HandleChatCompletions(w http.ResponseWriter, r *http.Requ
 	startTime := time.Now()
 	requestID := ""
 	sessionID := ""
+	// keyCursorSession 只在会话 id 连接级稳定（长连接）时非空。每请求一次性的
+	// fallback id 不能当轮询游标用 —— 那会让每张游标都从 0 起算，等于把全部
+	// 流量钉死在排序最靠前的 key 上。详见 scheduler.PickAvailableKey。
+	keyCursorSession := ""
 	fallbackUsed := false
-	clientStatusCode := http.StatusOK
+	// 零值声明而非 := http.StatusOK：下面 if/else 两个分支都会用 handler 的返回值
+	// 覆盖它，初值从未被读到（ineffassign）。
+	var clientStatusCode int
 
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -635,7 +652,11 @@ func (g *ProxyGateway) HandleChatCompletions(w http.ResponseWriter, r *http.Requ
 	}
 
 	if g.sessionTracker != nil {
-		sessionID = g.sessionTracker.InjectSessionID(r)
+		var stable bool
+		sessionID, stable = g.sessionTracker.InjectSessionID(r)
+		if stable {
+			keyCursorSession = sessionID
+		}
 	}
 
 	// Bug 8.2: Generate requestID here and pass it into RecordRequestReceived.
@@ -767,12 +788,16 @@ func (g *ProxyGateway) HandleChatCompletions(w http.ResponseWriter, r *http.Requ
 	}
 
 	if isStream {
-		fallbackUsed, clientStatusCode = g.handleStreamingRequest(w, r, body, canonicalBody, &req, lapi, rapis, requestID, sessionID, string(clientFormat))
+		fallbackUsed, clientStatusCode = g.handleStreamingRequest(w, r, body, canonicalBody, &req, lapi, rapis, requestID, keyCursorSession, string(clientFormat))
 	} else {
-		fallbackUsed, clientStatusCode = g.handleNonStreamingRequest(w, r, body, canonicalBody, &req, lapi, rapis, requestID, sessionID, string(clientFormat))
+		fallbackUsed, clientStatusCode = g.handleNonStreamingRequest(w, r, body, canonicalBody, &req, lapi, rapis, requestID, keyCursorSession, string(clientFormat))
 	}
 
-	g.db.RecordTrend(lapi.ID)
+	// 趋势统计写库失败不能静默：面板图表会停更，而运维看到的只是一张
+	// 不动的图，找不到原因。请求级错误走 rl（带 request_id 便于关联）。
+	if err := g.db.RecordTrend(lapi.ID); err != nil {
+		reqLog.Warn("gateway", "[METRICS] record trend failed", "error", err.Error())
+	}
 
 	if g.log != nil {
 		latencyMS := int(time.Since(startTime).Milliseconds())
@@ -801,7 +826,7 @@ func (g *ProxyGateway) loadKeysForRAPIs(rapis []models.RAPIWithPlatform) {
 }
 
 // filterKeysByKeyIDs returns only the keys whose ID is listed in keyIDsCSV
-// (comma-separated platform_keys IDs), preserving the original order. An empty
+// (comma-separated credential IDs), preserving the original order. An empty
 // whitelist means "all keys allowed" (the default). Unknown IDs are dropped
 // silently — the DB row is authoritative for key existence.
 func filterKeysByKeyIDs(keys []models.PlatformKey, keyIDsCSV string) []models.PlatformKey {
@@ -844,10 +869,11 @@ func (g *ProxyGateway) tryKeyForRAPI(
 	upstreamBody []byte,
 	requestID string,
 	retryCount int,
+	keyCursorSession string,
 	targetFormat string,
-) (*http.Response, int64, error) {
+) (*http.Response, error) {
 	keys := rapi.Keys
-	// Fallback: if no platform_keys loaded, use legacy platform.Token as a synthetic key.
+	// Fallback: if no credential keys loaded, use legacy platform.Token as a synthetic key.
 	if len(keys) == 0 {
 		syntheticKey := models.PlatformKey{
 			ID:         -1,
@@ -868,16 +894,16 @@ func (g *ProxyGateway) tryKeyForRAPI(
 			// Every key is capability-blocked for this model — escalate so the
 			// caller surfaces the block reason (handleAllKeysUnavailable) and
 			// persists the model as unavailable instead of spinning on 404s.
-			return nil, 0, scheduler.ErrAllKeysUnavailable
+			return nil, scheduler.ErrAllKeysUnavailable
 		}
-		key, keyNextAvail, err := g.scheduler.PickAvailableKey(keys)
+		key, keyNextAvail, err := g.scheduler.PickAvailableKey(keys, keyCursorSession)
 		if err != nil {
 			// All keys for this RAPI are cooling — align the pool to the pool
 			// standard (earliest key recoverAt) so the RAPI cooldown matches,
 			// then escalate; the caller proceeds to the next chain node
 			// instead of spinning on this pool.
 			g.markPoolExhausted(rapi, keys, keyNextAvail, requestID)
-			return nil, 0, scheduler.ErrAllKeysUnavailable
+			return nil, scheduler.ErrAllKeysUnavailable
 		}
 
 		token := key.Token
@@ -905,7 +931,7 @@ func (g *ProxyGateway) tryKeyForRAPI(
 			if key.ID > 0 {
 				g.UnblockKeyForModel(key.ID, rapi.ID)
 			}
-			return resp, key.ID, nil
+			return resp, nil
 		}
 
 		// Read and log the upstream error body for all non-2xx responses.
@@ -1116,7 +1142,10 @@ func (g *ProxyGateway) handleAllKeysUnavailable(rapi models.RAPIWithPlatform, re
 }
 
 // handleStreamingRequest handles streaming (SSE) requests with full error absorption.
-func (g *ProxyGateway) handleStreamingRequest(w http.ResponseWriter, r *http.Request, originalBody []byte, canonicalBody []byte, req *models.ProxyRequest, lapi *models.LAPI, rapis []models.RAPIWithPlatform, requestID string, sessionID string, clientFormat string) (bool, int) {
+// 注意：签名里没有 sessionID —— 会话轮询只认 keyCursorSession（连接稳定
+// 的 id，未跟踪连接传 "" 由 scheduler 内部退回平台级游标）。之前版本把
+// sessionID 也传进来但从未使用，unparam 抓了出来。
+func (g *ProxyGateway) handleStreamingRequest(w http.ResponseWriter, r *http.Request, originalBody []byte, canonicalBody []byte, req *models.ProxyRequest, lapi *models.LAPI, rapis []models.RAPIWithPlatform, requestID string, keyCursorSession string, clientFormat string) (bool, int) {
 	fallbackUsed := false
 	retryCount := 0
 	estimatedTokens := scheduler.EstimateCost(req)
@@ -1216,7 +1245,7 @@ func (g *ProxyGateway) handleStreamingRequest(w http.ResponseWriter, r *http.Req
 		startTime := time.Now()
 		// keyID 现在经 tryKeyForRAPI → doUpstreamRequest → RecordUpstreamSent 落库
 		// （request_logs.selected_key_id，指标 key 维度埋点）。
-		resp, _, err := g.tryKeyForRAPI(r.Context(), rapi, effectiveURL, upstreamBody, requestID, retryCount, targetFormat)
+		resp, err := g.tryKeyForRAPI(r.Context(), rapi, effectiveURL, upstreamBody, requestID, retryCount, keyCursorSession, targetFormat)
 		latencyMs := int(time.Since(startTime).Milliseconds())
 
 		if err != nil {
@@ -1253,7 +1282,9 @@ func (g *ProxyGateway) handleStreamingRequest(w http.ResponseWriter, r *http.Req
 			"status", resp.StatusCode, "latency_ms", latencyMs)
 		g.scheduler.RecordRequest(rapi.ID, tokensUsed)
 		// Bug 8.5: record to persistent DB metrics.
-		g.db.RecordRequest(rapi.ID, lapi.ID, resp.StatusCode, latencyMs, tokensUsed)
+		if err := g.db.RecordRequest(rapi.ID, lapi.ID, resp.StatusCode, latencyMs, tokensUsed); err != nil {
+			rl.Warn("gateway", "[METRICS] record request failed", "error", err.Error())
+		}
 
 		if g.notifyService != nil {
 			g.notifyService.PublishAsync("info", fmt.Sprintf("Streaming from %s", rapi.Alias), "Active Route")
@@ -1297,7 +1328,8 @@ func (g *ProxyGateway) handleStreamingRequest(w http.ResponseWriter, r *http.Req
 			if err := converter.Run(); err != nil {
 				rl.Error("gateway", "[ERR] stream convert error", "error", err.Error())
 				// Bug 8.4: drain remaining body to avoid leaking the connection.
-				io.Copy(io.Discard, teeBody)
+				// Already on the convert-error path; a drain error adds nothing.
+				_, _ = io.Copy(io.Discard, teeBody)
 				// If the converter had already flushed one or more data: frames to the
 				// client before erroring, the HTTP response is committed: we CANNOT retry
 				// against another RAPI, otherwise a second stream's message_start/deltas
@@ -1317,15 +1349,12 @@ func (g *ProxyGateway) handleStreamingRequest(w http.ResponseWriter, r *http.Req
 		resp.Body.Close()
 
 		if g.log != nil {
-			// TTFT：流式首帧延迟；除首 token 延迟 = 总延迟 - TTFT。
+			// TTFT：流式首帧延迟。除首 token 延迟 = 总延迟 - TTFT，由消费端
+			// （RecordUpstreamResponseDetail）按两个值相减得出，这里不再单独算。
 			// token 明细从 32KB 日志缓冲解析（三协议，最后 usage 帧生效）。
 			ttftMs := latencyMs
 			if !firstFrameAt.IsZero() {
 				ttftMs = int(firstFrameAt.Sub(startTime).Milliseconds())
-			}
-			restMs := latencyMs - ttftMs
-			if restMs < 0 {
-				restMs = 0
 			}
 			in, out, cached := extractUsageDetail(streamLogBuf.String())
 			g.log.RecordUpstreamResponseDetail(requestID, resp.StatusCode, respHeaders(resp), streamLogBuf.String(),
@@ -1345,7 +1374,7 @@ func (g *ProxyGateway) handleStreamingRequest(w http.ResponseWriter, r *http.Req
 }
 
 // handleNonStreamingRequest handles non-streaming requests with full error absorption.
-func (g *ProxyGateway) handleNonStreamingRequest(w http.ResponseWriter, r *http.Request, originalBody []byte, canonicalBody []byte, req *models.ProxyRequest, lapi *models.LAPI, rapis []models.RAPIWithPlatform, requestID string, sessionID string, clientFormat string) (bool, int) {
+func (g *ProxyGateway) handleNonStreamingRequest(w http.ResponseWriter, r *http.Request, originalBody []byte, canonicalBody []byte, req *models.ProxyRequest, lapi *models.LAPI, rapis []models.RAPIWithPlatform, requestID string, keyCursorSession string, clientFormat string) (bool, int) {
 	fallbackUsed := false
 	retryCount := 0
 	estimatedTokens := scheduler.EstimateCost(req)
@@ -1428,7 +1457,7 @@ func (g *ProxyGateway) handleNonStreamingRequest(w http.ResponseWriter, r *http.
 		startTime := time.Now()
 		// keyID 现在经 tryKeyForRAPI → doUpstreamRequest → RecordUpstreamSent 落库
 		// （request_logs.selected_key_id，指标 key 维度埋点）。
-		resp, _, err := g.tryKeyForRAPI(reqCtx, rapi, effectiveURL, upstreamBody, requestID, retryCount, targetFormat)
+		resp, err := g.tryKeyForRAPI(reqCtx, rapi, effectiveURL, upstreamBody, requestID, retryCount, keyCursorSession, targetFormat)
 		latencyMs := int(time.Since(startTime).Milliseconds())
 
 		if err != nil {
@@ -1465,7 +1494,9 @@ func (g *ProxyGateway) handleNonStreamingRequest(w http.ResponseWriter, r *http.
 		g.scheduler.RecordRequest(rapi.ID, tokensUsed)
 		g.scheduler.MarkSuccess(rapi.ID)
 		// Bug 8.5: record to persistent DB metrics.
-		g.db.RecordRequest(rapi.ID, lapi.ID, resp.StatusCode, latencyMs, tokensUsed)
+		if err := g.db.RecordRequest(rapi.ID, lapi.ID, resp.StatusCode, latencyMs, tokensUsed); err != nil {
+			rl.Warn("gateway", "[METRICS] record request failed", "error", err.Error())
+		}
 
 		if g.log != nil {
 			// 非流式：TTFT = 总延迟（整包一次返回），除首 token 延迟 = 0。
@@ -1823,7 +1854,7 @@ func (lw *limitedWriter) Write(p []byte) (int, error) {
 // forwards every write to next unchanged.
 type firstFrameRecorder struct {
 	firstSeen *time.Time
-	next     io.Writer
+	next      io.Writer
 }
 
 func (f *firstFrameRecorder) Write(p []byte) (int, error) {

@@ -96,8 +96,12 @@ func itoa(n int) string {
 }
 
 // mapNames 把维度行里的 id 名称替换为可读名称（无映射时保留原样）。
-func mapNames(dm db.DimensionMetrics, names map[int64]string) db.DimensionMetrics {
-	replace := func(rows []db.MetricRow) []db.MetricRow {
+//
+// 就地修改：dm 传值只复制结构体，其中各维度是切片，底层数组与调用方共享，
+// 所以 rows[i].Name = n 对调用方可见。因此不返回值 —— 返回的那份 dm 与
+// 调用方持有的完全等价。
+func mapNames(dm db.DimensionMetrics, names map[int64]string) {
+	replace := func(rows []db.MetricRow) {
 		for i := range rows {
 			id, isID := parseID(rows[i].Name)
 			if !isID {
@@ -107,25 +111,27 @@ func mapNames(dm db.DimensionMetrics, names map[int64]string) db.DimensionMetric
 				rows[i].Name = n
 			}
 		}
-		return rows
 	}
-	dm.TotalTokens = replace(dm.TotalTokens)
-	dm.InputTokens = replace(dm.InputTokens)
-	dm.CachedTokens = replace(dm.CachedTokens)
-	dm.OutputTokens = replace(dm.OutputTokens)
-	dm.Attempts = replace(dm.Attempts)
-	dm.Errors = replace(dm.Errors)
-	dm.TTFTLowest = replace(dm.TTFTLowest)
-	dm.RestLatLowest = replace(dm.RestLatLowest)
-	dm.TTFTHighest = replace(dm.TTFTHighest)
-	dm.RestLatHighest = replace(dm.RestLatHighest)
-	return dm
+	replace(dm.TotalTokens)
+	replace(dm.InputTokens)
+	replace(dm.CachedTokens)
+	replace(dm.OutputTokens)
+	replace(dm.Attempts)
+	replace(dm.Errors)
+	replace(dm.TTFTLowest)
+	replace(dm.RestLatLowest)
+	replace(dm.TTFTHighest)
+	replace(dm.RestLatHighest)
 }
 
-// parseID 解析纯数字维度名（平台/key 槽位按 id 聚合）为 int64。返回
-// (值, true) 仅当 s 是一个合法的带可选负号的整数；否则 (0, false) ——
-// 名称本就是别名（模型/接口维度），不做 id 映射。用 bool 而非"返回 0 表非法"
-// 是为避免与真实 id=0（虽 SQLite 自增从 1 起，但不依赖该假设）撞车。
+// parseID 解析纯整数字符串为 int64。返回 (值, true) 仅当 s 是一个合法的
+// 带可选负号的整数；否则 (0, false)。用 bool 而非"返回 0 表非法"，是为
+// 避免与真实 id=0（虽 SQLite 自增从 1 起，但不依赖该假设）撞车。
+//
+// 两个用途：维度名里的 id 聚合（平台/key 槽位；名称本就是别名的模型/接口
+// 维度不做映射），以及所有 handler 的 id/天数类 query 参数解析。
+// 后者刻意比 fmt.Sscanf 严格："12abc" 在 Sscanf 下会静默变成 12，在这里
+// 是非法输入 —— 调用方按 400 处理，而不是拿着截断后的数字去查库。
 func parseID(s string) (int64, bool) {
 	if s == "" || s == "-" {
 		return 0, false
@@ -150,7 +156,7 @@ func parseID(s string) (int64, bool) {
 
 // AttentionItem 是一条需要用户处理的定义对象信息。
 type AttentionItem struct {
-	Kind   string `json:"kind"`    // platform | key | model | interface
+	Kind   string `json:"kind"` // platform | key | model | interface
 	Name   string `json:"name"`
 	Reason string `json:"reason"`
 }

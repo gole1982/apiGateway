@@ -17,7 +17,6 @@ type StreamConverter struct {
 	to            APIFormat
 	model         string
 	flusher       interface{ Flush() }
-	requestID     string
 	writtenFrames int // number of data: frames actually sent to the client
 
 	// OpenAI→Anthropic protocol state. message_start must be emitted exactly

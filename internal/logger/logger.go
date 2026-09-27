@@ -93,7 +93,12 @@ func (l *Logger) RecordEvent(event LogEvent) {
 	select {
 	case l.eventQueue <- event:
 	default:
-		dropEvent(l.config.QueueCapacity, &l.droppedCount)
+		// 队列满：丢弃并计数。计数本身不是可有可无的 —— 这段曾经是 no-op，
+		// 事件静默丢失且零可观测性，面板只会看到请求永远卡在 "pending"，
+		// 完全看不出是日志在堆积。/api/status 靠这个数暴露日志数据丢失。
+		// 原来的 dropEvent(queueSize, counter) 包装只做这一件事且从不读
+		// queueSize，已内联。
+		l.droppedCount.Add(1)
 	}
 }
 
@@ -355,7 +360,10 @@ func (w *LogWorker) persistBatch(batch []LogEvent) {
 	}
 
 	for _, event := range batch {
-		if err := w.logger.Storage.AppendEvent(event.RequestID, &event); err != nil {
+		// G601 在 go1.21 语义下是对的：range 变量整轮共享，取地址会别名。
+		// 这里安全是因为 AppendEvent 同步 json.Marshal + Exec，从不持有指针，
+		// 解引用发生在下一轮覆写 event 之前。
+		if err := w.logger.Storage.AppendEvent(event.RequestID, &event); err != nil { //nolint:gosec // G601：见上方注释
 			// Child event failure is non-fatal; parent row already has the fields.
 			_ = err
 		}
@@ -435,7 +443,10 @@ func (l *Logger) startCleanup() {
 		select {
 		case <-ticker.C:
 			if l.Storage != nil {
-				l.Storage.CleanupOldRecords(l.config.MaxAgeDays, l.config.MaxRecords)
+				if err := l.Storage.CleanupOldRecords(l.config.MaxAgeDays, l.config.MaxRecords); err != nil {
+					DefaultConsole().Warn("logger", "[LOGGER] cleanup old records failed",
+						"error", err.Error())
+				}
 			}
 		case <-l.ctx.Done():
 			return
@@ -447,10 +458,13 @@ func NewRequestID() string {
 	return "req-" + time.Now().Format("20060102-150405") + "-" + randomHex(4)
 }
 
+// randomHex 生成日志用的关联 id 后缀，不参与任何鉴权或访问控制判定；
+// request id 撞车最多让两行日志并成一行，不构成安全问题。会话 id 走
+// uuid.New()（crypto/rand），密钥走 crypto 包，都不在这里。
 func randomHex(n int) string {
 	bytes := make([]byte, n)
 	for i := range bytes {
-		bytes[i] = byte(rand.Intn(256))
+		bytes[i] = byte(rand.Intn(256)) //nolint:gosec // G404：非安全用途，见上方注释
 	}
 	return hex.EncodeToString(bytes)
 }
@@ -508,15 +522,6 @@ func getBool(data map[string]interface{}, key string) bool {
 		}
 	}
 	return false
-}
-
-// dropEvent is called when a log event cannot be enqueued (queue full). It increments
-// a dropped counter so that callers (e.g. /api/status) can observe log data loss.
-// The previous implementation was a no-op, which meant events were silently dropped
-// with zero observability — the dashboard would show incomplete requests (stuck at
-// "pending") with no indication that logging was backing up.
-func dropEvent(queueSize int, counter *atomic.Int64) {
-	counter.Add(1)
 }
 
 // extractMaxTokens pulls the max_tokens integer out of a JSON request body using

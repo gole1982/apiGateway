@@ -1,9 +1,14 @@
-version: "3.8"
-
+# apiGateway —— Docker Compose 部署
+#   首次部署： 复制 .env.example 为 .env（填 APIGATEWAY_KEY，见 proxy.docker.cfg 注释），
+#             然后 docker compose up -d --build
+#   日常更新： docker compose pull && docker compose up -d
+# 注意：挂载的是 proxy.docker.cfg（容器端口 13579/24680），不是仓库根的
+# proxy.cfg（那是本地 Windows 直运的 43210/43211，两处端口必须与 ports 一致）。
 services:
   gateway:
     # 远程部署时从 GitHub 拉取镜像（CI 自动构建推送）；本地开发可用 docker compose up --build
-    image: ghcr.io/gole1982/apiGateway:latest
+    # 仓库名必须全小写：Docker 拒绝含大写字母的 repository name（apiGateway → apigateway）
+    image: ghcr.io/gole1982/apigateway:latest
     build: .
     container_name: api-gateway
     restart: unless-stopped
@@ -11,19 +16,24 @@ services:
       - "13579:13579"   # OpenAI-compatible proxy
       - "24680:24680"   # Web dashboard
     volumes:
-      - ./proxy.cfg:/app/proxy.cfg:ro
+      - ./proxy.docker.cfg:/app/proxy.cfg:ro
       - gateway-data:/app/data
       # 兼容旧镜像：旧版本把数据库写到 /app/gateway.db，此文件位于镜像层，
       # 容器重建后会丢失。新版本固定写 /app/data/gateway.db。
     environment:
       - TZ=Asia/Shanghai
       - APIGATEWAY_DATA_DIR=/app/data
-    # Health check (proxy endpoint)
+      # 主密钥：容器重建不丢 key 的关键。留空则首次启动生成随机 key 并只存
+      # 容器内（重建即失 → 历史密文解不开）。生产必须在 .env 里设置 64 位 hex。
+      - APIGATEWAY_KEY=${APIGATEWAY_KEY:-}
+    # Health check (proxy endpoint)。必须用 CMD-SHELL：CMD 形式不经过 shell，
+    # "||" 会被当成 wget 的字面参数导致检查恒失败。
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:13579/status", "||", "exit", "1"]
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:13579/status || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
+      start_period: 20s
 
 volumes:
   gateway-data:

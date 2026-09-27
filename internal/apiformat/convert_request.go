@@ -445,7 +445,9 @@ func fromCanonicalRequest(body []byte, to APIFormat, model string) ([]byte, erro
 	case FormatAnthropic:
 		return openaiToAnthropicRequest(body, model)
 	case FormatGemini:
-		return openaiToGeminiRequest(body, model)
+		// Gemini 原生请求体的模型名在 URL 路径（models/{model}:generateContent）
+		// 而不在 body 里，所以这里没有 model 可用，也不需要。
+		return openaiToGeminiRequest(body)
 	default:
 		return body, nil
 	}
@@ -677,7 +679,7 @@ func convertOpenAIToolChoiceToAnthropic(tc interface{}) map[string]interface{} {
 	}
 }
 
-func openaiToGeminiRequest(body []byte, model string) ([]byte, error) {
+func openaiToGeminiRequest(body []byte) ([]byte, error) {
 	var src map[string]interface{}
 	if err := json.Unmarshal(body, &src); err != nil {
 		return nil, err

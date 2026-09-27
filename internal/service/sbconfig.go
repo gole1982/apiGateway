@@ -42,7 +42,7 @@ type sbConfigResponse struct {
 	Connected     bool           `json:"connected"`
 	Role          string         `json:"role"` // offline | proxy | management
 	URL           string         `json:"url"`
-	KeyMask       string         `json:"key_mask"`      // 脱敏回显
+	KeyMask       string         `json:"key_mask"`       // 脱敏回显
 	CenterKeySet  bool           `json:"center_key_set"` // center_key 是否已配置（settings 或 proxy.cfg）
 	Activated     bool           `json:"activated"`      // 保存后是否已热激活（免重启）
 	ActivateError string         `json:"activate_error,omitempty"`
@@ -328,7 +328,8 @@ func fillSBTables(resp *sbConfigResponse, url, key string) {
 	// 这里轻量调用：直接 GET 各表 count。
 	client := &http.Client{Timeout: 8 * time.Second}
 	tables := map[string]int{}
-	for _, t := range []string{"platform", "platform_keys", "rapi", "lapi", "lapi_rapi_order"} {
+	// 查哪几张表以 centerDefinitionTables 为准（见该变量注释里的事故）。
+	for _, t := range centerDefinitionTables {
 		req, _ := http.NewRequestWithContext(context.Background(), http.MethodHead, url+"/rest/v1/"+t+"?select=id&limit=1", nil)
 		req.Header.Set("apikey", key)
 		req.Header.Set("Authorization", "Bearer "+key)

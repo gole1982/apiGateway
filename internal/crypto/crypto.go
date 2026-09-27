@@ -31,9 +31,9 @@ const (
 )
 
 var (
-	mu         sync.RWMutex
-	activeKey  []byte // 32 bytes
-	keySource  string // "env:APIGATEWAY_KEY" 或 keyFile 的绝对路径（Init 后可用）
+	mu        sync.RWMutex
+	activeKey []byte // 32 bytes
+	keySource string // "env:APIGATEWAY_KEY" 或 keyFile 的绝对路径（Init 后可用）
 )
 
 // Init loads the master key: APIGATEWAY_KEY env var first, then ~/.apiGateway.key.

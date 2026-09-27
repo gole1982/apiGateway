@@ -37,7 +37,10 @@ func main() {
 	prevReq := ""
 	for rows.Next() {
 		var reqID, evtType, ts, dataStr string
-		rows.Scan(&reqID, &evtType, &ts, &dataStr)
+		if err := rows.Scan(&reqID, &evtType, &ts, &dataStr); err != nil {
+			fmt.Println("scan:", err)
+			break
+		}
 
 		if reqID != prevReq {
 			fmt.Printf("\n========== request_id=%s ==========\n", reqID)
@@ -45,7 +48,10 @@ func main() {
 		}
 
 		var data map[string]interface{}
-		json.Unmarshal([]byte(dataStr), &data)
+		if err := json.Unmarshal([]byte(dataStr), &data); err != nil {
+			fmt.Printf("  [%s] %s (unparsable event data: %v)\n", evtType, ts, err)
+			continue
+		}
 
 		fmt.Printf("  [%s] %s\n", evtType, ts)
 

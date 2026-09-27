@@ -1,6 +1,7 @@
 package logger
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"os"
@@ -275,7 +276,9 @@ func (c *ConsoleLogger) emit(level slog.Level, component, msg string, kv []any) 
 	// pairing bug where an Attr would be mistaken for a string key and shift
 	// every subsequent pair: component must be a real Attr, not a kv entry.
 	attrs = append([]slog.Attr{slog.String("component", component)}, attrs...)
-	c.sl.LogAttrs(nil, level, msg, attrs...)
+	// context.TODO 而非 nil：slog 的 Handler 可能取 ctx 里的值（trace id 等），
+	// 传 nil 属于未定义用法（staticcheck SA1012）。此处没有请求 ctx 可用。
+	c.sl.LogAttrs(context.TODO(), level, msg, attrs...)
 }
 
 // toAttrs converts a flat key/value slice into []slog.Attr, treating every

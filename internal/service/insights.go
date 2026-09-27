@@ -38,10 +38,10 @@ type CoolingRAPI struct {
 	LastFailure         time.Time `json:"last_failure"`
 	Invalidated         bool      `json:"invalidated"`
 	// Platform context for hierarchical alert display / click-through navigation.
-	PlatformID      int64  `json:"platform_id"`
-	PlatformName    string `json:"platform_name"`
-	BillingAddress  string `json:"billing_address,omitempty"`
-	KeyIDs          string `json:"key_ids,omitempty"` // RAPI's key pool whitelist (empty = all platform keys)
+	PlatformID     int64  `json:"platform_id"`
+	PlatformName   string `json:"platform_name"`
+	BillingAddress string `json:"billing_address,omitempty"`
+	KeyIDs         string `json:"key_ids,omitempty"` // RAPI's key pool whitelist (empty = all platform keys)
 }
 
 type CoolingKey struct {
@@ -104,7 +104,6 @@ func generateInsights() InsightResponse {
 	allKeys, _ := store.A().GetAllPlatformKeys()
 	orders, _ := db.Get().GetAllLAPIRAPIOrders()
 	fallbackStats, _ := db.Get().GetFallbackStats(24)
-	hourlyDist, _ := db.Get().GetHourlyDistribution(7)
 
 	// Build lookups
 	rapiStatByID := make(map[int64]db.RAPIStat)
@@ -145,7 +144,7 @@ func generateInsights() InsightResponse {
 
 	health := buildHealth(snap, rapiStatByID, rapiCfgByID, platformByID, keyByID)
 	efficiency := buildEfficiency(lapiRAPIMap, lapiAliasByID, rapiCfgByID, rapiStatByID, counterByID, fallbackStats)
-	capacity := buildCapacity(counterByID, rapiCfgByID, rapiStatByID, snap, hourlyDist)
+	capacity := buildCapacity(counterByID, rapiCfgByID, rapiStatByID, snap)
 
 	return InsightResponse{
 		GeneratedAt: time.Now(),
@@ -357,12 +356,16 @@ func buildEfficiency(
 	return insights
 }
 
+// buildCapacity 按 RPM/RPH/RPD/TPM/TPH/TPD 六个维度报接近上限的 RAPI。
+//
+// 原签名还有一个 hourlyDist []db.HourBucket 参数从未被读取，却让调用方为此
+// 多打一次 GetHourlyDistribution(7) 查询。若日后要做"按小时分布的容量"
+// 洞察，把查询和参数一起加回来。
 func buildCapacity(
 	counterByID map[int64]scheduler.CounterSnapshot,
 	rapiCfgByID map[int64]rapiCfg,
 	rapiStatByID map[int64]db.RAPIStat,
 	snap scheduler.Snapshot,
-	hourlyDist []db.HourBucket,
 ) []Insight {
 	insights := make([]Insight, 0)
 
