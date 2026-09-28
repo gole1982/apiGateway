@@ -1,0 +1,80 @@
+name: Security
+
+# 依赖漏洞与静态安全扫描。独立于 ci.yml，因为触发时机与失败语义都不同：
+# ci.yml 管"这次改动能不能合"，本文件管"仓库当前有没有已知漏洞"——
+# 后者即使今天全绿，明天某个依赖爆出新 CVE 也会变红，与某次 PR 无关。
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  # 每周一 03:17 UTC 定时跑：覆盖"依赖昨天才被披露漏洞"这一情形
+  # （PR 当时没问题，事后才出公告）。刻意不用 0 点，避开整点排队高峰。
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 同一个 PR 反复推送时只保留最新一次扫描，避免堆积。
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ===========================================================================
+  # govulncheck：调用图级别的漏洞可达性分析（govulncheck 从官方漏洞库拉
+  # 数据，再沿调用图判断本项目是否真的能到达有漏洞的代码）。
+  #
+  # 定位：它管"依赖的已知 CVE"，CodeQL 管"代码里的逻辑型漏洞"，两者互补，
+  # 不能互相替代 —— 一个项目完全可以既没有过时依赖、又有路径遍历。
+  #
+  # 本 job 初期为非阻断（continue-on-error），与 lint 同理：依赖树里已有的
+  # 存量漏洞不该让所有 PR 一起变红。先看清存量，再决定升级/替换/降级。
+  # TODO: 存量清零后移除 continue-on-error。
+  # ===========================================================================
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    continue-on-error: true   # TODO: 存量漏洞处理完后改为阻断
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: true
+
+      # 固定版本：latest 会随时间漂移，同一份代码今天绿明天红，且无法复现。
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+
+      - name: Run govulncheck
+        run: govulncheck ./...
+
+  # ===========================================================================
+  # CodeQL：GitHub 托管的 SAST。对 Go 而言它主要补 govulncheck 覆盖不到的
+  # 部分 —— 逻辑层面的注入/路径遍历/不安全并发，而不是"哪个依赖有 CVE"。
+  # ===========================================================================
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # CodeQL 分析需要写 results；私有仓库还需 actions: read。
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: go
+          # 手动分析：PR 上不自动跑（跑在 push/PR 上会显著拖慢每个 PR，
+          # 而本项目 PR 量小、定时跑足够）。手动入口在 Security 页面。
+          queries: security-and-quality
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: '/language:go'

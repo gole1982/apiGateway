@@ -148,6 +148,145 @@ func (db *DB) GetDailyTokenTrend(days int) ([]DailyTrend, error) {
 	return trends, nil
 }
 
+// TrafficTotals 是 request_logs 的全量累计聚合，供 /metrics 暴露 counter。
+//
+// 为什么放在 db 层而不是 service 层现拼：/metrics 每次抓取都要跑这条聚合，
+// 而它是全表扫描。让 DB 层出一个明确的、可被单测覆盖的函数，比让 service
+// 层内联 SQL 更可控。
+type TrafficTotals struct {
+	TotalRequests   int64 `json:"total_requests"`
+	SuccessRequests int64 `json:"success_requests"`
+	FailedRequests  int64 `json:"failed_requests"`
+	InputTokens     int64 `json:"input_tokens"`
+	OutputTokens    int64 `json:"output_tokens"`
+	CachedTokens    int64 `json:"cached_tokens"`
+	RetryTotal      int64 `json:"retry_total"`
+	FallbackTotal   int64 `json:"fallback_total"`
+}
+
+// GetTrafficTotals 聚合 request_logs 的累计计数。
+//
+// "成功/失败"的判定用 response_status：2xx 记成功，>=400 记失败。
+// 3xx 不计入任何一侧 —— 网关自身不会产生 3xx（它要么透传上游的 2xx，
+// 要么转成 4xx/5xx），真出现 3xx 说明有未预期的分支，宁可漏计也不要
+// 错误地把它算成成功，那样成功率会虚高、告警永远不响。
+func (db *DB) GetTrafficTotals() (TrafficTotals, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	var t TrafficTotals
+	row := db.conn.QueryRow(`
+		SELECT
+			COUNT(*),
+			COALESCE(SUM(CASE WHEN response_status BETWEEN 200 AND 299 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN response_status >= 400 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(input_tokens), 0),
+			COALESCE(SUM(output_tokens), 0),
+			COALESCE(SUM(cached_tokens), 0),
+			COALESCE(SUM(retry_count), 0),
+			COALESCE(SUM(CASE WHEN fallback_used = 1 THEN 1 ELSE 0 END), 0)
+		FROM request_logs
+	`)
+	if err := row.Scan(&t.TotalRequests, &t.SuccessRequests, &t.FailedRequests,
+		&t.InputTokens, &t.OutputTokens, &t.CachedTokens,
+		&t.RetryTotal, &t.FallbackTotal); err != nil {
+		return TrafficTotals{}, err
+	}
+	return t, nil
+}
+
+// ClientUsage is one downstream client's aggregated usage over a time window.
+//
+// 身份口径 = client_ip。这是"没有下游认证"这一现实约束下能拿到的最细粒度
+// 归属：request_logs.client_ip 来自代理层的 r.RemoteAddr，同一 IP 后的多个
+// 客户端会被合并。若将来引入 per-client API key，应改为以 key 为主体、IP
+// 为辅助标签 —— 那时这个结构体加一列、聚合 SQL 换掉分组键即可。
+//
+// 之所以现在就做：本地自部署场景下"谁在用、花了多少"是排查成本归属
+// （某个客户端的循环把额度烧光）最常用的第一个问题，而当前面板只有
+// 平台/Key/模型/接口四个**上游**维度，看不到下游。
+type ClientUsage struct {
+	ClientIP      string `json:"client_ip"`
+	RequestCount  int    `json:"request_count"`
+	SuccessCount  int    `json:"success_count"`
+	ErrorCount    int    `json:"error_count"`
+	InputTokens   int    `json:"input_tokens"`
+	OutputTokens  int    `json:"output_tokens"`
+	CachedTokens  int    `json:"cached_tokens"`
+	TotalTokens   int    `json:"total_tokens"`
+	AvgLatencyMs  int    `json:"avg_latency_ms"`
+	DistinctLapis int    `json:"distinct_lapis"`
+	LastSeen      string `json:"last_seen"`
+}
+
+// GetClientUsage aggregates request_logs by client_ip since the given time.
+//
+// client_ip 存的是 r.RemoteAddr，而 Go 的 net 包保证它形如 "IP:port" ——
+// IPv4 是 "127.0.0.1:52341"，IPv6 是带方括号的 "[::1]:52341"。端口每条
+// 连接都变，若按整串分组，同一个客户端会被拆成成千上万行，"每 IP 用量"
+// 彻底失效。故这里先剥掉端口再分组。
+//
+// 剥端口的 CASE 分支顺序不可调换：
+//   - 先判 ']:' —— IPv6 的地址末尾是右括号，紧跟冒号才是端口。instr 返回
+//     子串首字符（']'）的 1 基下标，对 "[::1]:52341" 是 5，故
+//     substr(client_ip, 1, 5) 正好取到 "[::1]"（含右括号、不含冒号）。
+//     多写一个字符会得到 "[::1]:"，尾巴上留个冒号 —— 这正是
+//     TestGetClientUsageIPv6 抓到的错。
+//   - 再判裸 ':' —— 此时必是 IPv4:port，取第一个冒号之前的内容。
+//   - 都不命中（如纯 IP、无端口的历史行）则原样保留。
+func (db *DB) GetClientUsage(since time.Time, limit int) ([]ClientUsage, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := db.conn.Query(`
+		SELECT
+			CASE
+				WHEN instr(client_ip, ']:') > 0
+					THEN substr(client_ip, 1, instr(client_ip, ']:'))
+				WHEN instr(client_ip, ':') > 0
+					THEN substr(client_ip, 1, instr(client_ip, ':') - 1)
+				ELSE client_ip
+			END AS ip,
+			COUNT(*),
+			COALESCE(SUM(CASE WHEN response_status BETWEEN 200 AND 299 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN response_status >= 400 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(input_tokens), 0),
+			COALESCE(SUM(output_tokens), 0),
+			COALESCE(SUM(cached_tokens), 0),
+			CAST(COALESCE(AVG(latency_ms), 0) AS INTEGER),
+			COUNT(DISTINCT lapi_alias),
+			COALESCE(MAX(timestamp), '')
+		FROM request_logs
+		WHERE timestamp >= ?
+		  AND strftime('%s', timestamp) IS NOT NULL
+		  AND client_ip IS NOT NULL
+		  AND client_ip != ''
+		GROUP BY ip
+		ORDER BY COUNT(*) DESC
+		LIMIT ?
+	`, since, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []ClientUsage
+	for rows.Next() {
+		var u ClientUsage
+		if err := rows.Scan(&u.ClientIP, &u.RequestCount, &u.SuccessCount, &u.ErrorCount,
+			&u.InputTokens, &u.OutputTokens, &u.CachedTokens,
+			&u.AvgLatencyMs, &u.DistinctLapis, &u.LastSeen); err != nil {
+			return nil, err
+		}
+		u.TotalTokens = u.InputTokens + u.OutputTokens
+		out = append(out, u)
+	}
+	return out, nil
+}
+
 // LAPIRAPIOrder is a single lapi→rapi mapping row.
 type LAPIRAPIOrder struct {
 	LapiID int64 `json:"lapi_id"`

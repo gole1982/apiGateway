@@ -2,16 +2,121 @@ package service
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"time"
 
 	"gateway/internal/db"
 	"gateway/internal/logger"
 	"gateway/internal/models"
+	"gateway/internal/prom"
 	"gateway/internal/store"
 )
 
-// handleDashboardMetrics GET /api/dashboard/metrics?period=today|month
+// runtimePorts 记录本次启动实际生效的监听端口，供 /metrics 暴露。
+//
+// 存在包级变量而不是每次重读 config：config.Load() 读的是 exe 同目录的
+// proxy.cfg，而实际端口可能已被环境/面板改过（见 savedLogLevel 那类
+// "settings 覆盖 cfg" 的既有模式）。这里以 Run() 里算出的最终值为准。
+var runtimePorts struct {
+	proxy int
+	web   int
+}
+
+// handleMetrics GET /metrics
+// Prometheus 文本曝光端点。挂在**代理**端口上而不是面板端口，理由见
+// 部署说明：面板端口可能只绑 127.0.0.1，而采集通常与网关同机或同网段。
+//
+// 无认证是刻意的（与项目整体取舍一致：自部署自用）。暴露的全是运行
+// 状态与计数，不含 token / 平台凭据 / 请求体。
+func handleMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	rt := prom.Runtime{Version: Version, ProxyPort: runtimePorts.proxy, WebPort: runtimePorts.web}
+	rt.RAPIs, _ = store.A().GetRAPIs()
+	rt.LAPIs, _ = store.A().GetLAPIs()
+	rt.Keys, _ = store.A().GetAllPlatformKeys()
+	if proxyGateway != nil {
+		rt.Snap = proxyGateway.Scheduler().Snapshot()
+	}
+	if totals, err := db.Get().GetTrafficTotals(); err == nil {
+		rt.Traffic = prom.TrafficCounters{
+			TotalRequests:   totals.TotalRequests,
+			SuccessRequests: totals.SuccessRequests,
+			FailedRequests:  totals.FailedRequests,
+			InputTokens:     totals.InputTokens,
+			OutputTokens:    totals.OutputTokens,
+			CachedTokens:    totals.CachedTokens,
+			RetryTotal:      totals.RetryTotal,
+			FallbackTotal:   totals.FallbackTotal,
+		}
+	}
+	// 采集失败（DB 还没建表等）不阻断响应：/metrics 返回部分指标远好于
+	// 整个端点 500 —— Prometheus 对抓取失败会直接告警，而"少了几个
+	// counter"只会让图上缺点东西，不该升级成故障。
+
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	if r.Method == http.MethodHead {
+		return
+	}
+	// 写失败（客户端断开）无事可做，也无法再写状态行 —— Prometheus 抓取
+	// 超时是最常见的原因，记一条日志便于和抓取侧的问题对上。
+	if _, err := io.WriteString(w, prom.Collect(rt)); err != nil {
+		logger.DefaultConsole().Warn("service", "[METRICS] write response failed", "error", err.Error())
+	}
+}
+
+// handleClientUsage GET /api/analytics/clients?period=today|month|7d&limit=N
+// 下游客户端用量（按 client_ip 聚合）。见 db.ClientUsage 关于"为什么以
+// IP 为身份口径"的说明。
+func handleClientUsage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSONError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+		return
+	}
+
+	now := time.Now()
+	period := r.URL.Query().Get("period")
+	var since time.Time
+	switch period {
+	case "month":
+		since = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	case "7d":
+		since = now.AddDate(0, 0, -7)
+	case "30d":
+		since = now.AddDate(0, 0, -30)
+	default: // today
+		period = "today"
+		since = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	}
+
+	limit := 20
+	if v, ok := parseID(r.URL.Query().Get("limit")); ok && v > 0 && v <= 200 {
+		limit = int(v)
+	}
+
+	rows, err := db.Get().GetClientUsage(since, limit)
+	if err != nil {
+		writeJSONError(w, 500, err)
+		return
+	}
+	if rows == nil {
+		rows = []db.ClientUsage{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"period":  period,
+		"since":   since.Format(time.RFC3339),
+		"clients": rows,
+	})
+}
+
 // 仪表盘单屏指标：4 维度（平台/Key/模型/接口）× 10 指标 TOP3，本地时区
 // 今日/本月聚合；另附"待处理"清单（失效平台、永久失败 key、失效/冷却模型、
 // 无可用路由的接口）与近期错误日志。

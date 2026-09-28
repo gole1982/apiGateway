@@ -19,7 +19,14 @@ services:
     restart: unless-stopped
     ports:
       - "13579:13579"   # OpenAI-compatible proxy
-      - "24680:24680"   # Web dashboard
+      # 面板只发布到宿主回环。**刻意不写成 "24680:24680"**：那样等于把一个
+      # 无认证的完整管理 API（可读改平台/Key/token）暴露到宿主所有网卡，
+      # 同网段或云主机安全组一放开就是可达。
+      #
+      # 需要从别的机器访问面板时，不要改回 "24680:24680"，而是显式写
+      # "0.0.0.0:24680:24680" —— 让"我确实要暴露"成为一个显式的选择，
+      # 而不是默认行为的意外后果。届时请自行在前面加 TLS + 认证反代。
+      - "127.0.0.1:24680:24680"   # Web dashboard（仅本机）
     volumes:
       - ./proxy.docker.cfg:/app/proxy.cfg:ro
       - gateway-data:/app/data
@@ -28,8 +35,18 @@ services:
     environment:
       - TZ=Asia/Shanghai
       - APIGATEWAY_DATA_DIR=/app/data
-      # 主密钥：容器重建不丢 key 的关键。留空则首次启动生成随机 key 并只存
-      # 容器内（重建即失 → 历史密文解不开）。生产必须在 .env 里设置 64 位 hex。
+      # 主密钥：唯一来源，**必填**。
+      #
+      # 这里刻意用 :-（空值兜底）而不是 :?（"必需变量"）：实测本机 Docker
+      # Compose 29.8.1 上 ${VAR:?msg} **不会中断**，只打一条 warning 然后当空值
+      # 继续（list 与 map 两种写法都一样），起不到拦截作用。
+      #
+      # 真正的强制点在网关进程自身：APIGATEWAY_KEY 缺失或不是 64 位 hex 时它
+      # 拒绝启动，并在日志里打印旧密钥文件（~/.apiGateway.key）的迁移命令。
+      # 早先版本会静默生成随机 key 写进容器，容器一重建该 key 就消失、历史密文
+      # 永久解不开 —— 那个静默损坏已修复。
+      #
+      # 在 .env（或 shell）里设置 64 位 hex：openssl rand -hex 32
       - APIGATEWAY_KEY=${APIGATEWAY_KEY:-}
     # Health check (proxy endpoint)。必须用 CMD-SHELL：CMD 形式不经过 shell，
     # "||" 会被当成 wget 的字面参数导致检查恒失败。

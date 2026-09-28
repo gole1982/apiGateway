@@ -1,0 +1,70 @@
+version: 2
+
+# Dependabot：自动开 PR 升级依赖。它与 security.yml 的 govulncheck /
+# CodeQL 是"事前"与"事后"的关系：
+#   - Dependabot 让依赖保持新，从而**不产生**漏洞（事前预防）
+#   - govulncheck / CodeQL 在漏掉了的时候**发现**问题（事后检测）
+# 三个都要，缺一个都会留下盲区。
+updates:
+  # Go 模块。go.mod 的直接依赖很少，但间接依赖（modernc.org/* 有十几个）
+  # 才是 CVE 的主要来源，故 grouping 把它们合成一个 PR —— 逐个升级会
+  # 产生一长串互相冲突、几乎无法审阅的 PR。
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 5
+    groups:
+      # 间接依赖整组升级：它们必须彼此版本兼容，逐个升会互相打架。
+      indirect-dependencies:
+        patterns:
+          - "*"
+        exclude-patterns:
+          # 直接依赖单独成一个 PR（见下），不混进这组 ——
+          # 直接依赖的升级需要人看一眼 changelog。
+          - "modernc.org/sqlite"
+          - "github.com/google/uuid"
+          - "github.com/stretchr/testify"
+          - "gopkg.in/ini.v1"
+      # 直接依赖各自独立：sqlite 升级要确认 CGO/平台兼容性，
+      # testify / uuid / ini 是低风险，可以随便升。
+      sqlite:
+        patterns:
+          - "modernc.org/sqlite"
+      minor-deps:
+        patterns:
+          - "github.com/google/uuid"
+          - "github.com/stretchr/testify"
+          - "gopkg.in/ini.v1"
+    labels:
+      - dependencies
+      - security
+
+  # GitHub Actions。actions/* 的漏洞（如 checkout@v2 的 token 泄露）曾多次
+  # 造成真实事故，而它们不在 go.mod 里，govulncheck 看不见 —— 必须单独配。
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: Asia/Shanghai
+    labels:
+      - dependencies
+      - security
+      - ci
+
+  # Dockerfile（基础镜像 alpine/golang 的 CVE 修复只随镜像 tag 发布）。
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: Asia/Shanghai
+    labels:
+      - dependencies
+      - security

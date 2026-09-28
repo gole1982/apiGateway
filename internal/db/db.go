@@ -27,8 +27,7 @@ func Init() error {
 	if err := crypto.Init(); err != nil {
 		return fmt.Errorf("crypto init: %w", err)
 	}
-	// 报告主密钥来源：操作员据此确认 APIGATEWAY_KEY 是否生效（env vs 密钥文件），
-	// 避免"以为用了环境变量、实际在用旧文件"导致的密文不可解。
+	// 报告主密钥来源：操作员据此确认 APIGATEWAY_KEY 确实生效。
 	slog.Info("[DB] crypto master key loaded", "component", "db", "source", crypto.KeySource())
 
 	dataDir, err := selectDataDir()

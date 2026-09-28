@@ -1599,6 +1599,12 @@
                             中心配置
                         </button>
                     </li>
+                    <li class="nav-item">
+                        <button :class="{ active: activeTab === 'clients' }" @click="setTab('clients')">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                            客户端用量
+                        </button>
+                    </li>
                     <li class="nav-item parent">
                         <button :class="{ open: localNavOpen, active: isLocalTabActive }" @click="localNavOpen = !localNavOpen">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="8" cy="6" r="1.4" fill="currentColor"/><circle cx="8" cy="12" r="1.4" fill="currentColor"/><circle cx="8" cy="18" r="1.4" fill="currentColor"/></svg>
@@ -2653,7 +2659,75 @@
                 </template>
             </div>
 
-            <!-- 6a. SB CONFIG tab — 中心配置（Supabase）：URL+key 加密保存+角色探测+同步状态 -->
+            <!-- 6a. CLIENT USAGE tab — 下游客户端用量（按 client_ip 聚合） -->
+            <!-- 放在 sbconfig 之前：它是纯查询页，不改任何配置，访问频率高于中心配置。 -->
+            <div v-if="activeTab === 'clients'" class="tab-pane">
+                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+                    <span style="font-size:1.1rem;font-weight:700;color:var(--color-primary);">客户端用量</span>
+                    <span class="u-muted-md">按来源 IP 聚合的调用量</span>
+                    <span style="flex:1;"></span>
+                    <span class="chip" :class="{ active: clientUsagePeriod === 'today' }" @click="clientUsagePeriod='today'; loadClientUsage()">今日</span>
+                    <span class="chip" :class="{ active: clientUsagePeriod === '7d' }" @click="clientUsagePeriod='7d'; loadClientUsage()">近 7 天</span>
+                    <span class="chip" :class="{ active: clientUsagePeriod === '30d' }" @click="clientUsagePeriod='30d'; loadClientUsage()">近 30 天</span>
+                    <span class="chip" :class="{ active: clientUsagePeriod === 'month' }" @click="clientUsagePeriod='month'; loadClientUsage()">本月</span>
+                </div>
+
+                <div class="glass-card" style="padding:10px 14px;margin-bottom:14px;font-size:0.8rem;color:var(--text-muted);">
+                    网关<b>不做下游认证</b>，故此处按来源 IP 归集：同一 IP 后的多个客户端
+                    会被合并成一行。回环地址（127.0.0.1 / ::1）是本机调用，已标注。
+                </div>
+
+                <div class="glass-card" style="padding:14px 16px;overflow-x:auto;">
+                    <table style="width:100%;font-size:0.82rem;border-collapse:collapse;">
+                        <thead>
+                            <tr style="color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-size:0.72rem;">
+                                <th style="text-align:left;padding:4px 8px;">来源 IP</th>
+                                <th style="text-align:right;padding:4px 8px;">请求数</th>
+                                <th style="text-align:right;padding:4px 8px;">错误</th>
+                                <th style="text-align:right;padding:4px 8px;">错误率</th>
+                                <th style="text-align:right;padding:4px 8px;">总 token</th>
+                                <th style="text-align:right;padding:4px 8px;">输入</th>
+                                <th style="text-align:right;padding:4px 8px;">输出</th>
+                                <th style="text-align:right;padding:4px 8px;">缓存命中</th>
+                                <th style="text-align:right;padding:4px 8px;">平均延迟</th>
+                                <th style="text-align:right;padding:4px 8px;">接口数</th>
+                                <th style="text-align:right;padding:4px 8px;">最近活动</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="c in (clientUsage.clients || [])" :key="c.client_ip"
+                                style="border-top:1px solid rgba(255,255,255,0.05);">
+                                <td style="padding:5px 8px;font-family:var(--font-mono);">
+                                    {{ c.client_ip }}
+                                    <span v-if="isLoopbackIP(c.client_ip)"
+                                          style="font-family:inherit;color:var(--text-muted);font-size:0.72rem;">（本机）</span>
+                                </td>
+                                <td style="text-align:right;padding:5px 8px;font-family:var(--font-mono);">{{ fmtCompact(c.request_count) }}</td>
+                                <td style="text-align:right;padding:5px 8px;font-family:var(--font-mono);"
+                                    :style="{ color: c.error_count ? 'var(--color-danger)' : '' }">{{ fmtCompact(c.error_count) }}</td>
+                                <td style="text-align:right;padding:5px 8px;font-family:var(--font-mono);"
+                                    :style="{ color: clientErrorRate(c) > 5 ? 'var(--color-danger)' : '' }">
+                                    {{ clientErrorRate(c).toFixed(1) }}%
+                                </td>
+                                <td style="text-align:right;padding:5px 8px;font-family:var(--font-mono);color:var(--color-primary);">{{ fmtCompact(c.total_tokens) }}</td>
+                                <td style="text-align:right;padding:5px 8px;font-family:var(--font-mono);">{{ fmtCompact(c.input_tokens) }}</td>
+                                <td style="text-align:right;padding:5px 8px;font-family:var(--font-mono);">{{ fmtCompact(c.output_tokens) }}</td>
+                                <td style="text-align:right;padding:5px 8px;font-family:var(--font-mono);color:var(--text-muted);">{{ fmtCompact(c.cached_tokens) }}</td>
+                                <td style="text-align:right;padding:5px 8px;font-family:var(--font-mono);">{{ c.avg_latency_ms }} ms</td>
+                                <td style="text-align:right;padding:5px 8px;font-family:var(--font-mono);">{{ c.distinct_lapis }}</td>
+                                <td style="text-align:right;padding:5px 8px;font-family:var(--font-mono);color:var(--text-muted);">{{ fmtClientSeen(c.last_seen) }}</td>
+                            </tr>
+                            <tr v-if="!(clientUsage.clients || []).length">
+                                <td colspan="11" style="padding:18px 8px;text-align:center;color:var(--text-muted);font-size:0.82rem;">
+                                    该周期内没有来自代理端口的请求记录。
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 7. SB CONFIG tab — 中心配置（Supabase）：URL+key 加密保存+角色探测+同步状态 -->
             <div v-if="activeTab === 'sbconfig'" class="tab-pane">
                 <!-- 头部：标题 + 单一状态徽章（角色·连通，合并去重）+ 右上角操作 -->
                 <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap;">
@@ -3826,6 +3900,11 @@
                 // 仪表盘单屏指标矩阵：4 维度 × 10 指标 TOP3 × 今日/本月 + 待处理 + 近期错误。
                 const metricsData = ref({ platform: {}, key: {}, model: {}, interface: {}, needs_attention: [], recent_errors: [] });
                 const metricsPeriod = ref('today');
+                // 下游客户端用量（按 client_ip 聚合）。与 metricsData 的区别：
+                // metricsData 按上游对象（平台/Key/模型/接口）切，这里按**调用方**切 ——
+                // 用来回答"谁在用、谁把额度烧掉了"。
+                const clientUsage = ref({ period: 'today', clients: [] });
+                const clientUsagePeriod = ref('today');
                 // Supabase 角色（management/proxy/offline）：用于 confirm() 加 sb 提醒
                 // 和中心配置页徽章。启动时拉一次。
                 const sbRole = ref('offline');
@@ -4427,6 +4506,37 @@
                         }
                     } catch (e) {}
                 };
+
+                // 下游客户端用量。失败时保留上一次的数据（不清空）——
+                // 采集失败不该让表格突然空掉，那会被误读成"没人在用"。
+                const loadClientUsage = async () => {
+                    try {
+                        const r = await fetch('/api/analytics/clients?period=' + clientUsagePeriod.value + '&limit=50');
+                        if (r.ok) {
+                            clientUsage.value = await r.json();
+                        }
+                    } catch (e) {}
+                };
+
+                // 客户端错误率（百分比，一位小数）。分母为 0 时返回 0 而非 NaN ——
+                // NaN 渲染到表格里会显示 "NaN%"。
+                const clientErrorRate = (c) => {
+                    if (!c || !c.request_count) return 0;
+                    return (c.error_count / c.request_count) * 100;
+                };
+                // 大数字缩写：1234567 → 1.23M。表格列宽有限，完整数字会把
+                // 布局撑破。
+                const fmtCompact = (n) => {
+                    const v = Number(n) || 0;
+                    if (Math.abs(v) >= 1e9) return (v / 1e9).toFixed(2) + 'B';
+                    if (Math.abs(v) >= 1e6) return (v / 1e6).toFixed(2) + 'M';
+                    if (Math.abs(v) >= 1e4) return (v / 1e3).toFixed(1) + 'K';
+                    return String(v);
+                };
+                // 后端返回 timestamp 原文（SQLite 时间串），只取日期部分显示。
+                const fmtClientSeen = (s) => (s ? String(s).slice(0, 16).replace('T', ' ') : '—');
+                // 本机/回环地址额外标注：本机面板自己发的请求也会计入。
+                const isLoopbackIP = (ip) => ip === '127.0.0.1' || ip === '::1' || ip === '[::1]';
 
                 const attentionLabel = (kind) => ({
                     platform: '平台', key: 'Key', model: '模型', interface: '接口'
@@ -5403,6 +5513,7 @@
                     loadKeys();
                     if (activeTab.value === 'dashboard') { fetchSyncCenter(); loadInsights(); loadAnalytics(); loadMetrics(); }
                     if (activeTab.value === 'platforms') { loadPlatforms(); loadRapis(); }
+                    if (activeTab.value === 'clients') { loadClientUsage(); }
                     if (activeTab.value === 'keys') { loadPlatforms(); loadRapis(); }
                     if (activeTab.value === 'rapis') {
                         loadPlatforms();
@@ -6803,9 +6914,14 @@
                     setInterval(loadInsights, 30000);
                     setInterval(loadAnalytics, 30000);
                     setInterval(loadMetrics, 30000);
+                    // 客户端用量与仪表盘同频（30s）。两个页面都用 setInterval 而
+                    // 非 SSE 推送：它们是低频查询型数据，30s 延迟可接受，
+                    // 不值得为它维持一条长连接。
+                    setInterval(loadClientUsage, 30000);
                     setInterval(fetchSBConfig, 60000);
                     setInterval(loadUnread, 8000);
                     loadMetrics();
+                    loadClientUsage();
                     fetchSBConfig();
                     loadPullMode();
                      loadLogLevel();
@@ -6898,6 +7014,9 @@
                     coolingTree, jumpToPlatform,
                     // 仪表盘单屏指标矩阵
                     metricsData, metricsPeriod, metricRows, loadMetrics,
+                    // 客户端用量页
+                    clientUsage, clientUsagePeriod, loadClientUsage,
+                    clientErrorRate, fmtCompact, fmtClientSeen, isLoopbackIP,
                     attentionLabel, attentionByKind, attentionColor, jumpToAttention, openLogById,
                     // Supabase 配置 + 角色 + confirm sb 提醒
                     sbRole, sbConfig, sbConfigForm, sbRoleLabel, tableNameLabel,

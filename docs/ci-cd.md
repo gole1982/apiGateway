@@ -1,7 +1,8 @@
 # CI/CD
 
 本仓库使用 GitHub Actions 做持续集成与持续交付。工作流定义在
-`.github/workflows/ci.yml`。
+`.github/workflows/ci.yml`（构建/测试）与 `.github/workflows/security.yml`
+（漏洞扫描），依赖升级由 `.github/dependabot.yml` 自动开 PR。
 
 ## 触发时机
 
@@ -16,6 +17,12 @@
 > 注意：GitHub **不对 tag push 评估 paths 过滤**，所以手动推 `v*` tag 仍照常发版。
 > 另：`paths-ignore` 只能写在 trigger 层，job 层不支持（写了会解析失败）。
 
+`security.yml`：
+
+- `push` 到 `master` / `main`、所有 `pull_request`
+- 定时：每周一 03:17 UTC（覆盖"PR 当时无漏洞、事后才披露"的情况）
+- 手动触发
+
 ## Job 一览
 
 | Job | 作用 | 触发条件 | 门槛 |
@@ -29,6 +36,32 @@
 | `docker` | 构建多架构镜像推 GHCR | 仅 push 分支/tag | 仅 push |
 
 `concurrency` 设置了同一 ref 串行、可中断，避免 push/push 并发跑。
+
+> `lint` 之所以还没转阻断：`.golangci.yml` 启用了较严格的 linter 组合，
+> 存量告警未清零。**不要在没有实跑过一遍的情况下摘掉 `continue-on-error`** ——
+> 那会让所有 PR 立刻变红，反而使这个 job 失去意义。
+
+## security.yml 的 Job（漏洞扫描）
+
+与 `ci.yml` 分开的原因：触发时机与失败语义不同。`ci.yml` 管"这次改动能不能合"，
+`security.yml` 管"仓库当前有没有已知漏洞"——后者即使今天全绿，明天某个依赖
+爆出新 CVE 也会变红，与任何一次 PR 无关。
+
+| Job | 作用 | 是否阻断 |
+|-----|------|----------|
+| `govulncheck` | 调用图级漏洞可达性分析（依赖的已知 CVE） | ⚠️ 当前允许失败（存量待处理） |
+| `CodeQL` | SAST：逻辑型漏洞（注入 / 路径遍历 / 不安全并发） | 否，结果进 Security 页 |
+
+三者与 Dependabot 的分工，缺一不可：
+
+- **Dependabot** — 事前：让依赖保持新，从而**不产生**漏洞
+- **govulncheck** — 事后检测：依赖树里的漏洞，以及**是否真的能调用到**
+- **CodeQL** — 事后检测：**代码本身**的逻辑漏洞（与依赖无关）
+
+一个项目完全可以既没有过时依赖、又有路径遍历漏洞 —— 所以两个扫描器不能互相替代。
+
+CodeQL 设为手动分析（不在每个 PR 上自动跑）：PR 数量小，定时跑已足够，
+自动跑会显著拖慢每个 PR。手动入口在仓库 Security 页面。
 
 ## 自动版本 tag
 

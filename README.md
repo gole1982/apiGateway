@@ -55,7 +55,7 @@
 - **被动监控**：冷却计时器 + 指数退避，无需主动健康检查；可恢复计费错误（积分不足/欠费）走长冷却而非永久失败
 - **速率限制**：RPM / RPH / RPD / TPM / TPH / TPD 六维限制，支持端点级 + 绑定级双层限额（0 = 不限）
 - **多协议转换**：OpenAI（内部标准格式）↔ Anthropic ↔ Gemini 双向转换，含 SSE 流式转换
-- **令牌加密存储**：平台 Token 与凭据经 AES-256-GCM 加密落库，密钥保存在 `~/.apiGateway.key`（Docker 下由 `APIGATEWAY_KEY` 注入）
+- **令牌加密存储**：平台 Token 与凭据经 AES-256-GCM 加密落库，主密钥**只从环境变量 `APIGATEWAY_KEY` 读取**（缺失即拒绝启动，绝不静默生成）
 - **一键排查与恢复**：模型页可直测 Key×Model（真实穿透上游），2xx 自动清除失败标记并重新入池；添加 Key / 编辑绑定后自动重探测；支持启动时对 `available=0` 的端点做健康回收
 - **Dashboard**：内嵌单文件 Vue 3 SPA（`internal/service/dashboard.html`），三层决策视图（Health → Efficiency → Capacity）、单屏指标「仪表盘」、智能「洞察」、Key 链路断点直显、SSE 实时推送、日志级别热调
 - **中心配置管理**：面板「中心配置」页录入 URL + key 自动判定角色并热激活，支持手动刷新、拉取模式切换、诊断、推送本地配置到中心
@@ -143,6 +143,7 @@ POST /v1beta/*              — Gemini 原生 API（generateContent 等）
 GET  /v1/models             — 模型列表（仅暴露 enabled 的 LAPI）
 GET  /health                — 存活探针，返回 {"status":"ok"}
 GET  /status                — 网关状态（端口、RAPI/LAPI 数量、累计请求数）
+GET  /metrics               — Prometheus 指标（见「监控与用量」）
 ```
 
 客户端可使用 OpenAI、Anthropic 或 Gemini 格式请求，网关自动识别并转换：
@@ -154,6 +155,96 @@ curl -X POST http://localhost:54321/v1/chat/completions \
 ```
 
 ---
+
+## 监控与用量
+
+### Prometheus 指标
+
+`GET :13579/metrics` 输出 Prometheus 文本格式（`text/plain; version=0.0.4`），
+无外部依赖（手写曝光格式，不引入 `client_golang`），可直接被抓取：
+
+| 指标 | 类型 | 含义 |
+|------|------|------|
+| `apigateway_up` | gauge | 恒为 1；进程存活即可被抓到 |
+| `apigateway_build_info{version}` | gauge | 构建版本 |
+| `apigateway_port{name}` | gauge | 实际监听端口（`proxy` / `web`） |
+| `apigateway_rapi{state}` | gauge | 模型存量：`total` / `enabled` / `available` |
+| `apigateway_lapi{state}` | gauge | 接口存量：`total` / `enabled` |
+| `apigateway_key{state}` | gauge | Key 存量：`total` / `enabled` / `cooling` |
+| `apigateway_rapi_cooling{model,reason}` | gauge | **逐个**列出冷却中的模型及原因 |
+| `apigateway_queue_depth{lapi_id}` | gauge | 等待可用路由的排队请求数 |
+| `apigateway_requests_total{result}` | counter | 累计请求（`success` / `failed`） |
+| `apigateway_tokens_total{kind}` | counter | 累计 token（`input` / `output` / `cached`） |
+| `apigateway_retries_total` | counter | 累计重试次数 |
+| `apigateway_fallbacks_total` | counter | 累计发生故障转移的请求数 |
+
+counter 全部来自 `request_logs` 聚合，**重启不归零**，可直接用 `rate()` 求导。
+布尔量一律用 0/1 而非 true/false。3xx 既不计入成功也不计入失败。
+
+最小抓取配置：
+
+```yaml
+scrape_configs:
+  - job_name: apigateway
+    static_configs:
+      - targets: ['127.0.0.1:13579']
+```
+
+三条最实用的告警规则：
+
+```yaml
+groups:
+  - name: apigateway
+    rules:
+      # 全部已启用 Key 都冷却 → 网关实质不可用
+      - alert: AllKeysCooling
+        expr: apigateway_key{state="enabled"} > 0
+              and apigateway_key{state="cooling"} == apigateway_key{state="enabled"}
+        for: 2m
+        annotations:
+          summary: "所有 Key 均处于冷却，网关无可用凭据"
+
+      # 失败率异常（5 分钟窗口）
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(apigateway_requests_total{result="failed"}[5m]))
+            / clamp_min(sum(rate(apigateway_requests_total[5m])), 0.001) > 0.2
+        for: 5m
+        annotations:
+          summary: "网关失败率超过 20%"
+
+      # 没有流量（可能上游全挂或客户端没接入）
+      - alert: NoTraffic
+        expr: sum(rate(apigateway_requests_total[10m])) == 0
+        for: 30m
+        annotations:
+          summary: "10 分钟内无请求通过网关"
+```
+
+### 下游客户端用量
+
+面板「**客户端用量**」页按**来源 IP** 聚合调用量（请求数、错误率、token、平均延迟、
+接口数、最近活动），接口为
+`GET /api/analytics/clients?period=today|7d|30d|month&limit=N`。
+
+> **口径说明**：网关**不做下游认证**，因此只能按来源 IP 归集 —— 同一 IP 后的多个
+> 客户端会被合并成一行。它的用途是回答"谁在用、谁把额度烧掉了"，**不是配额管控**。
+> 本机调用（`127.0.0.1` / `::1`）在表格里会标注"（本机）"。
+
+## 安全边界
+
+本项目定位是**自部署自用**：所有 HTTP 端点均**无认证**。请据此部署：
+
+- **Dashboard 默认只发布到宿主回环**。`docker-compose.yml` 写的是
+  `127.0.0.1:24680:24680` 而不是 `24680:24680` —— 后者等于把可读改
+  平台 / Key / token 的完整管理 API 暴露到宿主所有网卡。确需远程访问时，
+  请显式写 `0.0.0.0:24680:24680`，并自行在前面加 TLS + 认证反向代理。
+- **代理端口无认证**：任何能连到 `13579` 的人都能消耗你的上游额度，
+  不要直接暴露到公网。
+- 面板**写**接口已做 Origin 校验（CSRF 防护）；读接口无保护。
+- 主密钥通过 `APIGATEWAY_KEY` 注入；**不要提交 `.env`**（已在 `.gitignore`）。
+- 密钥轮换、备份恢复等运维流程见 [docs/日常操作手册.md](docs/日常操作手册.md)。
+- 中心同步侧的信任边界（角色判定/写隔离/token 保密）以 [docs/安全模型.md](docs/安全模型.md) 为准。
 
 ## 构建与运行
 
@@ -190,10 +281,8 @@ cp .env.example .env   # 填 APIGATEWAY_KEY（openssl rand -hex 32）
 docker compose up -d --build
 ```
 
-- 代理 `http://宿主机:13579`，面板 `http://宿主机:24680`。
-- 配置文件是 `proxy.docker.cfg`（容器端口），**不是**仓库根的 `proxy.cfg`（本地 Windows 直运的 43210/43211）—— 挂错则端口映射失效。
-- `APIGATEWAY_KEY` 生产必须设置：数据库 token 用它加密；容器重建后 key 变了历史密文就解不开。`gateway-data` 卷持久化 `gateway.db`。
 - 健康检查：`GET :13579/status`，`docker ps` 应显示 `healthy`。
+- 指标：`GET :13579/metrics`（Prometheus 文本格式）。
 - 更新：一键脚本 `bash update.sh`，或手动 `docker compose pull && docker compose up -d`（镜像由 CI 在 push main / tag 时自动构建推送到 GHCR，多架构 `linux/amd64, linux/arm64`）。每次 push master 会自动打版本 tag 并建 Release，镜像同时带 `latest`、`sha-<7位>` 和版本号（如 `1.2.20261001`）三种标签。
 - 本地快速迭代（约 6 秒，不拉镜像）：`bash local-update.sh` —— 只把新编译的二进制塞进运行中的容器；`--rollback` 可回滚，失败会自动回滚。容器当前版本见 `GET :24680/api/status` 的 `version` 字段。
 
@@ -218,6 +307,7 @@ internal/
   logger/           异步请求日志 + 会话追踪
   models/           数据模型 + 自然键归一化（NormalizeBaseURL / TokenHash）
   notify/           SSE 通知推送
+  prom/             Prometheus 指标采集与文本曝光（零依赖）
   scheduler/        协调器：持有实体、成本路由、速率限制、冷却管理
   service/          HTTP 服务 + Dashboard REST API + 内嵌单文件前端
   store/            定义类持久层接缝（本地 DB 或中心 Supabase）

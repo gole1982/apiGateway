@@ -16,10 +16,11 @@ import (
 
 func initTestCrypto(t *testing.T) {
 	t.Helper()
-	// Point the key file to a temp directory so tests don't touch ~/.apiGateway.key.
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("USERPROFILE", dir) // Windows
+	// 2026-09 起主密钥只认环境变量（~/.apiGateway.key 兜底已移除），所以这里
+	// 直接注入一把固定的测试 key，而不是让 crypto 去生成 —— 生成意味着每个
+	// 测试都换一把 key，跨用例的密文就再也解不开了。
+	t.Setenv("APIGATEWAY_KEY", "000102030405060708090a0b0c0d0e0f"+
+		"101112131415161718191a1b1c1d1e1f")
 	if err := crypto.Init(); err != nil {
 		t.Fatalf("crypto.Init: %v", err)
 	}

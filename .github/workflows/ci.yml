@@ -105,6 +105,7 @@ jobs:
               "gateway/internal/gateway": 10,
               "gateway/internal/logger": 28,
               "gateway/internal/notify": 42,
+              "gateway/internal/prom": 90,
               "gateway/internal/scheduler": 64,
               "gateway/internal/service": 5,
               "gateway/internal/supabase": 40,

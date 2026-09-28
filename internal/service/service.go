@@ -254,6 +254,14 @@ func (s *Service) Run() error {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, `{"status":"ok"}`)
 	})
+	// Prometheus 抓取端点。放在代理端口而非面板端口：面板默认只绑回环，
+	// 而采集端通常与网关同机/同网段，绑到代理端口更省事。
+	//
+	// 必须注册在下面的 catch-all "/" 之前 —— ServeMux 按最长匹配前缀
+	// 派发，"/metrics" 比 "/" 更长，所以顺序其实不敏感；但把它写在
+	// catch-all 附近是为了让读者一眼看到"这些是真实端点，/ 不是"。
+	proxyMux.HandleFunc("/metrics", handleMetrics)
+
 	proxyMux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
 		// Bug 8.9: only expose enabled LAPIs.
 		w.Header().Set("Content-Type", "application/json")
@@ -332,9 +340,12 @@ func (s *Service) Run() error {
 		}
 	}
 	webAddr := fmt.Sprintf("%s:%d", webHost, cfg.WebPort)
+	// 记录最终生效端口，供 /metrics 暴露（见 metrics.go 的 runtimePorts）。
+	runtimePorts.proxy = cfg.ProxyPort
+	runtimePorts.web = cfg.WebPort
 	webServer = &http.Server{
 		Addr:        webAddr,
-		Handler:     createWebHandler(),
+		Handler:     originGuard(createWebHandler()),
 		ReadTimeout: 30 * time.Second,
 		IdleTimeout: 120 * time.Second,
 	}
@@ -607,6 +618,75 @@ func isContainerEnv() bool {
 		}
 	}
 	return false
+}
+
+// originGuard 拒绝跨站发起的写操作（CSRF）。
+//
+// 背景：本项目的面板 API 全部无认证，且 handler 用 json.NewDecoder 直接解析
+// body、**不校验 Content-Type**。浏览器发起的跨站简单请求可以用
+// Content-Type: text/plain 而不触发预检，攻击者页面即可让受害者浏览器
+// 以受害者身份调用 /api/rapis 等写端点，读取/篡改平台与 Key 配置。
+//
+// 判据（对齐现代浏览器的行为）：
+//   - 写方法（POST/PUT/PATCH/DELETE）才拦，GET/HEAD 放行（它们按约定无副作用）。
+//   - 有 Origin 时必须与 r.Host 同源；不同源直接 403。
+//   - 无 Origin 但有 Referer 时按 Referer 判（老浏览器不发 Origin）。
+//   - 两者都无 —— 放行。这不是"漏了防护"：真实浏览器发起的跨站写请求
+//     必定带 Origin 或 Referer（除非 Referrer-Policy 刻意降级，且那种情况
+//     下也拿不到有效来源）。而无 Origin 的调用方是 curl / Prometheus /
+//     本地脚本这类非浏览器客户端，它们不受 CSRF 影响，拦掉只会误伤。
+func originGuard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet, http.MethodHead, http.MethodOptions:
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		source := strings.TrimSpace(r.Header.Get("Origin"))
+		if source == "" {
+			source = strings.TrimSpace(r.Header.Get("Referer"))
+		}
+		if source == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// 解析失败（畸形 Origin）按不同源处理：宁可误伤一次异常客户端，
+		// 也不能让一个刻意构造的畸形 Origin 绕过检查。
+		//
+		// 比对必须同时看 scheme 与 host：只比 Host 的话，攻击者页面
+		// https://127.0.0.1:24680（不同源，但 Host 字面量相同）会被放行。
+		// 同源的定义就是 (scheme, host, port) 三者全等。
+		u, err := url.Parse(source)
+		if err != nil || u.Host == "" || !sameOrigin(u, r) {
+			logger.DefaultConsole().Warn("service", "[CSRF] blocked cross-origin write",
+				"method", r.Method, "path", r.URL.Path, "source", source, "host", r.Host)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "cross-origin request blocked"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// sameOrigin 判断请求来源是否与本服务同源。
+//
+// 同源 = (scheme, host, port) 三者全等，故必须同时比 scheme：
+// 只比 Host 会让 https://127.0.0.1:24680 这样的跨源来源蒙混过关
+// （Host 字面量与 http 的完全一样，只有 scheme 不同）。
+//
+// scheme 的基准取自请求本身：Go 的 http.Server 不"TLS 感知"，r.TLS 为 nil
+// 时请求就是明文来的，故用 "http"；有 TLS 时用 "https"。
+func sameOrigin(u *url.URL, r *http.Request) bool {
+	if !strings.EqualFold(u.Host, r.Host) {
+		return false
+	}
+	want := "http"
+	if r.TLS != nil {
+		want = "https"
+	}
+	return strings.EqualFold(u.Scheme, want)
 }
 
 func createWebHandler() http.Handler {
@@ -2058,6 +2138,10 @@ func createWebHandler() http.Handler {
 
 	// 仪表盘单屏指标：4 维度 × 10 指标 TOP3 × 今日/本月 + 待处理 + 近期错误。
 	mux.HandleFunc("/api/dashboard/metrics", handleDashboardMetrics)
+
+	// 下游客户端用量（按 client_ip 聚合）。与上面那条的区别：那条按
+	// 上游对象（平台/Key/模型/接口）切，这条按**调用方**切。
+	mux.HandleFunc("/api/analytics/clients", handleClientUsage)
 
 	// 中心配置（Supabase）：URL + API key 加密保存 + 角色自动探测。
 	mux.HandleFunc("/api/sb-config", handleSBConfig)
