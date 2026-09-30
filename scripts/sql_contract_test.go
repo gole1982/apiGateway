@@ -347,3 +347,152 @@ func TestVerifyScriptExpectedCountsAreSixTables(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// DDL: 第 7 节写隔离（中心未做写隔离 = publishable key 被误判成管理端）
+// ---------------------------------------------------------------------------
+//
+// 这是整条安全链的地基：角色判定靠"无副作用写探测"，中心不做写隔离时
+// publishable key 的 PATCH 会返回 204，探测就会把只读角色判成可写。
+// 代码侧已加"意图 vs 事实"交叉校验兜底（prefix 是 publishable 却写成功 →
+// 判 proxy 并报错），但那只把误判降级成报错，根治仍在中心侧 DDL。
+// 第 7 节一旦被误删或改坏，CI 全绿而生产中心静默失去隔离 —— 故此处逐条锁死。
+
+// 定义表全集 = 6 张契约表 + config_meta（版本号所在，同样只读）。
+var writeIsolationTables = []string{
+	"platform", "credential", "rapi", "endpoint_credential",
+	"lapi", "lapi_rapi_order", "config_meta",
+}
+
+var writePrivileges = []string{"INSERT", "UPDATE", "DELETE", "TRUNCATE"}
+
+// section7 抽出第 7 节的 SQL 文本（去掉注释，只留可执行语句），供后续检查。
+func section7(t *testing.T) string {
+	t.Helper()
+	src := stripSQLComments(read(t, schemaFile))
+	marker := "ENABLE ROW LEVEL SECURITY"
+	start := strings.Index(src, marker)
+	if start < 0 {
+		t.Fatal("schema has no ENABLE ROW LEVEL SECURITY — section 7 (write isolation) " +
+			"is missing; the center would let a publishable key write")
+	}
+	// 回退到该行行首：第一条语句是 "ALTER TABLE platform ENABLE ..."，
+	// 从 marker 起切会把 "ALTER TABLE platform" 丢掉。
+	if nl := strings.LastIndexByte(src[:start], '\n'); nl >= 0 {
+		start = nl + 1
+	}
+	// 截到「硬化可选项」为止（其余部分不属于本节）。
+	end := strings.Index(src[start:], "ALTER DEFAULT PRIVILEGES")
+	if end < 0 {
+		end = len(src) - start
+	}
+	return src[start : start+end]
+}
+
+// 每张定义表都要 ENABLE ROW LEVEL SECURITY，且不能用 FORCE ——
+// FORCE 会连表 owner / service_role 一起拦，管理端就写不了中心了。
+func TestSchemaV2Section7EnablesRLSOnEveryDefinitionTable(t *testing.T) {
+	sec := section7(t)
+	for _, tbl := range writeIsolationTables {
+		want := "ALTER TABLE " + tbl
+		if !strings.Contains(sec, want) {
+			t.Errorf("section 7 does not ENABLE ROW LEVEL SECURITY on %q", tbl)
+			continue
+		}
+		// 该表的 ALTER 必须落在 ENABLE 之前（同一语句内）。
+		i := strings.Index(sec, want)
+		tail := sec[i:]
+		if j := strings.Index(tail, ";"); j > 0 {
+			tail = tail[:j]
+		}
+		if !strings.Contains(tail, "ENABLE ROW LEVEL SECURITY") {
+			t.Errorf("ALTER TABLE %s does not ENABLE ROW LEVEL SECURITY", tbl)
+		}
+	}
+	// 内联的 FORCE（无 ENABLE 前缀）才危险；注释里的说明已被 stripSQLComments 去掉。
+	stripped := stripStringLiterals(sec)
+	if regexp.MustCompile(`\bFORCE ROW LEVEL SECURITY`).MatchString(stripped) {
+		t.Error("section 7 uses FORCE ROW LEVEL SECURITY — it blocks the table owner / " +
+			"service_role too, so the management role could no longer write the center")
+	}
+}
+
+// REVOKE 是 RLS 之外的第二道闸（防策略误加）：anon/authenticated 的四种写权限
+// 都要撤，且 service_role 绝不能出现在被撤名单里（它靠 BYPASSRLS 保留全权）。
+func TestSchemaV2Section7RevokesWritesFromAnonAndAuthenticated(t *testing.T) {
+	sec := stripStringLiterals(section7(t))
+	// 找出所有 REVOKE ... ; 语句。
+	var revokes []string
+	for _, stmt := range strings.Split(sec, ";") {
+		if strings.Contains(stmt, "REVOKE") {
+			revokes = append(revokes, strings.Join(strings.Fields(stmt), " "))
+		}
+	}
+	if len(revokes) == 0 {
+		t.Fatal("section 7 has no REVOKE statement — RLS alone is not enough if a policy " +
+			"is ever added by mistake; a publishable key would then be able to write")
+	}
+	for _, kw := range writePrivileges {
+		found := false
+		for _, r := range revokes {
+			if !strings.Contains(r, kw) {
+				continue
+			}
+			// 只认撤到 anon/authenticated 的那条。
+			fi := strings.Index(r, " FROM ")
+			if fi < 0 {
+				continue
+			}
+			grantees := r[fi+len(" FROM "):]
+			if !strings.Contains(grantees, "anon") || !strings.Contains(grantees, "authenticated") {
+				t.Errorf("REVOKE %s does not target both anon and authenticated: %q", kw, r)
+				continue
+			}
+			if strings.Contains(grantees, "service_role") {
+				t.Errorf("REVOKE %s also revokes from service_role: %q — the management "+
+					"role must keep write access (BYPASSRLS)", kw, r)
+			}
+			found = true
+		}
+		if !found {
+			t.Errorf("section 7 does not REVOKE %s from anon/authenticated", kw)
+		}
+	}
+}
+
+// RLS 开启后"无策略即拒绝一切"。必须给每张定义表显式放行 SELECT，
+// 否则代理端（publishable key）拉取配置会被 403，数据同步直接断掉。
+func TestSchemaV2Section7GrantsReadOnlyPolicyForEveryDefinitionTable(t *testing.T) {
+	raw := stripSQLComments(section7(t))
+	sec := strings.Join(strings.Fields(raw), " ")
+	for _, tbl := range writeIsolationTables {
+		want := "CREATE POLICY read_defs ON " + tbl + " FOR SELECT TO anon, authenticated"
+		if !strings.Contains(sec, want) {
+			t.Errorf("section 7 does not create the read-only policy on %q; with RLS "+
+				"enabled and no policy, SELECT is denied and the proxy cannot pull "+
+				"config (expected: %q)", tbl, want)
+		}
+	}
+	// DROP + CREATE 才是可重入的：缺 DROP，第二次执行会因策略已存在而报错，
+	// SQL Editor 遇错中止 —— 后面的 GRANT/RPC 全部不执行。
+	if n := strings.Count(sec, "DROP POLICY IF EXISTS read_defs ON"); n < len(writeIsolationTables) {
+		t.Errorf("section 7 has %d DROP POLICY IF EXISTS read_defs, want >= %d — without it "+
+			"the script is not re-runnable", n, len(writeIsolationTables))
+	}
+}
+
+// 写权限撤掉后，读 + RPC 必须还在：get_bundle/get_version 是 SECURITY INVOKER，
+// 需要调用者的 SELECT 权限；缺这两个 GRANT，代理端同步全断。
+func TestSchemaV2Section7KeepsReadAndRPCForAnon(t *testing.T) {
+	sec := strings.Join(strings.Fields(stripSQLComments(section7(t))), " ")
+	if !regexp.MustCompile(`GRANT SELECT ON .* TO anon, authenticated`).MatchString(sec) {
+		t.Error("section 7 does not GRANT SELECT to anon/authenticated; read access is gone")
+	}
+	for _, fn := range []string{"get_version()", "get_bundle(BIGINT)"} {
+		want := "GRANT EXECUTE ON FUNCTION " + fn + " TO anon, authenticated"
+		if !strings.Contains(sec, want) {
+			t.Errorf("section 7 does not grant EXECUTE on %s to anon/authenticated; the "+
+				"proxy cannot fetch the bundle", fn)
+		}
+	}
+}
