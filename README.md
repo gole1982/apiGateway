@@ -194,7 +194,7 @@ docker compose up -d --build
 - 配置文件是 `proxy.docker.cfg`（容器端口），**不是**仓库根的 `proxy.cfg`（本地 Windows 直运的 43210/43211）—— 挂错则端口映射失效。
 - `APIGATEWAY_KEY` 生产必须设置：数据库 token 用它加密；容器重建后 key 变了历史密文就解不开。`gateway-data` 卷持久化 `gateway.db`。
 - 健康检查：`GET :13579/status`，`docker ps` 应显示 `healthy`。
-- 更新：一键脚本 `bash update.sh`，或手动 `docker compose pull && docker compose up -d`（镜像由 CI 在 push main / tag 时自动构建推送到 GHCR，多架构 `linux/amd64, linux/arm64`）。每次 push master 会自动打版本 tag 并建 Release，镜像同时带 `latest`、`sha-<7位>` 和版本号（如 `1.1.20261001`）三种标签。
+- 更新：一键脚本 `bash update.sh`，或手动 `docker compose pull && docker compose up -d`（镜像由 CI 在 push main / tag 时自动构建推送到 GHCR，多架构 `linux/amd64, linux/arm64`）。每次 push master 会自动打版本 tag 并建 Release，镜像同时带 `latest`、`sha-<7位>` 和版本号（如 `1.2.20261001`）三种标签。
 
 ---
 
@@ -260,7 +260,7 @@ GitHub Actions（[.github/workflows/ci.yml](.github/workflows/ci.yml)）七个 j
 | `coverage` | 各包覆盖率地板线门禁 | 阻断 |
 | `gofmt` | 仅检查本分支改动的 Go 文件格式 | 阻断 |
 | `lint` | `golangci-lint`（固定 v1.60.3） | 当前允许失败 |
-| `tag` | push master 时自动打版本 tag（读 [`VERSION`](VERSION)，形如 `v1.1.20261001`） | 仅 master |
+| `tag` | push master 时自动打版本 tag（读 [`VERSION`](VERSION)，形如 `v1.2.20261001`） | 仅 master |
 | `release` | 交叉编译各平台二进制并建 Release（tag 事件 或 自动 tag 成功） | 仅发版 |
 | `docker` | push 主分支/tag 时构建推送到 GHCR（含 `latest` + sha + 版本号） | 仅主分支/tag |
 

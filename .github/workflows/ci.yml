@@ -207,11 +207,17 @@ jobs:
           args: --timeout=5m
 
   # ===========================================================================
-  # Job 6: 自动版本标签 —— 每次 master 构建自动打「<VERSION>.<YYYYMMDD>」tag。
+  # Job 6: 自动版本标签 —— 每次 master 构建自动打「<大>.<小>.<YYYYMMDD>」tag。
   #
-  # 版本号读仓库根的 VERSION 文件（如 1.1 → tag v1.1.20260928）。
-  # 同日多次推送：无 -2 则打第一个，有则递增后缀（v1.1.20260928-2 …），
-  # 用 git ls-remote 查远端已有 tag 判定，不依赖本地状态。
+  #   大版本：显式指定，写在仓库根 VERSION 文件里（如 1）。
+  #   小版本：大版本相对上一次发布变了 → 归零；没变 → 上一次 +1。
+  #   日期  ：Asia/Shanghai 当天，yyyymmdd。
+  #
+  # 例：VERSION=1，已有 v1.1.20260930 → 下次 v1.2.20260930；
+  #     把 VERSION 改成 2       → v2.0.20260930，再下次 v2.1.20260930。
+  #
+  # 上一次发布从远端 tag 推导（不依赖本地状态），故同日多次推送小版本自然
+  # 递增，无需额外后缀。
   #
   # 关键约束：本 job 用 GITHUB_TOKEN 创建的 tag **不会**再触发一次 workflow
   # （GitHub 防递归，官方明确行为）。所以不能指望"打完 tag 让 release job
@@ -235,26 +241,54 @@ jobs:
         id: ver
         run: |
           set -euo pipefail
-          BASE=$(tr -d '[:space:]' < VERSION)
-          if ! printf '%s' "$BASE" | grep -Eq '^[0-9]+\.[0-9]+$'; then
-            echo "VERSION 内容非法：'$BASE'（期望形如 1.1）" >&2
+
+          MAJOR=$(tr -d '[:space:]' < VERSION)
+          if ! printf '%s' "$MAJOR" | grep -Eq '^[0-9]+$'; then
+            echo "VERSION 内容非法：'$MAJOR'（只写大版本号，如 1 或 2）" >&2
             exit 1
           fi
-          DATE=$(TZ=Asia/Shanghai date +%Y%m%d)
-          TAG="v${BASE}.${DATE}"
-          # 同日重复推送 → 追加 -2/-3…（查远端，避免依赖本地 tag 缓存）
-          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
-            n=2
-            while git ls-remote --exit-code --tags origin "refs/tags/${TAG}-${n}" >/dev/null 2>&1; do
-              n=$((n+1))
-            done
-            TAG="${TAG}-${n}"
+
+          git fetch --tags --force origin
+
+          # 重跑同一个 commit 时复用已有 tag，否则会凭空多出一个版本号。
+          head_tag=$(git tag --points-at HEAD \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]{8}$' | sort -V | tail -1 || true)
+          if [ -n "$head_tag" ]; then
+            echo "HEAD 已打 $head_tag，复用（判定为重跑）"
+            echo "version=${head_tag#v}" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+
+          # 上一次发布：远端所有 v<大>.<小>.<日期> 里，大版本最大、其次小版本最大者。
+          latest=$(git ls-remote --tags origin 'refs/tags/v*' \
+            | sed 's#.*refs/tags/##; s/\^{}$//' \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]{8}$' \
+            | sed 's/^v//' \
+            | sort -t. -k1,1n -k2,2n -k3,3n | tail -1 || true)
+
+          if [ -n "$latest" ]; then
+            last_major=${latest%%.*}
+            last_minor=$(printf '%s' "$latest" | cut -d. -f2)
+          else
+            last_major=""
+            last_minor=-1
+          fi
+
+          # 大版本变了 → 小版本归零；否则在上一次基础上 +1。
+          if [ "$last_major" = "$MAJOR" ]; then
+            MINOR=$((last_minor + 1))
+          else
+            MINOR=0
+          fi
+
+          TAG="v${MAJOR}.${MINOR}.$(TZ=Asia/Shanghai date +%Y%m%d)"
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "$TAG" -m "Release $TAG"
           git push origin "refs/tags/${TAG}"
-          echo "tagged: $TAG"
+
+          echo "tagged: $TAG（上一次发布：${latest:-无}）"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
   # ===========================================================================
