@@ -195,6 +195,7 @@ docker compose up -d --build
 - `APIGATEWAY_KEY` 生产必须设置：数据库 token 用它加密；容器重建后 key 变了历史密文就解不开。`gateway-data` 卷持久化 `gateway.db`。
 - 健康检查：`GET :13579/status`，`docker ps` 应显示 `healthy`。
 - 更新：一键脚本 `bash update.sh`，或手动 `docker compose pull && docker compose up -d`（镜像由 CI 在 push main / tag 时自动构建推送到 GHCR，多架构 `linux/amd64, linux/arm64`）。每次 push master 会自动打版本 tag 并建 Release，镜像同时带 `latest`、`sha-<7位>` 和版本号（如 `1.2.20261001`）三种标签。
+- 本地快速迭代（约 6 秒，不拉镜像）：`bash local-update.sh` —— 只把新编译的二进制塞进运行中的容器；`--rollback` 可回滚，失败会自动回滚。容器当前版本见 `GET :24680/api/status` 的 `version` 字段。
 
 ---
 
@@ -232,6 +233,12 @@ docs/
   ci-cd.md                   CI/CD 说明
   superpowers/               设计定稿与实施计划
 ```
+
+根目录脚本：
+
+- `update.sh` —— 服务器更新：拉代码 → 拉镜像 → 重启。
+- `local-update.sh` —— 本地快速迭代：只替换容器内二进制（约 6 秒），
+  支持 `--rollback` 与失败自动回滚。
 
 ---
 

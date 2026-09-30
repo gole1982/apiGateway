@@ -319,6 +319,9 @@ jobs:
           cache: true
 
       - name: Cross-compile
+        env:
+          # 注入版本号，二进制 --help/接口可自报（diaglog 无此变量，-X 会被忽略）。
+          VERSION: ${{ needs.tag.outputs.version && format('v{0}', needs.tag.outputs.version) || github.ref_name }}
         run: |
           mkdir -p dist
           for os in linux windows darwin; do
@@ -326,9 +329,10 @@ jobs:
               if [ "$os" = "windows" ] && [ "$arch" = "arm64" ]; then continue; fi
               ext=""; [ "$os" = "windows" ] && ext=".exe"
               for app in gateway diaglog; do
-                echo "building $app $os/$arch"
+                echo "building $app $os/$arch ($VERSION)"
                 CGO_ENABLED=0 GOOS=$os GOARCH=$arch \
-                  go build -ldflags="-s -w" -o dist/${app}-${os}-${arch}${ext} ./cmd/$app
+                  go build -ldflags="-s -w -X gateway/internal/service.Version=$VERSION" \
+                  -o dist/${app}-${os}-${arch}${ext} ./cmd/$app
               done
             done
           done
@@ -410,5 +414,8 @@ jobs:
           platforms: linux/amd64, linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # 注入版本号，容器 /api/status 自报（Dockerfile 里 ARG VERSION）。
+          build-args: |
+            VERSION=${{ needs.tag.outputs.version || github.ref_name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

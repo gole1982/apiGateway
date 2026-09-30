@@ -31,3 +31,7 @@ opencode.json
 # ±¾µØÊý¾Ý±¸·Ý£¨bundle ÆõÔ¼ v2 Ç¨ÒÆÇ°¿ìÕÕ£¬ÎðÈë¿â£©
 backups/
 nul
+
+# æœ¬åœ°å¯†é’¥ï¼ˆAPIGATEWAY_KEY ä¸»å¯†é’¥ï¼Œç»ä¸æäº¤ï¼‰
+.env
+.env.local

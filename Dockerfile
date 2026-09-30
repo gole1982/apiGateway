@@ -44,7 +44,9 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 # Build only the gateway (no tray — headless Docker)
 COPY . .
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /gateway ./cmd/gateway
+# 注入版本号，容器 /api/status 会自报（不传则为 "dev"）。
+ARG VERSION=dev
+RUN CGO_ENABLED=0 go build -ldflags="-s -w -X gateway/internal/service.Version=${VERSION}" -o /gateway ./cmd/gateway
 
 # ---- Stage 2: Runtime ----
 FROM alpine:3.19

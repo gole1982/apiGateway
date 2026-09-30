@@ -9,7 +9,12 @@ services:
     # 远程部署时从 GitHub 拉取镜像（CI 自动构建推送）；本地开发可用 docker compose up --build
     # 仓库名必须全小写：Docker 拒绝含大写字母的 repository name（apiGateway → apigateway）
     image: ghcr.io/gole1982/apigateway:latest
-    build: .
+    build:
+      context: .
+      # 版本号注入（容器 /api/status 自报）。用法：
+      #   VERSION=$(git describe --tags) docker compose build
+      args:
+        VERSION: ${VERSION:-dev}
     container_name: api-gateway
     restart: unless-stopped
     ports:

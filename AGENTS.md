@@ -55,4 +55,18 @@ CGO_ENABLED=0 go build -o /tmp/gateway ./cmd/gateway
   上一次发布从远端 tag 推导；重跑同一 commit 复用已有 tag。
 - **`paths-ignore` 只能在 trigger 层**（job 层不支持，写错整个 workflow 解析失败）；
   且 GitHub **不对 tag push 评估 paths 过滤**。
+- **Docker 更新两条路**：`update.sh`（拉镜像，服务器用）/ `local-update.sh`（只换
+  容器内二进制，约 6 秒）。后者可行的前提是**镜像运行时层只有 `/app/gateway`
+  一个文件**——前端 `dashboard.html` 是 `go:embed` 编译进二进制的，运行时依赖
+  `ca-certificates`/`tzdata` 在基础镜像里。若将来新增运行时外部文件（模板、
+  静态资源、新依赖），`local-update.sh` 会静默失效，必须同步改。
+- **备份要放宿主机**（`bin/gateway.bak`），不要放容器内：容器崩溃进
+  `Restarting` 循环后 `docker exec` 全部失败，容器内备份取不出来。停止态容器
+  仍可用 `docker cp` 读写，这是回滚路径的基础。
+- **`docker cp` 保留源文件权限**：拷贝前在宿主机 `chmod +x`，别在容器内
+  `exec chmod`（停止态会失败）。
+- **`Version` 由 ldflags 注入**（`gateway/internal/service.Version`），`/api/status`
+  的 `version` 字段自报。Dockerfile 用 `ARG VERSION`、CI 用 `build-args`/`env` 传入；
+  不传则为 `dev`。
+- `.env` 存 `APIGATEWAY_KEY` 主密钥，已在 `.gitignore`；**切勿提交**。
 - 改过 `ci.yml` 后用 `actionlint .github/workflows/ci.yml` 自检（本地已装于 /tmp/actionlint）。
