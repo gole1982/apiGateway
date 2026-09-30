@@ -194,7 +194,7 @@ docker compose up -d --build
 - 配置文件是 `proxy.docker.cfg`（容器端口），**不是**仓库根的 `proxy.cfg`（本地 Windows 直运的 43210/43211）—— 挂错则端口映射失效。
 - `APIGATEWAY_KEY` 生产必须设置：数据库 token 用它加密；容器重建后 key 变了历史密文就解不开。`gateway-data` 卷持久化 `gateway.db`。
 - 健康检查：`GET :13579/status`，`docker ps` 应显示 `healthy`。
-- 更新：一键脚本 `bash update.sh`，或手动 `docker compose pull && docker compose up -d`（镜像由 CI 在 push main / tag 时自动构建推送到 GHCR，多架构 `linux/amd64, linux/arm64`）。
+- 更新：一键脚本 `bash update.sh`，或手动 `docker compose pull && docker compose up -d`（镜像由 CI 在 push main / tag 时自动构建推送到 GHCR，多架构 `linux/amd64, linux/arm64`）。每次 push master 会自动打版本 tag 并建 Release，镜像同时带 `latest`、`sha-<7位>` 和版本号（如 `1.1.20261001`）三种标签。
 
 ---
 
