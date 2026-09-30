@@ -252,7 +252,7 @@ go test ./... -count=1
 CGO_ENABLED=0 go build -o /tmp/gateway ./cmd/gateway
 ```
 
-GitHub Actions（[.github/workflows/ci.yml](.github/workflows/ci.yml)）六个 job：
+GitHub Actions（[.github/workflows/ci.yml](.github/workflows/ci.yml)）七个 job：
 
 | Job | 作用 | 门槛 |
 |-----|------|------|
@@ -260,7 +260,8 @@ GitHub Actions（[.github/workflows/ci.yml](.github/workflows/ci.yml)）六个 j
 | `coverage` | 各包覆盖率地板线门禁 | 阻断 |
 | `gofmt` | 仅检查本分支改动的 Go 文件格式 | 阻断 |
 | `lint` | `golangci-lint`（固定 v1.60.3） | 当前允许失败 |
-| `release` | push `v*` tag 时交叉编译各平台二进制并建 Release | 仅 tag |
-| `docker` | push 主分支/tag 时构建推送到 GHCR（含 `latest` + sha） | 仅主分支/tag |
+| `tag` | push master 时自动打版本 tag（读 [`VERSION`](VERSION)，形如 `v1.1.20261001`） | 仅 master |
+| `release` | 交叉编译各平台二进制并建 Release（tag 事件 或 自动 tag 成功） | 仅发版 |
+| `docker` | push 主分支/tag 时构建推送到 GHCR（含 `latest` + sha + 版本号） | 仅主分支/tag |
 
-详见 [docs/ci-cd.md](docs/ci-cd.md)。
+纯文档改动（`**.md`、`docs/**` 等）不触发任何 job。发版默认全自动：push master 即打 tag、建 Release、推镜像。详见 [docs/ci-cd.md](docs/ci-cd.md)。

@@ -50,3 +50,9 @@ CGO_ENABLED=0 go build -o /tmp/gateway ./cmd/gateway
   `scripts/sql_contract_test.go` 有机器校验（关键字扫描会先剥离字符串字面量，权限名 `'UPDATE'` 不算关键字）。
 - **v2 schema 契约**：`SchemaVersion = 2`；凭据身份 = `token_hash`（非 `platform_keys.key_index`）；
   端点↔凭据绑定走 `endpoint_credential` 表（非 `rapi.key_ids` CSV）。旧的 `scripts/supabase_schema.sql` 是 v1，**不要跑**。
+- **发版全自动**：push master → `tag` job 读根目录 `VERSION`（形如 `1.1`）打 `v<版本>.<YYYYMMDD>`，
+  同日重复加 `-2` 后缀；release/docker 靠 **job outputs**（不是 tag 事件）串联——`GITHUB_TOKEN`
+  创建的 tag 不会触发新 workflow（GitHub 防递归）。
+- **`paths-ignore` 只能在 trigger 层**（job 层不支持，写错整个 workflow 解析失败）；
+  且 GitHub **不对 tag push 评估 paths 过滤**。
+- 改过 `ci.yml` 后用 `actionlint .github/workflows/ci.yml` 自检（本地已装于 /tmp/actionlint）。

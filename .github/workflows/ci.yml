@@ -10,6 +10,14 @@ on:
   push:
     branches: [master, main]
     tags: ['v*']
+    # 纯文档/元数据改动不触发任何 job（含 docker 镜像重建）。
+    # 注意：GitHub 不对 tag push 评估 paths 过滤，故手动推 v* tag 仍照常发版。
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
+      - '.dockerignore'
+      - 'LICENSE'
   pull_request:
   workflow_dispatch:
 
@@ -199,18 +207,77 @@ jobs:
           args: --timeout=5m
 
   # ===========================================================================
-  # Job 5: 发版 —— push tag（v*）时交叉编译各平台二进制并建 GitHub Release。
+  # Job 6: 自动版本标签 —— 每次 master 构建自动打「<VERSION>.<YYYYMMDD>」tag。
+  #
+  # 版本号读仓库根的 VERSION 文件（如 1.1 → tag v1.1.20260928）。
+  # 同日多次推送：无 -2 则打第一个，有则递增后缀（v1.1.20260928-2 …），
+  # 用 git ls-remote 查远端已有 tag 判定，不依赖本地状态。
+  #
+  # 关键约束：本 job 用 GITHUB_TOKEN 创建的 tag **不会**再触发一次 workflow
+  # （GitHub 防递归，官方明确行为）。所以不能指望"打完 tag 让 release job
+  # 被 tag 事件拉起"，必须把 tag 名经 outputs 传给同一次运行内的 job。
+  # ===========================================================================
+  tag:
+    name: Auto tag
+    needs: [test, coverage]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute and push tag
+        id: ver
+        run: |
+          set -euo pipefail
+          BASE=$(tr -d '[:space:]' < VERSION)
+          if ! printf '%s' "$BASE" | grep -Eq '^[0-9]+\.[0-9]+$'; then
+            echo "VERSION 内容非法：'$BASE'（期望形如 1.1）" >&2
+            exit 1
+          fi
+          DATE=$(TZ=Asia/Shanghai date +%Y%m%d)
+          TAG="v${BASE}.${DATE}"
+          # 同日重复推送 → 追加 -2/-3…（查远端，避免依赖本地 tag 缓存）
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            n=2
+            while git ls-remote --exit-code --tags origin "refs/tags/${TAG}-${n}" >/dev/null 2>&1; do
+              n=$((n+1))
+            done
+            TAG="${TAG}-${n}"
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "refs/tags/${TAG}"
+          echo "tagged: $TAG"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+  # ===========================================================================
+  # Job 7: 发版 —— 手动推 v* tag 时交叉编译各平台二进制并建 GitHub Release。
   # CGO_ENABLED=0（modernc sqlite 是纯 Go），无需交叉工具链。
+  #
+  # 两种来源：a) 手动 `git push origin v1.1.20260928`（tag 事件）；
+  #          b) 自动 tag job 的产物（同一运行内传 outputs，见 job 6）。
   # ===========================================================================
   release:
     name: Release binaries
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [test, coverage]
+    needs: [test, coverage, tag]
+    # tag job 在 tag 事件 / PR 上会被跳过，此处需容忍其 skipped 状态。
+    if: |
+      always() && !cancelled() && !failure()
+      && (startsWith(github.ref, 'refs/tags/v') || needs.tag.result == 'success')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.tag.outputs.version && format('v{0}', needs.tag.outputs.version) || github.ref }}
 
       - uses: actions/setup-go@v5
         with:
@@ -237,15 +304,16 @@ jobs:
       - name: GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.tag.outputs.version && format('v{0}', needs.tag.outputs.version) || github.ref_name }}
           files: dist/*
           generate_release_notes: true
 
   # ===========================================================================
-  # Job 6: Docker 镜像构建
+  # Job 8: Docker 镜像构建
   # ===========================================================================
   docker:
     name: Docker image
-    needs: [test]
+    needs: [test, tag]
     runs-on: ubuntu-latest
     # GHCR 推送要 packages: write。缺了就是这次的样子：
     # "denied: installation not allowed to Create organization package"。
@@ -253,8 +321,14 @@ jobs:
     permissions:
       contents: read
       packages: write
-    # 仅 push 到主分支 / push tag 时构建镜像（PR 阶段不做镜像，节省时间）
-    if: github.event_name == 'push' && (startsWith(github.ref, 'refs/heads/') || startsWith(github.ref, 'refs/tags/'))
+    # 仅 push 到主分支 / push tag 时构建镜像（PR 阶段不做镜像，节省时间）。
+    # 注意 tag job 在 tag 事件上是 skipped —— 被 need 的 job 一旦 skipped，
+    # 依赖它的 job 默认也会 skipped，故这里必须用 always() 兜住，
+    # 再用 !failure() 保证上游真的失败时仍然不跑。
+    if: |
+      always() && !cancelled() && !failure()
+      && github.event_name == 'push'
+      && (startsWith(github.ref, 'refs/heads/') || startsWith(github.ref, 'refs/tags/'))
     steps:
       - uses: actions/checkout@v4
 
@@ -291,6 +365,8 @@ jobs:
             type=sha
             # 主分支固定 tag，便于部署引用
             type=raw,value=latest,enable={{is_default_branch}}
+            # 自动版本号（来自 tag job 的 VERSION+日期），与 Release 同名
+            type=raw,value=${{ needs.tag.outputs.version }},enable=${{ needs.tag.result == 'success' }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
