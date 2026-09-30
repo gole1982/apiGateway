@@ -42,7 +42,8 @@
 # 服务器上提前登录一次
 echo "$GHCR_TOKEN" | docker login ghcr.io -u <user> --password-stdin
 
-# docker-compose 改用远程镜像（把 build: . 换成 image: ghcr.io/gole1982/apiGateway:latest）
+# docker-compose 改用远程镜像（把 build: . 换成 image: ghcr.io/gole1982/apigateway:latest）
+# 注意仓库名必须全小写：Docker 拒绝含大写字母的 repository name（apiGateway → apigateway）
 docker compose pull gateway && docker compose up -d
 ```
 
