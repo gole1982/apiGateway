@@ -98,8 +98,22 @@ func TestProbeSBRole(t *testing.T) {
 
 	srv = roleProbeServer(t, http.StatusNotFound)
 	role, _, err = probeSBRole(srv.URL, "k")
-	if err != nil || role != sbRoleProxy {
-		t.Errorf("missing table = (%q,%v), want (proxy,nil)", role, err)
+	if role != sbRoleProxy || err == nil {
+		t.Errorf("missing table = (%q,%v), want (proxy,err) —— 404 应附带'中心未跑 schema'提示", role, err)
+	}
+
+	// publishable key 竟然能写（中心未做写隔离）→ 判为 proxy 且报错，
+	// 不能静默当成管理端（否则 publishable 会被当作可写角色激活直写中心）。
+	srv = roleProbeServer(t, http.StatusNoContent)
+	role, _, err = probeSBRole(srv.URL, "sb_publishable_abc")
+	if role != sbRoleProxy || err == nil {
+		t.Errorf("publishable+writable = (%q,%v), want (proxy,err)", role, err)
+	}
+
+	// secret key 能写 → 管理端（正常路径不受影响）。
+	role, ver, err = probeSBRole(srv.URL, "sb_secret_abc")
+	if err != nil || role != sbRoleManagement || ver != 249 {
+		t.Errorf("secret+writable = (%q,%d,%v), want (management,249,nil)", role, ver, err)
 	}
 
 	// 连不通 → offline + 错误（调用方据此显示"未连接"，而不是静默当代理）。

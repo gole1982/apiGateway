@@ -30,6 +30,33 @@ const (
 	sbRoleManagement = "management"
 )
 
+// Supabase 新式 API key 前缀（旧式 anon/service_role JWT 无前缀，无法据此判断，
+// 只能依赖写探测结果）。用于把"意图（key 类型）"与"事实（实际权限）"交叉校验：
+// publishable key 竟然能写 = 中心库没做写隔离，必须显式报错而不是静默当管理端。
+const (
+	keyPrefixSecret      = "sb_secret_"
+	keyPrefixPublishable = "sb_publishable_"
+)
+
+// errWriteIsolationMissing 表示中心库未对定义表做写隔离：publishable（只读）
+// key 的 PATCH 竟然成功。以安全侧（proxy）为准，并把修复指引带给操作员。
+var errWriteIsolationMissing = errors.New(
+	"中心库未启用写隔离：publishable key 竟然可以写（应返回 401/403）。" +
+		"请对定义表 ENABLE ROW LEVEL SECURITY 并 REVOKE anon/authenticated 的写权限" +
+		"（见 scripts/supabase_schema_v2.sql 第 7 节），然后重新探测")
+
+// roleError 用操作员可读的中文补充探测失败原因，避免只看到裸 HTTP 状态文本。
+func roleError(status int) string {
+	switch status {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return "写探测被拒绝（" + http.StatusText(status) + "）：中心未授权此 key 写定义表"
+	case http.StatusNotFound:
+		return "定义表 platform 不存在（404）：中心尚未执行 scripts/supabase_schema_v2.sql"
+	default:
+		return "写探测返回意外状态 " + http.StatusText(status) + "：请检查中心 schema 与权限配置"
+	}
+}
+
 // sbConfigSettings key 常量。
 const (
 	sbKeyURL    = "sb_url"
@@ -297,12 +324,17 @@ func probeSBRole(url, key string) (string, int, error) {
 	pr.Body.Close()
 	switch {
 	case pr.StatusCode == 204 || pr.StatusCode == 200:
+		// 意图 vs 事实交叉校验：publishable key 本应只读，却能写 → 中心库
+		// 没做写隔离。以安全侧（proxy）为准并显式报错，避免静默当管理端。
+		if strings.HasPrefix(key, keyPrefixPublishable) {
+			return sbRoleProxy, centerVer, errWriteIsolationMissing
+		}
 		return sbRoleManagement, centerVer, nil
 	case pr.StatusCode == 401 || pr.StatusCode == 403:
 		return sbRoleProxy, centerVer, nil
 	default:
-		// 其他码（404 表不存在等）也视为代理级：能连但不能写。
-		return sbRoleProxy, centerVer, nil
+		// 其他码（404 表不存在、5xx 等）也归为代理级：能连但不能确认可写。
+		return sbRoleProxy, centerVer, errors.New(roleError(pr.StatusCode))
 	}
 }
 

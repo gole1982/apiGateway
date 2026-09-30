@@ -126,9 +126,12 @@ func (db *DB) ApplyBundle(env *bundle.Envelope, centerKey []byte, sourceURL stri
 		if err != nil {
 			return fmt.Errorf("platform %q token: %w", p.Name, err)
 		}
-		encLoginPw, err := reencrypt(p.LoginPassword, centerKey)
-		if err != nil {
-			return fmt.Errorf("platform %q login_password: %w", p.Name, err)
+		encLoginPw := ""
+		if p.LoginPassword != "" {
+			encLoginPw, err = reencrypt(p.LoginPassword, centerKey)
+			if err != nil {
+				return fmt.Errorf("platform %q login_password: %w", p.Name, err)
+			}
 		}
 		// token 为空 → available=0（与 seedDefaultPlatforms 一致：填 key 前不可用）
 		avail := 1
@@ -143,12 +146,13 @@ func (db *DB) ApplyBundle(env *bundle.Envelope, centerKey []byte, sourceURL stri
 			if _, err = tx.Exec(`UPDATE platform SET
 					name=?, token=?, last_token_fetch=?, enabled=?, available=?,
 					notes=?, supported_formats=?, format_endpoints=?, custom_headers=?,
-					billing_address=?, login_account=?, login_password=?,
+					billing_address=?, login_account=?,
+					login_password=CASE WHEN ? = '' THEN login_password ELSE ? END,
 					sort_order=?, updated_at=?
 				WHERE id=?`,
 				p.Name, encToken, p.LastTokenFetch, b2i(p.Enabled), avail,
 				p.Notes, p.SupportedFormats, p.FormatEndpoints, p.CustomHeaders,
-				p.BillingAddress, p.LoginAccount, encLoginPw,
+				p.BillingAddress, p.LoginAccount, encLoginPw, encLoginPw,
 				p.SortOrder, now, id); err != nil {
 				return fmt.Errorf("update platform %q: %w", p.Name, err)
 			}

@@ -120,3 +120,31 @@ SELECT p.base_url AS platform_base_url, r.model, r.alias
 FROM rapi r JOIN platform p ON p.id = r.platform_id
 ORDER BY p.base_url, r.model
 LIMIT 10;
+
+-- 10. 写隔离校验（管理/代理隔离）
+--     目标：anon / authenticated 对定义表只能 SELECT，不能写；service_role 不受限。
+--     任一项非预期都说明权限没配好——publishable key 会被误判成"管理端"。
+SELECT 'anon_can_insert_platform' AS check_name,
+       has_table_privilege('anon', 'platform', 'INSERT') AS unexpected
+UNION ALL SELECT 'anon_can_update_platform', has_table_privilege('anon', 'platform', 'UPDATE')
+UNION ALL SELECT 'anon_can_delete_platform', has_table_privilege('anon', 'platform', 'DELETE')
+UNION ALL SELECT 'anon_can_update_credential', has_table_privilege('anon', 'credential', 'UPDATE')
+UNION ALL SELECT 'anon_can_update_config_meta', has_table_privilege('anon', 'config_meta', 'UPDATE')
+UNION ALL SELECT 'authenticated_can_update_platform', has_table_privilege('authenticated', 'platform', 'UPDATE')
+UNION ALL SELECT 'service_role_can_update_platform', has_table_privilege('service_role', 'platform', 'UPDATE')
+ORDER BY 1;
+-- 期望：前 6 行 false（不能写）；最后一行 service_role 为 true（管理端可写）。
+
+-- 11. RLS 是否真的启用（relrowsecurity 应为 true）
+SELECT relname, relrowsecurity, relforcerowsecurity
+FROM pg_class
+WHERE relname IN ('platform','credential','rapi','endpoint_credential','lapi','lapi_rapi_order','config_meta')
+ORDER BY relname;
+-- 期望：relrowsecurity=true 且 relforcerowsecurity=false（FORCE 会连管理端一起拦）。
+
+-- 12. 只读策略是否就位（每张表 1 条 read_defs，共 7 行）
+SELECT tablename, policyname, cmd, roles
+FROM pg_policies
+WHERE schemaname = 'public' AND policyname = 'read_defs'
+ORDER BY tablename;
+

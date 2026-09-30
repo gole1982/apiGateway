@@ -2,7 +2,7 @@
 
 - 日期：2026-09-03（2026-09-08 重定为简化 3 组件模型）
 - 状态：设计定稿（待批准后实现）
-- 变更：由"Git 仓库为权威中心 + PR 闸门"重定为 **Supabase 中心 + 单写者管理端直写 + 代理轮询版本号**。动机：Git/PR 模型有非零合并延迟，多端并发编辑会产生重名 / 孤儿 / 删除竞态；单写者 + 写穿透 + 版本轮询把并发控制与广播机制整体绕开。原 Realtime / RLS / age 信封 / 两套件打包降级为 §9 可选硬化项。
+- 变更：由"Git 仓库为权威中心 + PR 闸门"重定为 **Supabase 中心 + 单写者管理端直写 + 代理轮询版本号**。动机：Git/PR 模型有非零合并延迟，多端并发编辑会产生重名 / 孤儿 / 删除竞态；单写者 + 写穿透 + 版本轮询把并发控制与广播机制整体绕开。原 Realtime / 身份层 RLS / age 信封 / 两套件打包降级为 §9 可选硬化项。
 - 范围：中心 Supabase（定义表 + 版本号 + `get_bundle` RPC）、`internal/bundle`（Pull / Validate / Apply + `sync_state`）、`internal/service` + `dashboard.html`（管理端直写 Supabase / 代理端只读 + 轮询）、`cmd/gateway`（启动拉取 + 定时轮询 + fail-open）。
 
 ## 1. 背景与目标
@@ -11,7 +11,7 @@
 
 明确**不采用**"整体迁到在线共享数据库 + 热路径直读"：热路径每请求同步 UPSERT `rapi_metrics`/`request_trends` + 异步大字段写 `request_logs`（[db.go:54](L54) `SetMaxOpenConns(1)` + 全局 `db.mu` 串行化、[storage.go:117](L117)），换远程库会把 RTT 塞进关键路径，且被动健康态跨机串扰。故**只有定义类配置进中心**，健康态 / 遥测留代理本地。
 
-中心承载最终选定 **Supabase Postgres**：托管免费、自带 PostgREST 自动 REST、零自建后端；单写者约定下不需要 Realtime / RLS / Auth，中心最轻。
+中心承载最终选定 **Supabase Postgres**：托管免费、自带 PostgREST 自动 REST、零自建后端；单写者约定下不需要 Realtime / 身份层 Auth，中心最轻。（RLS 仅作**写隔离**用，见 §3.1 与 §9——它不是身份层，准入由运维者人工分发 key 控制。）
 
 ## 2. 权威模型（中心权威 vs 代理权威）
 
@@ -33,7 +33,7 @@
 - `config_meta(version BIGINT, updated_at)`，**每次定义表的增删改在事务 COMMIT 时把 version +1**（commit 级触发器，非逐行——避免代理在一个逻辑 CRUD 中间拉到半应用态）。
 - `get_version()` RPC：只返回当前 `version`（一个 BIGINT）。代理轮询只调这个，便宜。
 - `get_bundle(p_version BIGINT DEFAULT NULL)` RPC：返回 `{version, bundle:{platforms, platform_keys, rapis, lapis, lapi_rapi_order, tools}}`；`p_version` 等于当前 version 时返回空体（304 等价短路），代理只在 `get_version` 发现变了时才调这个拉全量。
-- 单写者约定下**不启用 Realtime / RLS / Auth**（中心最轻）；后续要多管理并发再议（§9）。
+- 单写者约定下**不启用 Realtime / 身份层 Auth**（中心最轻）；RLS 仅作**写隔离**（第 7 节，防 publishable key 写定义表、防角色误判），不是身份层。后续要多管理并发再议（§9）。
 
 ### 3.2 管理（可选部署，运维者本机）
 
@@ -121,7 +121,9 @@
 ## 9. 备选 / 硬化
 
 - **中心供应商**：Supabase 免费档首选（零运维）；若想更可控可自托管小服务（定义表 + version + bundle HTTP），但免费档够用。
-- **多管理并发**：当前单写者约定。若将来要多管理并发，启用 Supabase Realtime（`postgres_changes` 广播）+ RLS（按身份行级隔离）+ age 信封密钥——即本轮简化前的方案，作为硬化升级路径。
+- **多管理并发**：当前单写者约定。若将来要多管理并发，启用 Supabase Realtime（`postgres_changes` 广播）+ 行级身份隔离 + age 信封密钥——即本轮简化前的方案，作为硬化升级路径。
+- **写隔离（必需，非身份层）**：定义表启用 RLS 并 REVOKE anon/authenticated 的写权限（schema 第 7 节）。它只落实「publishable = 只读、secret = 可写」这条**权限**约定，不承担准入——准入由运维者人工分发 key 控制。同时它也是角色判定的依据：中心不做写隔离时，publishable 的写探测会成功，程序会把代理端误判成管理端并直写中心。`service_role` 靠 `BYPASSRLS` 保留全权。
+- **token 保密（有意为之，但需知情）**：publishable key 的准入由人工分发控制（本身不公开、不进前端），故中心把 token 交给它是设计内行为。但要知道「持有 publishable 即可读全部 token」。`center_key`（可选）只防**中心库落库数据被盗**（中心侧泄露 / 只拿到中心库副本而未碰你的机器时只得到密文）；它**不防凭据泄露**——`center_key` 与 publishable key 同在 `proxy.cfg`，能读到 key 的路径同样能读到它。
 - **token 加密**：当前中心 AES 密钥（简）；硬化改 age 信封。
 
 ## 10. 风险

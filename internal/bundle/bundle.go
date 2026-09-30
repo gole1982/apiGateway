@@ -101,8 +101,10 @@ type Platform struct {
 	CustomHeaders    string     `json:"custom_headers"`    // JSON array as TEXT
 	BillingAddress   string     `json:"billing_address"`
 	LoginAccount     string     `json:"login_account"`
-	LoginPassword    string     `json:"login_password"` // center_key 密文
-	SortOrder        int        `json:"sort_order"`
+	// LoginPassword 为 write-only：中心 get_bundle 刻意不返回该列（代理端不得经
+	// bundle 拿到控制台密码），故同步时恒为空，本地保留既有值（见 bundle_apply.go）。
+	LoginPassword string `json:"login_password"` // center_key 密文
+	SortOrder     int    `json:"sort_order"`
 }
 
 // RAPI —— 上游模型端点定义。

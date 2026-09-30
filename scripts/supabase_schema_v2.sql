@@ -352,11 +352,74 @@ LANGUAGE sql STABLE AS $$
 $$;
 
 -- ---------------------------------------------------------------------------
--- 7. 权限
---    单写者约定下不启用 RLS。
---    代理（publishable/anon）只需读 + 调 RPC；管理端（service_role/secret）可写。
+-- 7. 写隔离（管理端可写 / 代理端只读）
+--    代理（publishable/anon）只读定义表 + 调 RPC；管理端（service_role/secret）
+--    经 BYPASSRLS 全权读写。这是角色判定的地基：中心若不做写隔离，publishable
+--    key 的写探测会成功，程序会把只读角色误判成"管理端（可写）"并直写中心。
+--
+--    注意：本段只约束这 6 张定义表 + config_meta，未改未来新建对象的默认权限。
+--    如需更彻底的加固，另见文末「硬化可选项」。
 -- ---------------------------------------------------------------------------
-GRANT EXECUTE ON FUNCTION get_version() TO anon, authenticated;
-GRANT EXECUTE ON FUNCTION get_bundle(BIGINT) TO anon, authenticated;
-GRANT SELECT ON platform, credential, rapi, endpoint_credential, lapi, lapi_rapi_order
+
+-- 7.1 启用 RLS（幂等）。不要用 FORCE：那会连表 owner 也拦，管理端写不了。
+ALTER TABLE platform            ENABLE ROW LEVEL SECURITY;
+ALTER TABLE credential          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE rapi                ENABLE ROW LEVEL SECURITY;
+ALTER TABLE endpoint_credential ENABLE ROW LEVEL SECURITY;
+ALTER TABLE lapi                ENABLE ROW LEVEL SECURITY;
+ALTER TABLE lapi_rapi_order     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE config_meta         ENABLE ROW LEVEL SECURITY;
+
+-- 7.2 只读策略（DROP + CREATE 保证可重入）。RLS 开启后无策略即拒绝一切，
+--     故必须显式放行 SELECT，否则代理端拉取会 403。
+DROP POLICY IF EXISTS read_defs ON platform;
+CREATE POLICY read_defs ON platform            FOR SELECT TO anon, authenticated USING (true);
+DROP POLICY IF EXISTS read_defs ON credential;
+CREATE POLICY read_defs ON credential          FOR SELECT TO anon, authenticated USING (true);
+DROP POLICY IF EXISTS read_defs ON rapi;
+CREATE POLICY read_defs ON rapi                FOR SELECT TO anon, authenticated USING (true);
+DROP POLICY IF EXISTS read_defs ON endpoint_credential;
+CREATE POLICY read_defs ON endpoint_credential FOR SELECT TO anon, authenticated USING (true);
+DROP POLICY IF EXISTS read_defs ON lapi;
+CREATE POLICY read_defs ON lapi                FOR SELECT TO anon, authenticated USING (true);
+DROP POLICY IF EXISTS read_defs ON lapi_rapi_order;
+CREATE POLICY read_defs ON lapi_rapi_order     FOR SELECT TO anon, authenticated USING (true);
+DROP POLICY IF EXISTS read_defs ON config_meta;
+CREATE POLICY read_defs ON config_meta         FOR SELECT TO anon, authenticated USING (true);
+
+-- 7.3 撤写权限（RLS 之外的第二道闸，防策略误加）。service_role 不在列表内。
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE
+    ON platform, credential, rapi, endpoint_credential, lapi, lapi_rapi_order, config_meta
+    FROM anon, authenticated;
+
+-- 7.4 读 + RPC 执行仍在。get_version/get_bundle 是 SECURITY INVOKER（未加
+--     SECURITY DEFINER），二者要读 config_meta，故必须保留其 SELECT。
+GRANT SELECT ON platform, credential, rapi, endpoint_credential, lapi, lapi_rapi_order, config_meta
     TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION get_version()      TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION get_bundle(BIGINT) TO anon, authenticated;
+
+-- ---------------------------------------------------------------------------
+-- 7.5 硬化可选项（默认不启用；按需取消注释）
+--
+--   a) 未来新建表也默认只读（防 Supabase 默认授权再次泄漏）：
+--   ALTER DEFAULT PRIVILEGES IN SCHEMA public
+--       REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON TABLES FROM anon, authenticated;
+--
+--   b) 列级收紧：login_password（平台控制台密码）本就是 write-only，中心与
+--      bundle 都不应把它交给客户端。授予列级 SELECT 后，anon 直接
+--      select('*') 会因缺列权限报错 —— 这正是提醒调用方改用 get_bundle()：
+--   REVOKE SELECT ON platform FROM anon, authenticated;
+--   GRANT SELECT (id, base_url, name, token, last_token_fetch, enabled, notes,
+--                 supported_formats, format_endpoints, custom_headers,
+--                 billing_address, login_account, sort_order, created_at, updated_at)
+--       ON platform TO anon, authenticated;
+--   -- 注：需把 get_bundle 改为 SECURITY DEFINER + SET search_path = public, pg_temp，
+--   --     否则它读 login_password 会因调用者缺列权限而失败。
+--
+--   c) token 保密（知情项）：publishable key 的准入由人工分发控制（本身不公开、
+--      不进前端），故中心把 token 交给它是设计内行为。但持有它即等于能读全部
+--      token。center_key（可选）只防**中心库落库数据被盗**——中心侧泄露、或有人
+--      只拿到中心库副本却没碰过你的机器时只得到密文；它**不防凭据泄露**，因为
+--      center_key 与 publishable key 同在 proxy.cfg，能读到 key 的路径同样能读到它。
+-- ---------------------------------------------------------------------------

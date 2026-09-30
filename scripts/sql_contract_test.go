@@ -39,6 +39,10 @@ var (
 	lineCommentRe  = regexp.MustCompile(`--[^\n]*`)
 	blockCommentRe = regexp.MustCompile(`(?s)/\*.*?\*/`)
 	dollarQuoteRe  = regexp.MustCompile(`(?s)\$\$.*?\$\$`)
+	// 单引号字符串字面量。权限校验用 has_table_privilege('anon','platform','UPDATE')
+	// 这类调用，字面量里的 'UPDATE'/'INSERT' 是**权限名**而非 SQL 关键字，
+	// 不能让只读扫描误判。剥掉字面量（保留分隔）再扫关键字。
+	stringLiteralRe = regexp.MustCompile(`'(?:[^']|'')*'`)
 )
 
 func stripSQLComments(src string) string {
@@ -46,6 +50,12 @@ func stripSQLComments(src string) string {
 	src = dollarQuoteRe.ReplaceAllString(src, " $$ ")
 	src = lineCommentRe.ReplaceAllString(src, " ")
 	return src
+}
+
+// stripStringLiterals blanks single-quoted string literals (keeping the quotes so
+// word boundaries stay intact) so keyword scans ignore privilege names like 'UPDATE'.
+func stripStringLiterals(src string) string {
+	return stringLiteralRe.ReplaceAllString(src, "''")
 }
 
 // ---------------------------------------------------------------------------
@@ -221,7 +231,7 @@ var mutatingKeywords = []string{
 // 脚本自己的头注释承诺"只含 SELECT，不修改任何数据"。这条承诺没有机器可验，
 // 于是就没有真正的约束 —— 而这是唯一一个要在生产中心上跑的脚本。
 func TestVerifyScriptIsReadOnly(t *testing.T) {
-	src := stripSQLComments(read(t, verifyFile))
+	src := stripStringLiterals(stripSQLComments(read(t, verifyFile)))
 	// 逐词扫描，避免把列名/别名里的子串误判成关键字。
 	wordRe := regexp.MustCompile(`[A-Za-z_]+`)
 	for _, kw := range mutatingKeywords {
@@ -252,8 +262,9 @@ func TestVerifyScriptOnlyQueriesTablesTheSchemaCreates(t *testing.T) {
 	if len(created) == 0 {
 		t.Fatal("no CREATE TABLE found in the DDL")
 	}
-	// Postgres 自带目录表，不在本脚本里创建。
-	for _, sys := range []string{"pg_tables", "pg_indexes", "pg_class"} {
+	// Postgres 自带目录表，不在本脚本里创建。pg_policies 是 RLS 策略的目录视图
+	// （写隔离校验用），同样由 Postgres 提供。
+	for _, sys := range []string{"pg_tables", "pg_indexes", "pg_class", "pg_policies"} {
 		created[sys] = true
 	}
 

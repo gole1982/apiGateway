@@ -155,6 +155,65 @@ func TestApplyBundle_InsertUpdateDelete(t *testing.T) {
 	}
 }
 
+// login_password 是 write-only：中心 get_bundle 不返回该列，bundle 里恒为空。
+// 同步 apply 必须保留本地既有密文，不能因 bundle 为空而清空。
+func TestApplyBundle_PreservesLoginPasswordWhenBundleOmitsIt(t *testing.T) {
+	db := setupTestDB(t)
+	ck := mustCenterKey(t)
+
+	// 第一次同步：bundle 带 login_password（模拟历史 bundle 或测试 fixture）。
+	v1 := &bundle.Envelope{
+		SchemaVersion: bundle.SchemaVersion,
+		Version:       1,
+		Bundle: bundle.Bundle{
+			Platforms: []bundle.Platform{{
+				Name: "openai", BaseURL: "https://api.openai.com",
+				Token: encCenter(t, "sk-aaa", ck), Enabled: true,
+				LoginPassword: encCenter(t, "console-pw", ck),
+			}},
+		},
+	}
+	if err := db.ApplyBundle(v1, ck, "http://test"); err != nil {
+		t.Fatalf("apply v1: %v", err)
+	}
+
+	var stored string
+	if err := db.conn.QueryRow(`SELECT login_password FROM platform WHERE base_url=?`,
+		"https://api.openai.com").Scan(&stored); err != nil {
+		t.Fatalf("read login_password: %v", err)
+	}
+	if stored == "" {
+		t.Fatal("login_password not stored after v1")
+	}
+	if dec, _ := crypto.Decrypt(stored); dec != "console-pw" {
+		t.Fatalf("login_password decrypt = %q, want console-pw", dec)
+	}
+
+	// 第二次同步：bundle 省略 login_password（现状：get_bundle 已移除该列）。
+	v2 := &bundle.Envelope{
+		SchemaVersion: bundle.SchemaVersion,
+		Version:       2,
+		Bundle: bundle.Bundle{
+			Platforms: []bundle.Platform{{
+				Name: "openai", BaseURL: "https://api.openai.com",
+				Token: encCenter(t, "sk-aaa", ck), Enabled: true,
+			}},
+		},
+	}
+	if err := db.ApplyBundle(v2, ck, "http://test"); err != nil {
+		t.Fatalf("apply v2: %v", err)
+	}
+
+	var after string
+	if err := db.conn.QueryRow(`SELECT login_password FROM platform WHERE base_url=?`,
+		"https://api.openai.com").Scan(&after); err != nil {
+		t.Fatalf("read login_password after v2: %v", err)
+	}
+	if after != stored {
+		t.Fatalf("login_password changed on sync: %q -> %q (want preserved)", stored, after)
+	}
+}
+
 func TestApplyBundle_IdempotentReapply(t *testing.T) {
 	db := setupTestDB(t)
 	ck := mustCenterKey(t)
