@@ -14,7 +14,10 @@
 | **代理端** | publishable key（`sb_publishable_…`，旧称 anon）只读 | 定时轮询中心版本号，变了才全量拉取并应用；定义类写被只读守卫拦截 |
 | **独立模式** | 未连中心（无 key / 连接失败） | 纯本地 SQLite，所有操作读写本地，不与中心交互 |
 
-角色探测用无副作用写：`PATCH /rest/v1/platform?id=eq.-1`（0 行受影响；200/204 = 管理端，401/403 = 代理端，连不上 = 未连接）。程序还会把 **key 前缀（意图）** 与 **写探测结果（事实）** 交叉校验：若 `sb_publishable_` 前缀的 key 竟然能写，说明中心库没做写隔离，会以安全侧（代理端）为准并显式报错，而不是静默当成管理端。隔离 SQL 见 [`scripts/supabase_schema_v2.sql`](scripts/supabase_schema_v2.sql) 第 7 节。详见 [docs/初次配置指南.md](docs/初次配置指南.md)。
+角色探测用无副作用写：`PATCH /rest/v1/platform?id=eq.-1`（0 行受影响；200/204 = 管理端，401/403 = 代理端，连不上 = 未连接；404/5xx = 代理端 + 诊断错误）。程序还会把 **key 前缀（意图）** 与 **写探测结果（事实）** 交叉校验：若 `sb_publishable_` 前缀的 key 竟然能写，说明中心库没做写隔离，会以安全侧（代理端）为准并显式报错，而不是静默当成管理端。
+
+> 信任边界、写隔离的职责、`center_key` 的边界、token 保密口径 → **[docs/安全模型.md](docs/安全模型.md)**（权威口径，勿在别处重新推导）。
+> 搭建与隔离 SQL → [docs/初次配置指南.md](docs/初次配置指南.md) + [`scripts/supabase_schema_v2.sql`](scripts/supabase_schema_v2.sql) 第 7 节。
 
 ---
 

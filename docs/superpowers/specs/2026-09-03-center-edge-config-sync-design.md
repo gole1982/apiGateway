@@ -120,10 +120,12 @@
 
 ## 9. 备选 / 硬化
 
+> 安全口径以 [安全模型.md](../../安全模型.md) 为准（信任边界 / 写隔离职责 / center_key 边界 / token 保密 / 为何不做 RBAC），本节只列与设计相关的取舍。
+
 - **中心供应商**：Supabase 免费档首选（零运维）；若想更可控可自托管小服务（定义表 + version + bundle HTTP），但免费档够用。
 - **多管理并发**：当前单写者约定。若将来要多管理并发，启用 Supabase Realtime（`postgres_changes` 广播）+ 行级身份隔离 + age 信封密钥——即本轮简化前的方案，作为硬化升级路径。
-- **写隔离（必需，非身份层）**：定义表启用 RLS 并 REVOKE anon/authenticated 的写权限（schema 第 7 节）。它只落实「publishable = 只读、secret = 可写」这条**权限**约定，不承担准入——准入由运维者人工分发 key 控制。同时它也是角色判定的依据：中心不做写隔离时，publishable 的写探测会成功，程序会把代理端误判成管理端并直写中心。`service_role` 靠 `BYPASSRLS` 保留全权。
-- **token 保密（有意为之，但需知情）**：publishable key 的准入由人工分发控制（本身不公开、不进前端），故中心把 token 交给它是设计内行为。但要知道「持有 publishable 即可读全部 token」。`center_key`（可选）只防**中心库落库数据被盗**（中心侧泄露 / 只拿到中心库副本而未碰你的机器时只得到密文）；它**不防凭据泄露**——`center_key` 与 publishable key 同在 `proxy.cfg`，能读到 key 的路径同样能读到它。
+- **写隔离（必需，非身份层）**：见 [安全模型.md §3](../../安全模型.md)。schema 第 7 节落地；它是角色判定的依据。
+- **token 保密**：见 [安全模型.md §5、§7](../../安全模型.md)（center_key 只防中心库落库数据被盗，不防凭据泄露）。
 - **token 加密**：当前中心 AES 密钥（简）；硬化改 age 信封。
 
 ## 10. 风险
