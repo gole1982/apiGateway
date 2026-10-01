@@ -23,7 +23,7 @@ func TestBuildHealthEnrichesPlatformContext(t *testing.T) {
 		101: {Alias: "glm-5.2", PlatformID: 7, KeyIDs: "501"},
 	}
 	platformByID := map[int64]models.Platform{
-		7: {ID: 7, Name: "京东", BillingAddress: "https://billing.jd.com"},
+		7: {ID: 7, Name: "京东"},
 	}
 	keyByID := map[int64]models.PlatformKey{
 		501: {ID: 501, PlatformID: 7, KeyIndex: 0, Label: "主Key"},
@@ -35,7 +35,7 @@ func TestBuildHealthEnrichesPlatformContext(t *testing.T) {
 		t.Fatalf("CoolingRAPIs len = %d, want 1", len(h.CoolingRAPIs))
 	}
 	cr := h.CoolingRAPIs[0]
-	if cr.PlatformID != 7 || cr.PlatformName != "京东" || cr.BillingAddress != "https://billing.jd.com" {
+	if cr.PlatformID != 7 || cr.PlatformName != "京东" {
 		t.Errorf("CoolingRAPI platform context = %+v", cr)
 	}
 	if cr.KeyIDs != "501" {
@@ -48,9 +48,6 @@ func TestBuildHealthEnrichesPlatformContext(t *testing.T) {
 	ck := h.CoolingKeys[0]
 	if ck.PlatformID != 7 || ck.PlatformName != "京东" || ck.Label != "主Key" || ck.KeyIndex != 0 {
 		t.Errorf("CoolingKey platform context = %+v", ck)
-	}
-	if ck.BillingAddress != "https://billing.jd.com" {
-		t.Errorf("CoolingKey BillingAddress = %q", ck.BillingAddress)
 	}
 }
 
@@ -72,8 +69,8 @@ func TestBuildHealthEmptyWhitelistAndUnknownPlatform(t *testing.T) {
 		t.Fatalf("CoolingRAPIs len = %d, want 1", len(h.CoolingRAPIs))
 	}
 	cr := h.CoolingRAPIs[0]
-	if cr.PlatformID != 999 || cr.PlatformName != "" || cr.BillingAddress != "" {
-		t.Errorf("unknown platform should yield empty name/billing: %+v", cr)
+	if cr.PlatformID != 999 || cr.PlatformName != "" {
+		t.Errorf("unknown platform should yield empty name: %+v", cr)
 	}
 	if len(h.CoolingKeys) != 0 {
 		t.Errorf("CoolingKeys len = %d, want 0", len(h.CoolingKeys))

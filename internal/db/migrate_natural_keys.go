@@ -808,9 +808,7 @@ func rebuildPlatformTx(tx *sql.Tx) error {
 			supported_formats TEXT NOT NULL DEFAULT '["openai"]',
 			format_endpoints TEXT NOT NULL DEFAULT '',
 			custom_headers TEXT NOT NULL DEFAULT '',
-			billing_address TEXT NOT NULL DEFAULT '',
 			login_account TEXT NOT NULL DEFAULT '',
-			login_password TEXT NOT NULL DEFAULT '',
 			sort_order INTEGER NOT NULL DEFAULT 0,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -819,8 +817,8 @@ func rebuildPlatformTx(tx *sql.Tx) error {
 		return err
 	}
 	keep := []string{"id", "name", "base_url", "token", "last_token_fetch", "enabled", "available",
-		"notes", "supported_formats", "format_endpoints", "custom_headers", "billing_address",
-		"login_account", "login_password", "sort_order", "created_at", "updated_at"}
+		"notes", "supported_formats", "format_endpoints", "custom_headers",
+		"login_account", "sort_order", "created_at", "updated_at"}
 	copySQL, err := buildCopyCommonColumns(tx, "platform", "platform_new", keep)
 	if err != nil {
 		return err

@@ -41,8 +41,9 @@ CGO_ENABLED=0 go build -o /tmp/gateway ./cmd/gateway
 - **角色判定靠写探测，不靠配置段名**。`probeSBRole` 做 `PATCH /rest/v1/platform?id=eq.-1`；
   并用 key 前缀（意图）交叉校验写探测结果（事实）。`sb_publishable_` 却能写 = 中心没做写隔离
   → 返回代理端 + 显式报错，**绝不静默当管理端**。
-- **`login_password` 是 write-only**。中心 `get_bundle` 刻意不返回该列；同步落库必须保留本地既有密文
-  （`bundle_apply.go` 的 `CASE WHEN ? = '' THEN ...`），否则每次同步会清空它。
+- **控制台密码/计费网址字段已删除**。`platform` 表不再有 `billing_address` /
+  `login_password` 列（本地删列迁移 + 中心 v2 schema 已移除）；面板不再录入，
+  `get_bundle` 不再下发。历史残留以删列为准，不要再加回来。
 - **`token` 可被 publishable key 读取**——设计内行为（代理端转发必需）。publishable key 等价于
   「全部上游 token 的钥匙」，按高价值密钥管理。
 - **写隔离（中心 RLS）只落实权限约定，不是身份层**；准入靠人工分发 key。不要把它读成引入 RBAC。

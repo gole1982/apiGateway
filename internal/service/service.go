@@ -76,35 +76,10 @@ func validatePlatformInput(p *models.Platform) error {
 		return errors.New("Base URL 不允许包含用户名/密码信息")
 	}
 
-	// --- Billing address (provider console URL, optional) ---
-	p.BillingAddress = strings.TrimSpace(p.BillingAddress)
-	if len(p.BillingAddress) > 512 {
-		return errors.New("账单地址长度不能超过512字符")
-	}
-	if p.BillingAddress != "" {
-		billParsed, err := url.ParseRequestURI(p.BillingAddress)
-		if err != nil {
-			return errors.New("账单地址格式不合法")
-		}
-		if billParsed.Scheme != "http" && billParsed.Scheme != "https" {
-			return errors.New("账单地址必须以 http:// 或 https:// 开头")
-		}
-		if billParsed.User != nil {
-			return errors.New("账单地址不允许包含用户名/密码信息")
-		}
-	}
-
 	// --- Login account (provider console login, optional) ---
 	p.LoginAccount = strings.TrimSpace(p.LoginAccount)
 	if utf8.RuneCountInString(p.LoginAccount) > 200 {
 		return errors.New("登录账号不能超过200个字符")
-	}
-
-	// --- Login password (provider console password, optional; kept as-is so
-	// an empty value means "unchanged" in UpdatePlatform) ---
-	p.LoginPassword = strings.TrimSpace(p.LoginPassword)
-	if utf8.RuneCountInString(p.LoginPassword) > 512 {
-		return errors.New("登录密码不能超过512个字符")
 	}
 
 	return nil
@@ -1379,8 +1354,6 @@ func createWebHandler() http.Handler {
 				writeJSONError(w, 500, err)
 				return
 			}
-			// Never echo the plaintext login password back to the client.
-			p.LoginPassword = ""
 			data, _ := json.Marshal(p)
 			w.Write(data)
 

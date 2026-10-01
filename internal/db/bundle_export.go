@@ -15,7 +15,7 @@ import (
 // 本地是权威源，导出结果可直接 push 到中心，也可与中心快照做 Merge。
 //
 // 转换要点：
-//   - token / login_password 本地是 ~/.apiGateway.key 密文，这里解密成明文再用
+//   - token 本地是主密钥密文，这里解密成明文再用
 //     centerKey 重新加密（centerKey 为空 = 中心存明文，与中心侧 enc/dec 约定一致）。
 //   - 业务键全部取自然键原样值：platform.base_url、credential.token_hash、
 //     rapi.(platform.base_url, model)。不做任何归一化，镜像本地唯一索引。
@@ -31,8 +31,8 @@ func (db *DB) ExportBundle(centerKey []byte) (*bundle.Bundle, error) {
 
 	// ---- platform ----
 	rows, err := db.conn.Query(`SELECT id, name, base_url, token, last_token_fetch, enabled,
-		notes, supported_formats, format_endpoints, custom_headers, billing_address,
-		login_account, login_password, sort_order FROM platform ORDER BY sort_order, id`)
+		notes, supported_formats, format_endpoints, custom_headers,
+		login_account, sort_order FROM platform ORDER BY sort_order, id`)
 	if err != nil {
 		return nil, fmt.Errorf("export platform: %w", err)
 	}
@@ -45,11 +45,10 @@ func (db *DB) ExportBundle(centerKey []byte) (*bundle.Bundle, error) {
 			lastFetch              sql.NullTime
 			notes, formats         string
 			endpoints, hdrs        string
-			billing, loginAcc      string
-			loginPw                string
+			loginAcc               string
 		)
 		if err := rows.Scan(&id, &name, &baseURL, &token, &lastFetch, &enabled, &notes,
-			&formats, &endpoints, &hdrs, &billing, &loginAcc, &loginPw, &sortOrder); err != nil {
+			&formats, &endpoints, &hdrs, &loginAcc, &sortOrder); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("export platform scan: %w", err)
 		}
@@ -57,11 +56,6 @@ func (db *DB) ExportBundle(centerKey []byte) (*bundle.Bundle, error) {
 		if err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("export platform %q token: %w", name, err)
-		}
-		clp, err := reencryptLocal(loginPw, centerKey)
-		if err != nil {
-			rows.Close()
-			return nil, fmt.Errorf("export platform %q login_password: %w", name, err)
 		}
 		var ltf *time.Time
 		if lastFetch.Valid {
@@ -71,8 +65,8 @@ func (db *DB) ExportBundle(centerKey []byte) (*bundle.Bundle, error) {
 		out.Platforms = append(out.Platforms, bundle.Platform{
 			BaseURL: baseURL, Name: name, Token: ct, LastTokenFetch: ltf,
 			Enabled: enabled != 0, Notes: notes, SupportedFormats: formats,
-			FormatEndpoints: endpoints, CustomHeaders: hdrs, BillingAddress: billing,
-			LoginAccount: loginAcc, LoginPassword: clp, SortOrder: int(sortOrder),
+			FormatEndpoints: endpoints, CustomHeaders: hdrs,
+			LoginAccount: loginAcc, SortOrder: int(sortOrder),
 		})
 		platBaseURL[id] = baseURL
 	}

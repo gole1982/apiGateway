@@ -113,7 +113,6 @@ func normalizeBundleForCompare(t *testing.T, b *bundle.Bundle, ck []byte) *bundl
 	}
 	for i := range cp.Platforms {
 		cp.Platforms[i].Token = dec(cp.Platforms[i].Token)
-		cp.Platforms[i].LoginPassword = dec(cp.Platforms[i].LoginPassword)
 	}
 	for i := range cp.Credentials {
 		cp.Credentials[i].Token = dec(cp.Credentials[i].Token)

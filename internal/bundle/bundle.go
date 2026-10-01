@@ -88,7 +88,7 @@ type CredentialBinding struct {
 }
 
 // Platform —— 平台定义。**业务键 = BaseURL**（name 已降级为显示名，本地表无 UNIQUE）。
-// token/login_password 为 center_key 密文。
+// token 为 center_key 密文。
 type Platform struct {
 	BaseURL          string     `json:"base_url"` // 业务键（归一化后）
 	Name             string     `json:"name"`     // 显示名
@@ -99,11 +99,7 @@ type Platform struct {
 	SupportedFormats string     `json:"supported_formats"` // JSON array as TEXT，继承给子 rapi
 	FormatEndpoints  string     `json:"format_endpoints"`  // JSON {format:url} as TEXT
 	CustomHeaders    string     `json:"custom_headers"`    // JSON array as TEXT
-	BillingAddress   string     `json:"billing_address"`
 	LoginAccount     string     `json:"login_account"`
-	// LoginPassword 为 write-only：中心 get_bundle 刻意不返回该列（代理端不得经
-	// bundle 拿到控制台密码），故同步时恒为空，本地保留既有值（见 bundle_apply.go）。
-	LoginPassword string `json:"login_password"` // center_key 密文
 	SortOrder     int    `json:"sort_order"`
 }
 

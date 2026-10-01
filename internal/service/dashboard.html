@@ -1848,9 +1848,6 @@
                                 <div class="u-primary">{{ platformDetail.notes || '—' }}</div></div>
                             <div><div class="u-muted-sm u-mb3">支持协议</div>
                                 <div class="u-primary">{{ (platformDetail._platformFormats && platformDetail._platformFormats.length) ? platformDetail._platformFormats.join('、') : '—' }}</div></div>
-                            <div><div class="u-muted-sm u-mb3">账单地址</div>
-                                <a v-if="platformDetail.billing_address" :href="platformDetail.billing_address" target="_blank" rel="noopener noreferrer" style="color:var(--color-primary);text-decoration:none;">{{ platformDetail.billing_address }} ↗</a>
-                                <div v-else class="u-muted">—</div></div>
                             <div><div class="u-muted-sm u-mb3">登录账号</div>
                                 <div class="u-primary">{{ platformDetail.login_account || '—' }}</div></div>
                             <div><div class="u-muted-sm u-mb3">Token 最近获取</div>
@@ -3019,43 +3016,14 @@
                             </small>
                         </div>
 
-                        <!-- ═══ 平台账号 / 账单区 ═══ -->
+                        <!-- ═══ 平台账号区 ═══ -->
                         <div style="margin-top:16px;">
-                            <!-- 账单地址 + 外链 -->
-                            <div class="form-group u-mb12">
-                                <label style="margin:0 0 6px 0;display:block;">账单地址 (Billing URL)</label>
-                                <div style="display:flex;gap:8px;">
-                                    <input class="form-control u-flex1" type="text" placeholder="https://console.provider.com/billing（可选）"
-                                           v-model="platformModal.form.billing_address"
-                                           maxlength="512" autocomplete="off" spellcheck="false">
-                                    <a v-if="platformModal.form.billing_address" :href="platformModal.form.billing_address" target="_blank" rel="noopener noreferrer"
-                                       class="btn btn-secondary btn-sm" style="white-space:nowrap;display:inline-flex;align-items:center;gap:5px;">
-                                        <svg style="width:13px;height:13px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-                                        打开
-                                    </a>
-                                </div>
-                            </div>
-
                             <div class="form-control-row">
                                 <div class="form-group u-flex1">
                                     <label style="margin:0 0 6px 0;display:block;">登录账号 (可选)</label>
                                     <input type="text" class="form-control" placeholder="提供商控制台登录账号"
                                            v-model="platformModal.form.login_account"
                                            maxlength="200" autocomplete="off" spellcheck="false">
-                                </div>
-                                <div class="form-group u-flex1">
-                                    <label style="margin:0 0 6px 0;display:block;">登录密码 (可选，留空=不修改)</label>
-                                    <div style="display:flex;gap:8px;">
-                                        <input class="form-control u-flex1" :type="platformModal.pwVisible ? 'text' : 'password'"
-                                               placeholder="••••••••" v-model="platformModal.form.login_password"
-                                               maxlength="512" autocomplete="new-password" spellcheck="false">
-                                        <button class="btn btn-secondary btn-sm btn-icon" type="button"
-                                                @click="platformModal.pwVisible = !platformModal.pwVisible"
-                                                :title="platformModal.pwVisible ? '隐藏密码' : '显示密码'">
-                                            <svg v-if="platformModal.pwVisible" style="width:14px;height:14px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                                            <svg v-else style="width:14px;height:14px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
-                                        </button>
-                                    </div>
                                 </div>
                             </div>
 
@@ -4080,9 +4048,8 @@
                 const platformModal = reactive({
                     show: false,
                     item: null,
-                    form: { name: '', base_url: '', notes: '', billing_address: '', login_account: '', login_password: '' },
+                    form: { name: '', base_url: '', notes: '', login_account: '' },
                     headers: [],      // platform-level custom headers staging list
-                    pwVisible: false // login password eye toggle
                 });
                 const addToLapiModal = reactive({ show: false, rapi: null, selectedLapiId: null });
                 const rapiModal = reactive({ show: false, item: null, form: { platform_id: '', alias: '', model: '', vendor: '', series: '', version: '', suffix: '', notes: '' }, headers: [], keyIDs: [] });
@@ -4601,9 +4568,9 @@
                     const d = insightData.value.health;
                     const platMap = {};
                     const tree = [];
-                    const getPlat = (pid, pname, billing) => {
+                    const getPlat = (pid, pname) => {
                         if (!platMap[pid]) {
-                            const p = { platform_id: pid, platform_name: pname || '', billing_address: billing || '',
+                            const p = { platform_id: pid, platform_name: pname || '',
                                         keys: [], keylessModels: [], keyCount: 0, modelCount: 0 };
                             platMap[pid] = p;
                             tree.push(p);
@@ -4613,7 +4580,7 @@
                     // 平台-key 层
                     const keyIdx = {};
                     for (const ck of d.cooling_keys || []) {
-                        const p = getPlat(ck.platform_id, ck.platform_name, ck.billing_address);
+                        const p = getPlat(ck.platform_id, ck.platform_name);
                         const k = {
                             id: ck.id, platform_id: ck.platform_id, key_index: ck.key_index, label: ck.label,
                             reason: ck.reason, recover_at: ck.recover_at, models: []
@@ -4624,7 +4591,7 @@
                     }
                     // 平台-key-模型 层：把冷却模型挂到其 key 池中正在冷却的 key 下
                     for (const cr of d.cooling_rapis || []) {
-                        const p = getPlat(cr.platform_id, cr.platform_name, cr.billing_address);
+                        const p = getPlat(cr.platform_id, cr.platform_name);
                         p.modelCount++;
                         const ids = String(cr.key_ids || '').split(',').map(s => s.trim()).filter(Boolean).map(Number);
                         let attached = false;
@@ -5623,16 +5590,13 @@
                 // there with a platform filter); this modal no longer fetches or stages keys.
                 const openPlatformModal = (item) => {
                     platformModal.item = item;
-                    platformModal.pwVisible = false;
                     if (item) {
                         platformModal.form = {
                             id: item.id,
                             name: item.name,
                             base_url: item.base_url,
                             notes: item.notes || '',
-                            billing_address: item.billing_address || '',
                             login_account: item.login_account || '',
-                            login_password: '', // never echoed back — empty = unchanged on save
                             enabled: item.enabled,
                             available: item.available
                         };
@@ -5641,7 +5605,7 @@
                                 ? JSON.parse(item.custom_headers) : [];
                         } catch (_) { platformModal.headers = []; }
                     } else {
-                        platformModal.form = { name: '', base_url: '', notes: '', billing_address: '', login_account: '', login_password: '', enabled: true, available: true };
+                        platformModal.form = { name: '', base_url: '', notes: '', login_account: '', enabled: true, available: true };
                         platformModal.headers = [];
                     }
                     platformModal.show = true;
@@ -5716,10 +5680,8 @@
                         showToast('验证失败', 'Base URL 必须以 http:// 或 https:// 开头', 'error');
                         return;
                     }
-                    // Trim the new console/account fields (password empty = unchanged)
-                    form.billing_address = (form.billing_address || '').trim();
+                    // Trim the console login field
                     form.login_account = (form.login_account || '').trim();
-                    form.login_password = (form.login_password || '').trim();
                     // Serialize platform-level custom headers from the staging list
                     form.custom_headers = JSON.stringify(platformModal.headers || []);
 

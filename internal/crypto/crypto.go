@@ -6,12 +6,12 @@
 //
 //  1. 容器里它是定时炸弹。文件写在容器可写层，docker compose down / 重建即
 //     消失；旧代码此时会**静默生成一把新随机 key**并继续启动，于是所有历史
-//     密文（平台 token、login_password、settings.sb_api_key）集体解不开，
+//     密文（平台 token、settings.sb_api_key）集体解不开，
 //     且要等到某次重建才暴露。改成"缺 key 即启动失败"，把这个静默损坏
 //     提前到部署那一刻暴露。
 //  2. 它没有增加安全性，只是把明文密钥从环境变量搬到了磁盘。
 //
-// 丢 key 的后果与恢复路径：定义类数据（平台 token / login_password / Key /
+// 丢 key 的后果与恢复路径：定义类数据（平台 token / Key /
 // 模型 / 接口）可从中心（Supabase）重新拉回 —— center_key 留空时中心存明文
 // （见 internal/db/bundle_export.go 的 reencryptLocal）；不可恢复的只有
 // 本地遥测（request_logs / rapi_metrics / sessions 等，从不同步）与

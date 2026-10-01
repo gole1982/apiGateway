@@ -2,7 +2,7 @@
 // 直写 Supabase（写穿透、同步、失败即报错），本地 SQLite 仅作运行时镜像。
 //
 // 语义对齐（与 *db.DB 完全一致，handler 无感知）：
-//   - token / login_password：读=center_key 解密为明文，写=center_key 加密落库；
+//   - token：读=center_key 解密为明文，写=center_key 加密落库；
 //   - 凭据（v2）：中心表 credential，身份 = token_hash（由明文算），平台内轮换
 //     序号 = sort_order。读出时映射回 models.PlatformKey（KeyIndex ← sort_order）；
 //   - 端点↔凭据绑定（v2）：中心表 endpoint_credential，取代 v1 的 rapi.key_ids
@@ -223,7 +223,6 @@ func (s *Store) GetPlatforms() ([]models.Platform, error) {
 	}
 	for i := range rows {
 		rows[i].Token = s.dec(rows[i].Token)
-		rows[i].LoginPassword = s.dec(rows[i].LoginPassword)
 		// 中心无健康态列（available 是代理本地 runtime 状态，schema 有意不建）：
 		// 缺省置 true，否则零值 false 会让面板把所有启用平台误显为「失效」；
 		// 真实健康态由面板展示层另读本地镜像（同 rapiToWithPlatform 的取舍）。
@@ -242,7 +241,6 @@ func (s *Store) GetPlatformByID(id int64) (*models.Platform, error) {
 		return nil, nil
 	}
 	rows[0].Token = s.dec(rows[0].Token)
-	rows[0].LoginPassword = s.dec(rows[0].LoginPassword)
 	// 同 GetPlatforms：中心无 available 列，缺省 true 防误判「失效」。
 	rows[0].Available = true
 	return &rows[0], nil
@@ -255,8 +253,8 @@ func platRow(p *models.Platform) map[string]any {
 		"last_token_fetch": timePtr(p.LastTokenFetch),
 		"enabled":          p.Enabled, "notes": p.Notes,
 		"supported_formats": p.SupportedFormats, "format_endpoints": p.FormatEndpoints,
-		"custom_headers": p.CustomHeaders, "billing_address": p.BillingAddress,
-		"login_account": p.LoginAccount, "login_password": p.LoginPassword,
+		"custom_headers": p.CustomHeaders,
+		"login_account": p.LoginAccount,
 		"updated_at": nowPtr(), // sort_order 只经 SetPlatformSortOrder 改，模型无此字段
 	}
 }
@@ -264,7 +262,6 @@ func platRow(p *models.Platform) map[string]any {
 func (s *Store) CreatePlatform(p *models.Platform) error {
 	row := platRow(p)
 	row["token"] = s.enc(p.Token)
-	row["login_password"] = s.enc(p.LoginPassword)
 	var out []map[string]any
 	if err := s.call(http.MethodPost, tblPlatform, "", row, &out); err != nil {
 		return err
@@ -277,7 +274,6 @@ func (s *Store) CreatePlatform(p *models.Platform) error {
 func (s *Store) UpdatePlatform(p *models.Platform) error {
 	row := platRow(p)
 	row["token"] = s.enc(p.Token)
-	row["login_password"] = s.enc(p.LoginPassword)
 	q := "id=eq." + strconv.FormatInt(p.ID, 10)
 	if err := s.call(http.MethodPatch, tblPlatform, q, row, nil); err != nil {
 		return err
@@ -1015,7 +1011,6 @@ func (s *Store) ReplaceAll(local LocalSnapshot) (map[string]int, error) {
 		p := local.Platforms[i]
 		row := platRow(&p)
 		row["token"] = s.enc(p.Token)
-		row["login_password"] = s.enc(p.LoginPassword)
 		var out []map[string]any
 		if err := s.call(http.MethodPost, tblPlatform, "", row, &out); err != nil {
 			return nil, fmt.Errorf("insert platform %q: %w", p.Name, err)
@@ -1134,7 +1129,7 @@ func (s *Store) ReplaceAll(local LocalSnapshot) (map[string]int, error) {
 	return counts, nil
 }
 
-// DumpAll 读出中心 6 张定义表的全部行（select=*）。token/login_password
+// DumpAll 读出中心 6 张定义表的全部行（select=*）。token
 // 保持中心存储形态（center_key 密文），不会把明文引入备份。用于 push 覆盖前
 // 自动备份中心快照（service 层存 settings.center_backup_latest）。
 func (s *Store) DumpAll() (map[string][]map[string]any, error) {

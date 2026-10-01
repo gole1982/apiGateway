@@ -81,8 +81,8 @@ func (db *DB) GetSyncState() (SyncState, error) {
 //     某端点无绑定 = 绑定该平台全部凭据（与旧 key_ids 为空同义）。
 //   - 事务内显式归零健康态：platform/rapi.available、key 失败列、key_model_blocks。
 //     rapi_metrics / request_trends / request_logs 保留不清零。
-//   - bundle 的 token / login_password 是 center_key 密文：解出明文后用本地
-//     ~/.apiGateway.key 重新加密入库（与本地录入同路，热路径零改动）。
+//   - bundle 的 token 是 center_key 密文：解出明文后用本地
+//     key 重新加密入库（与本地录入同路，热路径零改动）。
 //   - 全部成功才 COMMIT 并写 sync_state（current=last_good=env.Version）；
 //     任何一步失败整体 rollback、保留 last_good（fail-open 由调用方保证）。
 //
@@ -126,13 +126,6 @@ func (db *DB) ApplyBundle(env *bundle.Envelope, centerKey []byte, sourceURL stri
 		if err != nil {
 			return fmt.Errorf("platform %q token: %w", p.Name, err)
 		}
-		encLoginPw := ""
-		if p.LoginPassword != "" {
-			encLoginPw, err = reencrypt(p.LoginPassword, centerKey)
-			if err != nil {
-				return fmt.Errorf("platform %q login_password: %w", p.Name, err)
-			}
-		}
 		// token 为空 → available=0（与 seedDefaultPlatforms 一致：填 key 前不可用）
 		avail := 1
 		if encToken == "" {
@@ -146,25 +139,24 @@ func (db *DB) ApplyBundle(env *bundle.Envelope, centerKey []byte, sourceURL stri
 			if _, err = tx.Exec(`UPDATE platform SET
 					name=?, token=?, last_token_fetch=?, enabled=?, available=?,
 					notes=?, supported_formats=?, format_endpoints=?, custom_headers=?,
-					billing_address=?, login_account=?,
-					login_password=CASE WHEN ? = '' THEN login_password ELSE ? END,
+					login_account=?,
 					sort_order=?, updated_at=?
 				WHERE id=?`,
 				p.Name, encToken, p.LastTokenFetch, b2i(p.Enabled), avail,
 				p.Notes, p.SupportedFormats, p.FormatEndpoints, p.CustomHeaders,
-				p.BillingAddress, p.LoginAccount, encLoginPw, encLoginPw,
+				p.LoginAccount,
 				p.SortOrder, now, id); err != nil {
 				return fmt.Errorf("update platform %q: %w", p.Name, err)
 			}
 		case errors.Is(err, sql.ErrNoRows):
 			res, err := tx.Exec(`INSERT INTO platform
 					(name, base_url, token, last_token_fetch, enabled, available, notes,
-					 supported_formats, format_endpoints, custom_headers, billing_address,
-					 login_account, login_password, sort_order, created_at, updated_at)
-				VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+					 supported_formats, format_endpoints, custom_headers,
+					 login_account, sort_order, created_at, updated_at)
+				VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 				p.Name, p.BaseURL, encToken, p.LastTokenFetch, b2i(p.Enabled), avail, p.Notes,
-				p.SupportedFormats, p.FormatEndpoints, p.CustomHeaders, p.BillingAddress,
-				p.LoginAccount, encLoginPw, p.SortOrder, now, now)
+				p.SupportedFormats, p.FormatEndpoints, p.CustomHeaders,
+				p.LoginAccount, p.SortOrder, now, now)
 			if err != nil {
 				return fmt.Errorf("insert platform %q: %w", p.Name, err)
 			}
