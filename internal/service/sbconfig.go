@@ -66,20 +66,26 @@ const (
 
 // sbConfigResponse 是 GET /api/sb-config 的响应。
 type sbConfigResponse struct {
-	Connected     bool           `json:"connected"`
-	Role          string         `json:"role"` // offline | proxy | management
-	URL           string         `json:"url"`
-	KeyMask       string         `json:"key_mask"`       // 脱敏回显
-	CenterKeySet  bool           `json:"center_key_set"` // center_key 是否已配置（settings 或 proxy.cfg）
-	Activated     bool           `json:"activated"`      // 保存后是否已热激活（免重启）
-	ActivateError string         `json:"activate_error,omitempty"`
-	CenterVer     int            `json:"center_ver"`
-	LocalVer      int            `json:"local_ver"`
-	InSync        bool           `json:"in_sync"`
-	Tables        any            `json:"tables,omitempty"`         // 中心各表行数
-	LocalTables   map[string]int `json:"local_tables,omitempty"`   // 本地 SQLite 各表行数
-	StartupTables map[string]int `json:"startup_tables,omitempty"` // 启动时本地行数快照
-	Error         string         `json:"error,omitempty"`
+	Connected      bool           `json:"connected"`
+	Role           string         `json:"role"` // offline | proxy | management
+	URL            string         `json:"url"`
+	KeyMask        string         `json:"key_mask"`       // 脱敏回显
+	CenterKeySet   bool           `json:"center_key_set"` // center_key 是否已配置（settings 或 proxy.cfg）
+	Activated      bool           `json:"activated"`      // 保存后是否已热激活（免重启）
+	ActivateError  string         `json:"activate_error,omitempty"`
+	CenterVer      int            `json:"center_ver"`
+	LocalVer       int            `json:"local_ver"`
+	InSync         bool           `json:"in_sync"`
+	Dirty          bool           `json:"dirty,omitempty"` // 端侧有未同步的本地修改
+	DirtyAt        string         `json:"dirty_at,omitempty"`
+	DirtyReason    string         `json:"dirty_reason,omitempty"`
+	CenterWritable bool           `json:"center_writable,omitempty"` // 录入的 key 可写（管理端级别）
+	Merging        bool           `json:"merging,omitempty"`         // 后台合并/回推进行中
+	LastMerge      any            `json:"last_merge,omitempty"`      // 最近一次并集摘要
+	Tables         any            `json:"tables,omitempty"`          // 中心各表行数
+	LocalTables    map[string]int `json:"local_tables,omitempty"`    // 本地 SQLite 各表行数
+	StartupTables  map[string]int `json:"startup_tables,omitempty"`  // 启动时本地行数快照
+	Error          string         `json:"error,omitempty"`
 }
 
 // handleSBConfig GET 返回当前配置（脱敏）+ 角色；POST 保存 URL+key(+可选
@@ -234,10 +240,21 @@ func currentSBConfig() sbConfigResponse {
 	if role != sbRoleOffline {
 		fillSBTables(&resp, url, key)
 	}
-	// 本地版本号 + 是否同步（中心版本 == 本地 last_good）。
+	// 本地版本号 + 是否同步（版本一致且本地无未同步修改）。
+	// 本次已探测角色：可写性直接复用，免二次探测。
 	if st, e := db.Get().GetSyncState(); e == nil {
 		resp.LocalVer = int(st.LastGoodVersion)
-		resp.InSync = centerVer != 0 && int64(centerVer) == st.LastGoodVersion
+		resp.InSync = edgeInSync(int64(centerVer), st.LastGoodVersion)
+	}
+	if dirty, at, reason := edgeDirtyState(); dirty {
+		resp.Dirty = true
+		resp.DirtyAt = at
+		resp.DirtyReason = reason
+		resp.CenterWritable = role == sbRoleManagement
+	}
+	resp.Merging = syncMerging.Load()
+	if sum := loadMergeSummary(); sum != nil {
+		resp.LastMerge = sum
 	}
 	return resp
 }

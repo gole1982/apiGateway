@@ -173,9 +173,10 @@ func (s *Service) Run() error {
 		logger.DefaultConsole().Error("service", "database init failed", "error", err.Error())
 		return err
 	}
-	// 定义类持久层接缝：默认绑定本地 SQLite；管理模式（[management] 配置）
-	// 在后面换成 supabase Store 直写中心。
-	store.Init(db.Get())
+	// 定义类持久层接缝：默认绑定本地 SQLite（经 edgeStore 包装，面板定义写
+	// 自动标脏）；管理模式（[management] 配置）在后面换成 supabase Store
+	// 直写中心（此时写穿透，无分歧，不标脏）。
+	store.Use(wrapEdgeStore(db.Get()))
 	// 冻结启动时本地定义表行数，供仪表盘「启动以来变化量」对比。
 	captureStartupSnapshot()
 
@@ -541,12 +542,32 @@ func discoverUpstreamModels(ctx context.Context, baseURL, fetchToken string) ([]
 	if err != nil {
 		return nil, 502, fmt.Errorf("fetch models failed: %v", err)
 	}
-	defer resp.Body.Close()
+
+	// Anthropic 兼容站（Anthropic 官方 / messages 结构中转）不认 Bearer：
+	// 401/403 时按 Anthropic 惯例换 x-api-key + anthropic-version 重试一次。
+	// 响应体同为 {data:[{id}]}，解析分支无需动。
+	if !googleNative && (resp.StatusCode == 401 || resp.StatusCode == 403) {
+		resp.Body.Close()
+		retryReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, modelsURL, nil)
+		retryReq.Header.Set("x-api-key", fetchToken)
+		retryReq.Header.Set("anthropic-version", "2023-06-01")
+		retryReq.Header.Set("Content-Type", "application/json")
+		logger.DefaultConsole().Info("service", "[FETCH] bearer rejected, retrying with x-api-key",
+			"url", modelsURL, "status", resp.StatusCode)
+		resp, err = client.Do(retryReq)
+		if err != nil {
+			return nil, 502, fmt.Errorf("fetch models failed: %v", err)
+		}
+	}
 
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		logger.DefaultConsole().Warn("service", "[FETCH] models fetch failed",
+			"url", modelsURL, "status", resp.StatusCode)
 		return nil, resp.StatusCode, fmt.Errorf("upstream returned %d: %s", resp.StatusCode, string(body))
 	}
+	defer resp.Body.Close()
 
 	var modelNames []string
 	if googleNative {
@@ -780,11 +801,18 @@ func createWebHandler() http.Handler {
 				return
 			}
 			if wasUnavailable {
-				rep := proxyGateway.RecoverRAPIs(r.Context(), []int64{rapi.ID}, 1, 8)
-				if len(rep.Recovered) > 0 {
-					logger.DefaultConsole().Info("service", "[API] auto-recovered model after whitelist edit",
-						"rapi_id", rapi.ID, "alias", rapi.Alias)
-				}
+				// 重探测放后台：上游探测（多格式 × 多候选 URL，超时可达数十秒）
+				// 不能挡住保存响应，否则纯改名也要等很久。用独立 context，
+				// handler 返回后 r.Context() 会取消，不能直接传下去。
+				go func(rapiID int64, alias string) {
+					ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+					defer cancel()
+					rep := proxyGateway.RecoverRAPIs(ctx, []int64{rapiID}, 1, 8)
+					if len(rep.Recovered) > 0 {
+						logger.DefaultConsole().Info("service", "[API] auto-recovered model after whitelist edit",
+							"rapi_id", rapiID, "alias", alias)
+					}
+				}(rapi.ID, rapi.Alias)
 			}
 			w.Write([]byte(`{"success":true}`))
 
@@ -1543,7 +1571,10 @@ func createWebHandler() http.Handler {
 			}
 		} else {
 			baseURL = strings.TrimSpace(req.BaseURL)
-			fetchToken = req.Token
+			// 向导粘贴的 key 常带首尾空白/换行：入库前已 trim，这里同样处理，
+			// 否则 Bearer 尾随空格直接 401，而入库后反而能用，造成
+			// “新建发现失败、入库后发现成功”的假象。
+			fetchToken = strings.TrimSpace(req.Token)
 			platName = baseURL
 			if baseURL == "" || fetchToken == "" {
 				writeJSONError(w, http.StatusBadRequest,
