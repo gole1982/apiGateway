@@ -63,16 +63,14 @@ CREATE TABLE IF NOT EXISTS platform (
     id                BIGSERIAL PRIMARY KEY,
     name              TEXT NOT NULL DEFAULT '',   -- 显示名（v2 起无唯一约束）
     base_url          TEXT NOT NULL DEFAULT '',   -- 业务键
-    token             TEXT NOT NULL DEFAULT '',   -- center_key 密文
+    token             TEXT NOT NULL DEFAULT '',   -- 中心明文（访问安全由 RLS/API key 负责）
     last_token_fetch  TIMESTAMPTZ,
     enabled           BOOLEAN NOT NULL DEFAULT TRUE,
     notes             TEXT NOT NULL DEFAULT '',
     supported_formats TEXT NOT NULL DEFAULT '["openai"]', -- JSON array as TEXT
     format_endpoints  TEXT NOT NULL DEFAULT '',           -- JSON {format:url} as TEXT
     custom_headers    TEXT NOT NULL DEFAULT '',           -- JSON array as TEXT
-    billing_address   TEXT NOT NULL DEFAULT '',
     login_account     TEXT NOT NULL DEFAULT '',
-    login_password    TEXT NOT NULL DEFAULT '',           -- center_key 密文
     sort_order        INTEGER NOT NULL DEFAULT 0,
     created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -87,7 +85,7 @@ CREATE TABLE IF NOT EXISTS credential (
     platform_id BIGINT NOT NULL REFERENCES platform(id) ON DELETE CASCADE,
     token_hash  TEXT,                                 -- 业务键；NULL = 不参与唯一
     sort_order  INTEGER NOT NULL DEFAULT 0,           -- 平台内轮换序号
-    token       TEXT NOT NULL DEFAULT '',             -- center_key 密文
+    token       TEXT NOT NULL DEFAULT '',             -- 中心明文（访问安全由 RLS/API key 负责）
     label       TEXT NOT NULL DEFAULT '',
     enabled     BOOLEAN NOT NULL DEFAULT TRUE,
     expires_at  TIMESTAMPTZ,
@@ -288,8 +286,7 @@ LANGUAGE sql STABLE AS $$
                     'last_token_fetch', p.last_token_fetch, 'enabled', p.enabled,
                     'notes', p.notes, 'supported_formats', p.supported_formats,
                     'format_endpoints', p.format_endpoints, 'custom_headers', p.custom_headers,
-                    'billing_address', p.billing_address, 'login_account', p.login_account,
-                    'login_password', p.login_password, 'sort_order', p.sort_order
+                    'login_account', p.login_account, 'sort_order', p.sort_order
                 ) ORDER BY p.sort_order, p.name) FROM platform p
             ), '[]'::jsonb),
             'credentials', COALESCE((
@@ -406,20 +403,18 @@ GRANT EXECUTE ON FUNCTION get_bundle(BIGINT) TO anon, authenticated;
 --   ALTER DEFAULT PRIVILEGES IN SCHEMA public
 --       REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON TABLES FROM anon, authenticated;
 --
---   b) 列级收紧：login_password（平台控制台密码）本就是 write-only，中心与
---      bundle 都不应把它交给客户端。授予列级 SELECT 后，anon 直接
---      select('*') 会因缺列权限报错 —— 这正是提醒调用方改用 get_bundle()：
+--   b) 列级收紧示例：若将来有 write-only 列需要对 anon 不可见，可授予列级
+--      SELECT。当前 platform 已无此类列（控制台密码字段已删除）。
 --   REVOKE SELECT ON platform FROM anon, authenticated;
 --   GRANT SELECT (id, base_url, name, token, last_token_fetch, enabled, notes,
 --                 supported_formats, format_endpoints, custom_headers,
---                 billing_address, login_account, sort_order, created_at, updated_at)
+--                 login_account, sort_order, created_at, updated_at)
 --       ON platform TO anon, authenticated;
 --   -- 注：需把 get_bundle 改为 SECURITY DEFINER + SET search_path = public, pg_temp，
---   --     否则它读 login_password 会因调用者缺列权限而失败。
+--   --     否则它读受限列会因调用者缺列权限而失败。
 --
 --   c) token 保密（知情项）：publishable key 的准入由人工分发控制（本身不公开、
 --      不进前端），故中心把 token 交给它是设计内行为。但持有它即等于能读全部
---      token。center_key（可选）只防**中心库落库数据被盗**——中心侧泄露、或有人
---      只拿到中心库副本却没碰过你的机器时只得到密文；它**不防凭据泄露**，因为
---      center_key 与 publishable key 同在 proxy.cfg，能读到 key 的路径同样能读到它。
+--      token，按高价值密钥管理，泄露即轮换。中心 token 一律存明文
+--      （历史 center_key 应用层加密已取消）。
 -- ---------------------------------------------------------------------------

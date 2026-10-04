@@ -1557,6 +1557,15 @@
                                 <span>同步状态</span>
                                 <span :style="{ color: syncCenter.in_sync ? '#46a758' : '#f5a524' }">{{ syncCenter.in_sync ? '✓ 已同步' : '⚠ 待同步（本地 v' + syncCenter.local_version + ' / 中心 v' + syncCenter.center_version + '）' }}</span>
                             </div>
+                            <div v-if="syncCenter.merging" style="margin:0 14px 8px;padding:6px 10px;border-radius:6px;background:rgba(56,189,248,0.1);color:var(--color-primary);font-size:0.8rem;">🌀 后台同步进行中（合并/回推），面板与转发不受影响…</div>
+                            <div v-if="syncCenter.dirty" style="margin:0 14px 8px;padding:6px 10px;border-radius:6px;background:rgba(245,158,11,0.1);color:var(--color-warning);font-size:0.8rem;">
+                                ⚠ 本地有未同步修改（{{ syncCenter.dirty_reason || '面板改动' }}，{{ syncCenter.dirty_at ? new Date(syncCenter.dirty_at).toLocaleString() : '' }}）
+                                <span v-if="syncCenter.center_writable">，key 可写，可推送到中心。</span>
+                                <span v-else>，key 只读，仅本地生效。</span>
+                            </div>
+                            <div v-if="syncCenter.last_merge" style="margin:0 14px 8px;padding:6px 10px;border-radius:6px;background:rgba(70,167,88,0.07);font-size:0.78rem;color:var(--text-secondary);">
+                                上次合并：{{ mergeSummaryText(syncCenter.last_merge) }}
+                            </div>
                             <div class="unread-menu-title" style="padding:0 14px 6px;">中心各表统计</div>
                             <div style="padding:0 14px 12px;">
                                 <div style="display:flex;justify-content:space-between;padding:3px 0;"><span>平台（platform）</span><span>{{ syncCenter.tables?.platform }}</span></div>
@@ -1848,9 +1857,6 @@
                                 <div class="u-primary">{{ platformDetail.notes || '—' }}</div></div>
                             <div><div class="u-muted-sm u-mb3">支持协议</div>
                                 <div class="u-primary">{{ (platformDetail._platformFormats && platformDetail._platformFormats.length) ? platformDetail._platformFormats.join('、') : '—' }}</div></div>
-                            <div><div class="u-muted-sm u-mb3">账单地址</div>
-                                <a v-if="platformDetail.billing_address" :href="platformDetail.billing_address" target="_blank" rel="noopener noreferrer" style="color:var(--color-primary);text-decoration:none;">{{ platformDetail.billing_address }} ↗</a>
-                                <div v-else class="u-muted">—</div></div>
                             <div><div class="u-muted-sm u-mb3">登录账号</div>
                                 <div class="u-primary">{{ platformDetail.login_account || '—' }}</div></div>
                             <div><div class="u-muted-sm u-mb3">Token 最近获取</div>
@@ -2739,7 +2745,7 @@
                     <span v-if="sbConfig.error" style="color:var(--color-danger);font-size:0.8rem;">⚠ {{ sbConfig.error }}</span>
                     <span class="u-flex1"></span>
                     <button class="btn btn-secondary btn-sm" @click="fetchSBConfig">重新探测</button>
-                    <button class="btn btn-primary btn-sm" @click="saveSBConfig(sbConfigForm.url, sbConfigForm.key, sbConfigForm.centerKey)">保存并激活</button>
+                    <button class="btn btn-primary btn-sm" @click="saveSBConfig(sbConfigForm.url, sbConfigForm.key)">保存并激活</button>
                 </div>
 
                 <!-- 录入 API Key（紧凑：URL + Key 同行） -->
@@ -2748,7 +2754,7 @@
                         <span class="card-title" style="font-size:0.95rem;">录入 API Key</span>
                         <span class="u-muted-md">角色由 key 权限自动判定：可写=管理端 / 只读=代理端 / 空=未连接</span>
                     </div>
-                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
                         <div>
                             <div class="u-muted-sm u-mb3">Supabase Project ID 或完整 URL</div>
                             <input type="text" class="form-control" placeholder="abcdefghijk（Project ID）或 https://xxx.supabase.co" v-model="sbConfigForm.url">
@@ -2758,13 +2764,8 @@
                             <input type="password" class="form-control" placeholder="粘贴 key（不会明文回显）" v-model="sbConfigForm.key">
                             <div v-if="sbConfig.key_mask" class="u-muted-sm" style="margin-top:3px;">当前：{{ sbConfig.key_mask }}</div>
                         </div>
-                        <div>
-                            <div class="u-muted-sm u-mb3">center_key（可选，64 位 hex；填了中心存密文 token）</div>
-                            <input type="password" class="form-control" placeholder="留空 = 中心存明文 token" v-model="sbConfigForm.centerKey">
-                            <div class="u-muted-sm" style="margin-top:3px;">{{ sbConfig.center_key_set ? '当前：已配置（中心存密文）' : '当前：未配置（中心存明文）' }}</div>
-                        </div>
                     </div>
-                    <div class="u-muted-sm" style="margin-top:8px;">保存即热激活，无需重启；配置加密存本地数据库，proxy.cfg 仅作无头启动回退。</div>
+                    <div class="u-muted-sm" style="margin-top:8px;">保存即热激活，无需重启；配置加密存本地数据库，proxy.cfg 仅作无头启动回退。中心 token 一律存明文（访问安全由 Supabase RLS/API key 负责）。</div>
                 </div>
 
                 <!-- 同步状态：中心/本地各表对比 + 角色相关同步按钮 -->
@@ -2783,11 +2784,23 @@
                     </div>
                     <div v-else-if="sbConfig.role === 'proxy'" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
                         <button class="btn btn-primary btn-sm" :disabled="syncPulling" @click="manualPull">{{ syncPulling ? '拉取中…' : '⬇ 远端到本地' }}</button>
+                        <button v-if="sbConfig.dirty && sbConfig.center_writable" class="btn btn-primary btn-sm" :disabled="pushingToCenter" @click="pushToCenter">{{ pushingToCenter ? '推送中…' : '⬆ 推送本地修改' }}</button>
                         <span v-if="sbConfig.in_sync" class="u-muted-sm" style="color:#46a758;">✓ 已同步（v{{ sbConfig.local_ver }}）</span>
                         <span v-else class="u-muted-sm" style="color:#f5a524;">⚠ 待同步（中心 v{{ sbConfig.center_ver }} / 本地 v{{ sbConfig.local_ver }}）</span>
                     </div>
                     <div v-else style="margin-bottom:12px;padding:8px 12px;border-radius:8px;background:rgba(229,72,77,0.06);border:1px solid rgba(229,72,77,0.2);font-size:0.82rem;color:var(--color-danger);">
                         未连接中心，无法同步。请在上方录入 API Key 并保存探测。
+                    </div>
+                    <div v-if="sbConfig.merging" style="margin-bottom:12px;padding:8px 12px;border-radius:8px;background:rgba(56,189,248,0.08);border:1px solid rgba(56,189,248,0.25);font-size:0.82rem;color:var(--color-primary);">
+                        🌀 后台同步进行中（合并/回推），面板与转发不受影响，完成后状态自动更新。
+                    </div>
+                    <div v-if="sbConfig.dirty" style="margin-bottom:12px;padding:8px 12px;border-radius:8px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.3);font-size:0.82rem;color:var(--color-warning);">
+                        ⚠ 本地有未同步修改（{{ sbConfig.dirty_reason || '面板改动' }}，{{ sbConfig.dirty_at ? new Date(sbConfig.dirty_at).toLocaleString() : '' }}）。
+                        <span v-if="sbConfig.center_writable">中心 key 可写：中心有新版本时自动并集合并回推；也可点上方「⬆ 推送」立即同步。</span>
+                        <span v-else>中心 key 只读：修改仅本地生效，中心有新版本时自动并入（本地修改保留）。</span>
+                    </div>
+                    <div v-if="sbConfig.last_merge" style="margin-bottom:12px;padding:8px 12px;border-radius:8px;background:rgba(70,167,88,0.06);border:1px solid rgba(70,167,88,0.2);font-size:0.8rem;color:var(--text-secondary);">
+                        上次并集合并：{{ mergeSummaryText(sbConfig.last_merge) }}
                     </div>
 
                     <table style="width:100%;font-size:0.84rem;border-collapse:collapse;">
@@ -2811,7 +2824,7 @@
                         管理模式：定义类增删改直写中心库，所有代理节点将在轮询间隔（默认 60s）内自动拉取。「本地到中心」会用本地定义整体覆盖中心（破坏性）。修改 key 后需重启网关以应用。
                     </div>
                     <div v-else-if="sbConfig.role === 'proxy'" style="margin-top:12px;padding:8px 12px;border-radius:8px;background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.2);font-size:0.82rem;color:var(--color-warning);">
-                        代理模式：定时轮询拉取中心定义。代理可本地增删改（应急，写本地 SQLite，不推中心）；拉取模式可切换为手动以保留本地改不被覆盖。修改 key 后需重启网关以应用。
+                        代理模式：定时轮询拉取中心定义。代理可本地增删改（应急，写本地 SQLite）；中心有新版本时自动并集合并（本地修改保留，冲突以本地为准）。删除不会经合并传播：删行请用推送发布，或在中心删除后保持端侧干净再拉取。修改 key 后需重启网关以应用。
                     </div>
 
                     <!-- 代理拉取模式切换（管理端直写中心，无需此区块） -->
@@ -2822,7 +2835,7 @@
                             <span class="chip" :class="{ active: syncPullMode === 'manual', warning: syncPullMode === 'manual' }" @click="setPullMode('manual')">手动（只记待拉取，保留本地改）</span>
                         </div>
                         <div v-if="syncPullMode === 'manual' && syncPullPending" style="padding:6px 10px;border-radius:6px;background:rgba(245,158,11,0.1);color:var(--color-warning);font-size:0.8rem;">
-                            ⚠ 中心有新版本待拉取（v{{ syncPullPending }}）。点「⬇ 远端到本地」应用——会覆盖本地应急改。
+                            ⚠ 中心有新版本待拉取（v{{ syncPullPending }}）。点「⬇ 远端到本地」合并应用——中心更新并入本地，本地修改保留（冲突以本地为准）。
                         </div>
                         <div v-else-if="syncPullMode === 'manual'" style="padding:6px 10px;color:var(--text-muted);font-size:0.8rem;">
                             手动模式：中心更新不会被自动应用，本地应急改保留。需要时点上方按钮拉取。
@@ -3019,43 +3032,14 @@
                             </small>
                         </div>
 
-                        <!-- ═══ 平台账号 / 账单区 ═══ -->
+                        <!-- ═══ 平台账号区 ═══ -->
                         <div style="margin-top:16px;">
-                            <!-- 账单地址 + 外链 -->
-                            <div class="form-group u-mb12">
-                                <label style="margin:0 0 6px 0;display:block;">账单地址 (Billing URL)</label>
-                                <div style="display:flex;gap:8px;">
-                                    <input class="form-control u-flex1" type="text" placeholder="https://console.provider.com/billing（可选）"
-                                           v-model="platformModal.form.billing_address"
-                                           maxlength="512" autocomplete="off" spellcheck="false">
-                                    <a v-if="platformModal.form.billing_address" :href="platformModal.form.billing_address" target="_blank" rel="noopener noreferrer"
-                                       class="btn btn-secondary btn-sm" style="white-space:nowrap;display:inline-flex;align-items:center;gap:5px;">
-                                        <svg style="width:13px;height:13px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-                                        打开
-                                    </a>
-                                </div>
-                            </div>
-
                             <div class="form-control-row">
                                 <div class="form-group u-flex1">
                                     <label style="margin:0 0 6px 0;display:block;">登录账号 (可选)</label>
                                     <input type="text" class="form-control" placeholder="提供商控制台登录账号"
                                            v-model="platformModal.form.login_account"
                                            maxlength="200" autocomplete="off" spellcheck="false">
-                                </div>
-                                <div class="form-group u-flex1">
-                                    <label style="margin:0 0 6px 0;display:block;">登录密码 (可选，留空=不修改)</label>
-                                    <div style="display:flex;gap:8px;">
-                                        <input class="form-control u-flex1" :type="platformModal.pwVisible ? 'text' : 'password'"
-                                               placeholder="••••••••" v-model="platformModal.form.login_password"
-                                               maxlength="512" autocomplete="new-password" spellcheck="false">
-                                        <button class="btn btn-secondary btn-sm btn-icon" type="button"
-                                                @click="platformModal.pwVisible = !platformModal.pwVisible"
-                                                :title="platformModal.pwVisible ? '隐藏密码' : '显示密码'">
-                                            <svg v-if="platformModal.pwVisible" style="width:14px;height:14px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                                            <svg v-else style="width:14px;height:14px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
-                                        </button>
-                                    </div>
                                 </div>
                             </div>
 
@@ -3416,6 +3400,7 @@
                                             <input type="checkbox" :id="'vs-'+m" :value="m" v-model="importWizard.selected" style="cursor:pointer;margin-top:2px;flex-shrink:0;">
                                             <label :for="'vs-'+m" style="font-family:var(--font-mono);font-size:0.78rem;cursor:pointer;flex:1;min-width:0;overflow-wrap:anywhere;line-height:1.35;" :title="m">{{ m }}</label>
                                             <span v-if="importWizard.existing[m.toLowerCase()]" style="font-size:0.62rem;color:var(--color-success);background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.25);border-radius:3px;padding:0 4px;flex-shrink:0;margin-top:1px;">已添加</span>
+                                            <span v-if="poolJoinState(m) === 'join'" style="font-size:0.62rem;color:var(--color-primary);background:rgba(56,189,248,0.1);border:1px solid rgba(56,189,248,0.3);border-radius:3px;padding:0 4px;flex-shrink:0;margin-top:1px;" title="保存时将当前 Key 加入该模型的 Key 池">＋入池</span>
                                         </div>
                                     </div>
                                 </div>
@@ -3909,7 +3894,7 @@
                 // 和中心配置页徽章。启动时拉一次。
                 const sbRole = ref('offline');
                 const sbConfig = ref({ connected: false, role: 'offline', url: '', key_mask: '', tables: {}, error: '' });
-                const sbConfigForm = ref({ url: '', key: '', centerKey: '' });
+                const sbConfigForm = ref({ url: '', key: '' });
                 const sbRoleLabel = computed(() => ({
                     management: '管理端（可写）', proxy: '代理端（只读）', offline: '未连接'
                 }[sbConfig.value.role] || sbConfig.value.role));
@@ -3958,16 +3943,30 @@
                     try {
                         const r = await fetch('/api/sync/refresh', { method: 'POST' });
                         if (r.ok) {
-                            const d = await r.json();
                             syncPullPending.value = '';
-                            showToast('拉取成功', '中心配置已应用到本地', 'success');
+                            showToast('后台同步已触发', '合并/拉取在后台执行，完成后状态自动更新', 'success');
                             fetchSyncCenter();
+                            setTimeout(fetchSyncCenter, 8000);
                         } else {
                             const d = await r.json().catch(() => ({}));
                             showToast('拉取失败', d.error?.message || '', 'error');
                         }
                     } catch (e) { showToast('拉取失败', String(e), 'error'); }
                     syncPulling.value = false;
+                };
+                // 并集摘要一句话（顶栏面板与同步卡共用）。
+                const mergeSummaryText = (m) => {
+                    if (!m) return '';
+                    const names = { platform: '平台', credential: '密钥', rapi: '模型', endpoint_credential: '绑定', lapi: '接口', lapi_rapi_order: '路由链' };
+                    const part = (o) => Object.keys(o || {}).filter((k) => o[k] > 0).map((k) => (names[k] || k) + '×' + o[k]).join('/');
+                    let s = '中心 v' + (m.center_version ?? '?');
+                    const fc = part(m.from_center), kl = part(m.kept_local);
+                    if (fc) s += '，中心新增并入 ' + fc;
+                    if (kl) s += '，本地保留 ' + kl;
+                    if ((m.conflicts || []).length) s += '，冲突 ' + m.conflicts.length + ' 项按本地胜';
+                    if (m.pushed_back) s += '，已回推';
+                    if (m.push_error) s += '，回推失败：' + m.push_error;
+                    return s;
                 };
                 // 本地→中心 整体覆盖推送（管理模式专用，破坏性，二次确认）。
                 const pushingToCenter = ref(false);
@@ -4080,9 +4079,8 @@
                 const platformModal = reactive({
                     show: false,
                     item: null,
-                    form: { name: '', base_url: '', notes: '', billing_address: '', login_account: '', login_password: '' },
+                    form: { name: '', base_url: '', notes: '', login_account: '' },
                     headers: [],      // platform-level custom headers staging list
-                    pwVisible: false // login password eye toggle
                 });
                 const addToLapiModal = reactive({ show: false, rapi: null, selectedLapiId: null });
                 const rapiModal = reactive({ show: false, item: null, form: { platform_id: '', alias: '', model: '', vendor: '', series: '', version: '', suffix: '', notes: '' }, headers: [], keyIDs: [] });
@@ -4272,7 +4270,7 @@
                 const headersModal = reactive({ show: false, rapi: null, headers: [] });
                 const lapiModal = reactive({ show: false, item: null, fromRapiId: 0, form: { alias: '', notes: '', vendor: '', series: '', version: '', suffix: '' } });
                 const lapiRoutesModal = reactive({ show: false, lapi: null, chain: [], selectedRapiId: '' });
-                const importWizard = reactive({ show: false, platform: null, loading: false, fetchError: '', emptyList: false, models: [], selected: [], manualInput: '', existing: {}, manualAdded: [] });
+                const importWizard = reactive({ show: false, platform: null, keyId: null, loading: false, fetchError: '', emptyList: false, models: [], selected: [], manualInput: '', existing: {}, manualAdded: [] });
                 // 各分类折叠状态：默认全部展开，用户可点击标题折叠/展开。
                 // 每个分类体独立滚动，避免大类目把其他类目挤到视线外。
                 const wizardCollapsed = reactive({ manual: false, validSelected: false, invalidSelected: false, validUnselected: false });
@@ -4559,17 +4557,16 @@
                         }
                     } catch (e) {}
                 };
-                const saveSBConfig = async (url, key, centerKey) => {
+                const saveSBConfig = async (url, key) => {
                     try {
                         const r = await fetch('/api/sb-config', {
                             method: 'POST', headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ url, key, center_key: centerKey || '' })
+                            body: JSON.stringify({ url, key })
                         });
                         const d = await r.json();
                         if (r.ok) {
                             sbConfig.value = d;
                             sbRole.value = d.role || 'offline';
-                            sbConfigForm.value.centerKey = ''; // 不落表单
                             if (d.activate_error) {
                                 showToast('已保存但未激活', d.activate_error, 'error');
                             } else if (d.activated) {
@@ -4601,9 +4598,9 @@
                     const d = insightData.value.health;
                     const platMap = {};
                     const tree = [];
-                    const getPlat = (pid, pname, billing) => {
+                    const getPlat = (pid, pname) => {
                         if (!platMap[pid]) {
-                            const p = { platform_id: pid, platform_name: pname || '', billing_address: billing || '',
+                            const p = { platform_id: pid, platform_name: pname || '',
                                         keys: [], keylessModels: [], keyCount: 0, modelCount: 0 };
                             platMap[pid] = p;
                             tree.push(p);
@@ -4613,7 +4610,7 @@
                     // 平台-key 层
                     const keyIdx = {};
                     for (const ck of d.cooling_keys || []) {
-                        const p = getPlat(ck.platform_id, ck.platform_name, ck.billing_address);
+                        const p = getPlat(ck.platform_id, ck.platform_name);
                         const k = {
                             id: ck.id, platform_id: ck.platform_id, key_index: ck.key_index, label: ck.label,
                             reason: ck.reason, recover_at: ck.recover_at, models: []
@@ -4624,7 +4621,7 @@
                     }
                     // 平台-key-模型 层：把冷却模型挂到其 key 池中正在冷却的 key 下
                     for (const cr of d.cooling_rapis || []) {
-                        const p = getPlat(cr.platform_id, cr.platform_name, cr.billing_address);
+                        const p = getPlat(cr.platform_id, cr.platform_name);
                         p.modelCount++;
                         const ids = String(cr.key_ids || '').split(',').map(s => s.trim()).filter(Boolean).map(Number);
                         let attached = false;
@@ -4801,23 +4798,23 @@
                 const loadPlatforms = async () => {
                     try {
                         const r = await fetch('/api/platforms');
-                        if (r.ok) {
-                            const list = await r.json();
-                            await Promise.all(list.map(async (p) => {
-                                try {
-                                    const kr = await fetch(`/api/platforms/${p.id}/keys`);
-                                    p._keys = kr.ok ? (await kr.json()) : [];
-                                } catch (e) {
-                                    p._keys = [];
-                                }
-                                // Parse platform-level supported_formats (JSON string → array) for display.
-                                try {
-                                    p._platformFormats = (p.supported_formats && p.supported_formats !== '[]' && p.supported_formats !== '')
-                                        ? JSON.parse(p.supported_formats) : [];
-                                } catch (_) { p._platformFormats = []; }
-                            }));
-                            platforms.value = list;
-                        }
+                        if (!r.ok) return;
+                        const list = await r.json();
+                        // 先渲染列表，密钥详情并行补齐（同 loadLapis 的原因）。
+                        platforms.value = list;
+                        await Promise.all(list.map(async (p) => {
+                            try {
+                                const kr = await fetch(`/api/platforms/${p.id}/keys`);
+                                p._keys = kr.ok ? (await kr.json()) : [];
+                            } catch (e) {
+                                p._keys = [];
+                            }
+                            // Parse platform-level supported_formats (JSON string → array) for display.
+                            try {
+                                p._platformFormats = (p.supported_formats && p.supported_formats !== '[]' && p.supported_formats !== '')
+                                    ? JSON.parse(p.supported_formats) : [];
+                            } catch (_) { p._platformFormats = []; }
+                        }));
                     } catch (e) {}
                 };
 
@@ -5033,18 +5030,20 @@
                 const loadLapis = async () => {
                     try {
                         const r = await fetch('/api/lapis');
-                        if (r.ok) {
-                            const list = await r.json();
-                            for (const item of list) {
-                                try {
-                                    const details = await fetch(`/api/lapis/${item.id}/rapis`);
-                                    item._rapis = details.ok ? await details.json() : [];
-                                } catch (e) {
-                                    item._rapis = [];
-                                }
+                        if (!r.ok) return;
+                        const list = await r.json();
+                        // 先渲染列表：详情是 1+N 个请求（管理模式下每个都是
+                        // 一次中心 HTTPS 往返），等 22 个串行跑完才赋值会导致
+                        // 接口页长时间空白。列表先行，路由链并行补齐。
+                        lapis.value = list;
+                        await Promise.all(list.map(async (item) => {
+                            try {
+                                const details = await fetch(`/api/lapis/${item.id}/rapis`);
+                                item._rapis = details.ok ? await details.json() : [];
+                            } catch (e) {
+                                item._rapis = [];
                             }
-                            lapis.value = list;
-                        }
+                        }));
                     } catch (e) {}
                 };
 
@@ -5295,7 +5294,8 @@
                 const discoverKeyModels = (k) => {
                     const p = platforms.value.find(x => String(x.id) === String(k.platform_id));
                     if (!p) { showToast('错误', '未找到该密钥所属平台', 'error'); return; }
-                    fetchPlatformModels(p);
+                    // 带上触发发现的 Key：勾选已存在模型保存时，把该 Key 并入其 Key 池。
+                    fetchPlatformModels(p, k.id);
                 };
                 const toggleKeyFlat = async (k) => {
                     const newEnabled = !k.enabled;
@@ -5490,13 +5490,25 @@
                             keyId = Number(addWizard.keyId) || 0;
                         }
                         // 3) model
+                        let boundPoolName = '';
                         if (addWizard.modelMode === 'new') {
-                            const body = { ...addWizard.modelForm, platform_id: platId };
-                            if (keyId) body.key_ids = String(keyId);
-                            const r = await fetch('/api/rapis', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-                            if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || '模型创建失败'); }
+                            const modelName = (addWizard.modelForm.model || '').trim();
+                            // 同平台同名模型已存在：不建重复端点（后端会 409），
+                            // 有 Key 则直接并入其 Key 池。
+                            const dup = rapis.value.find(r => String(r.platform_id) === String(platId) && r.model === modelName);
+                            if (dup && keyId) {
+                                const st = await bindKeyToModelPool(dup.id, keyId);
+                                if (st !== 'joined' && st !== 'already') throw new Error(st.slice(6) || '加入 Key 池失败');
+                                boundPoolName = dup.alias || dup.model;
+                            } else {
+                                const body = { ...addWizard.modelForm, platform_id: platId };
+                                if (keyId) body.key_ids = String(keyId);
+                                const r = await fetch('/api/rapis', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+                                if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || '模型创建失败'); }
+                            }
                         }
-                        showToast('已添加', '新增内容已保存，旧内容已复用', 'success');
+                        if (boundPoolName) showToast('已加入 Key 池', `模型「${boundPoolName}」已存在，新 Key 已加入其 Key 池`, 'success');
+                        else showToast('已添加', '新增内容已保存，旧内容已复用', 'success');
                         addWizard.show = false;
                         addWizard.confirmMode = false;
                         refreshData();
@@ -5623,16 +5635,13 @@
                 // there with a platform filter); this modal no longer fetches or stages keys.
                 const openPlatformModal = (item) => {
                     platformModal.item = item;
-                    platformModal.pwVisible = false;
                     if (item) {
                         platformModal.form = {
                             id: item.id,
                             name: item.name,
                             base_url: item.base_url,
                             notes: item.notes || '',
-                            billing_address: item.billing_address || '',
                             login_account: item.login_account || '',
-                            login_password: '', // never echoed back — empty = unchanged on save
                             enabled: item.enabled,
                             available: item.available
                         };
@@ -5641,7 +5650,7 @@
                                 ? JSON.parse(item.custom_headers) : [];
                         } catch (_) { platformModal.headers = []; }
                     } else {
-                        platformModal.form = { name: '', base_url: '', notes: '', billing_address: '', login_account: '', login_password: '', enabled: true, available: true };
+                        platformModal.form = { name: '', base_url: '', notes: '', login_account: '', enabled: true, available: true };
                         platformModal.headers = [];
                     }
                     platformModal.show = true;
@@ -5716,10 +5725,8 @@
                         showToast('验证失败', 'Base URL 必须以 http:// 或 https:// 开头', 'error');
                         return;
                     }
-                    // Trim the new console/account fields (password empty = unchanged)
-                    form.billing_address = (form.billing_address || '').trim();
+                    // Trim the console login field
                     form.login_account = (form.login_account || '').trim();
-                    form.login_password = (form.login_password || '').trim();
                     // Serialize platform-level custom headers from the staging list
                     form.custom_headers = JSON.stringify(platformModal.headers || []);
 
@@ -5762,8 +5769,9 @@
                     } catch (e) {}
                 };
 
-                const fetchPlatformModels = async (plat) => {
+                const fetchPlatformModels = async (plat, keyId = null) => {
                     importWizard.platform = plat;
+                    importWizard.keyId = keyId;
                     importWizard.loading = true;
                     importWizard.models = [];
                     importWizard.selected = [];
@@ -5780,13 +5788,14 @@
                     importWizard.show = true;
 
                     // Build a map of models already added to this platform.
-                    // Key: lowercase model name → { id, source, model }
+                    // Key: lowercase model name → { id, source, model, key_ids }
                     // source distinguishes manual (never auto-pruned) from auto_discover.
+                    // key_ids 用于判断触发发现的 Key 是否已在池中（在则无需并入）。
                     const existingMap = {};
                     for (const r of rapis.value) {
                         if (r.platform_id === plat.id) {
                             const key = (r.model || r.alias || '').toLowerCase();
-                            if (key) existingMap[key] = { id: r.id, source: r.source || 'manual', model: r.model || r.alias };
+                            if (key) existingMap[key] = { id: r.id, source: r.source || 'manual', model: r.model || r.alias, key_ids: r.key_ids || '' };
                         }
                     }
                     importWizard.existing = existingMap;
@@ -5941,10 +5950,46 @@
                 // 保存时会按 sync 级联删除——这是用户显式操作的结果。
                 const clearSelection = () => { importWizard.selected = []; };
 
+                // 把 key 并入已存在模型的 Key 池（key_ids 白名单）。
+                // 空 key_ids = 全平台 Key，天然在池中，无需请求。
+                // 返回 'joined' | 'already' | 'error:原因'；成功后同步本地缓存，
+                // 避免同批次内重复 PUT。
+                const bindKeyToModelPool = async (rapiId, keyId) => {
+                    const rapi = rapis.value.find(x => String(x.id) === String(rapiId));
+                    if (!rapi) return 'error:未找到模型';
+                    const ids = String(rapi.key_ids || '').split(',').map(s => s.trim()).filter(Boolean);
+                    if (ids.length === 0 || ids.includes(String(keyId))) return 'already';
+                    ids.push(String(keyId));
+                    try {
+                        const r = await fetch('/api/rapis', {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ ...rapi, key_ids: ids.join(',') })
+                        });
+                        if (!r.ok) {
+                            const d = await r.json().catch(() => ({}));
+                            return 'error:' + (d.error || ('服务器返回 ' + r.status));
+                        }
+                        rapi.key_ids = ids.join(',');
+                        const lk = (rapi.model || '').toLowerCase();
+                        if (importWizard.existing[lk]) importWizard.existing[lk].key_ids = ids.join(',');
+                        return 'joined';
+                    } catch (e) { return 'error:网络请求失败'; }
+                };
+
+                // 已存在模型行的小徽标状态：na（无 key 上下文）/ in（已在池中）/ join（保存时将并入）。
+                const poolJoinState = (m) => {
+                    const info = importWizard.existing[m.toLowerCase()];
+                    if (!info || !importWizard.keyId) return 'na';
+                    const ids = String(info.key_ids || '').split(',').map(s => s.trim()).filter(Boolean);
+                    if (ids.length === 0 || ids.includes(String(importWizard.keyId))) return 'in';
+                    return 'join';
+                };
+
                 const importSelectedModels = async () => {
                     const toAdd = importToAdd.value;
                     const toRemove = importToRemove.value;
-                    let created = 0, failed = 0, removed = 0;
+                    let created = 0, failed = 0, removed = 0, bound = 0;
                     const errors = [];
 
                     // 1. Create newly-checked models, split by source (batch API takes one source per call).
@@ -5981,7 +6026,24 @@
                     await createBatch(autoAdd, 'auto_discover');
                     await createBatch(manualAdd, 'manual');
 
-                    // 2. Delete existing auto_discover models no longer in remote. Use sync=true to
+                    // 2. 已存在且被勾选的模型：把触发发现的 Key 并入其 Key 池
+                    //    （解决“新 Key 发现到已存在的模型却加不进去”）。
+                    //    仅当 key 与本平台一致时执行；已在池中（或空白名单）则跳过。
+                    if (importWizard.keyId) {
+                        const kid = String(importWizard.keyId);
+                        const kObj = (keysList.value || []).find(x => String(x.id) === kid);
+                        if (kObj && String(kObj.platform_id) === String(importWizard.platform.id)) {
+                            for (const m of importWizard.selected) {
+                                const info = importWizard.existing[m.toLowerCase()];
+                                if (!info) continue; // 新模型走上面的 batch 创建
+                                const st = await bindKeyToModelPool(info.id, kid);
+                                if (st === 'joined') bound++;
+                                else if (st.startsWith('error')) errors.push(`模型 ${m} 加入 Key 池失败：${st.slice(6)}`);
+                            }
+                        }
+                    }
+
+                    // 3. Delete existing auto_discover models no longer in remote. Use sync=true to
                     //    bypass the enabled/available guard — these models are no longer supported
                     //    upstream and should be pruned regardless of current state.
                     for (const id of toRemove) {
@@ -5999,6 +6061,7 @@
 
                     const parts = [];
                     if (toAdd.length > 0) parts.push(`新增 ${created} 个`);
+                    if (bound > 0) parts.push(`加入 Key 池 ${bound} 个`);
                     if (toRemove.length > 0) parts.push(`移除 ${removed} 个`);
                     const summary = parts.length > 0 ? parts.join('，') : '无变更';
                     const failMsg = (failed > 0 || errors.length > 0) ? `，${errors.length || failed} 个失败: ${errors.slice(0, 3).join('; ')}` : '';
@@ -7026,7 +7089,7 @@
                     systemLogs, systemLogOpen, loadSystemLogs,
                     // 代理拉取模式（auto/manual + pending + 手动拉取）
                     syncPullMode, syncPullPending, syncPulling, loadPullMode, setPullMode, manualPull,
-                    pushingToCenter, pushToCenter,
+                    pushingToCenter, pushToCenter, mergeSummaryText,
                     
                     // Modals toggle & save
                     maskToken, formatKeyExpiry, isKeyExpired,
@@ -7042,7 +7105,7 @@
                     keyModelBlock, blockedKeysForRapi, unblockKeyModel, keyBadgeStyleFor, keyBadgeTitleFor, poolOverflow,
                     headersModal, openHeadersModal, closeHeadersModal, saveHeaders,
                     importWizard, closeImportWizard, importSelectedModels, addManualModel, removeManualSession, deleteManualExisting,
-                    importToAdd, importToRemove, wizardSections, selectAllFiltered, clearSelection, wizardCollapsed, toggleSection,
+                    importToAdd, importToRemove, wizardSections, selectAllFiltered, clearSelection, wizardCollapsed, toggleSection, bindKeyToModelPool, poolJoinState,
                     lapiRoutesModal, editLapiRoutes, closeLapiRoutesModal, moveRouteUp, moveRouteDown, removeRoute, addRouteToChain, quickAddToChain, saveLapiRoutes,
                     onChainDragStart, onChainDragOver, onChainDragLeave, onChainDrop, onChainDragEnd,
                     onCardDragStart, onCardDragOver, onCardDragLeave, onCardDrop, onCardDragEnd,
