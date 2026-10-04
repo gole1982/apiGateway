@@ -87,12 +87,10 @@ type Config struct {
 //   - SupabaseURL：项目根 URL（https://xxx.supabase.co）
 //   - ServiceKey：Supabase secret key（sb_secret_…，旧称 service_role）——
 //     绕过 RLS、读写全表；只放管理机，绝不外泄。管理端角色由此判定。
-//   - CenterKey：可选，32 字节 hex，token 写中心前加密；留空 = 中心存明文
-//     （访问安全由 Supabase 负责）。填了则与各代理 [sync].center_key 一致
+//   - 中心 token 一律存明文（访问安全由 Supabase RLS/API key 负责）。
 type Management struct {
 	SupabaseURL string
 	ServiceKey  string
-	CenterKey   string
 }
 
 // Configured 表示是否启用管理模式。
@@ -105,13 +103,12 @@ func (m Management) Configured() bool {
 //   - SourceURL / VersionURL：Supabase PostgREST 的 get_bundle / get_version RPC 全 URL
 //   - AnonKey：Supabase publishable key（sb_publishable_…，旧称 anon）——
 //     受 RLS 约束、只读；可放代理端。代理端角色由此判定。
-//   - CenterKey：32 字节 hex，token 边界解密用（管理端写入中心时用同一把加密）
+//   - 中心 token 一律存明文（访问安全由 Supabase RLS/API key 负责）。
 //   - PollIntervalSec：代理轮询中心版本号的间隔（默认 60s）
 type Sync struct {
 	SourceURL       string
 	VersionURL      string
 	AnonKey         string
-	CenterKey       string
 	PollIntervalSec int
 }
 
@@ -177,13 +174,11 @@ func LoadFrom(cfgPath string) (*Config, error) {
 			SourceURL:       cfg.Section("sync").Key("source_url").MustString(""),
 			VersionURL:      cfg.Section("sync").Key("version_url").MustString(""),
 			AnonKey:         cfg.Section("sync").Key("anon_key").MustString(""),
-			CenterKey:       cfg.Section("sync").Key("center_key").MustString(""),
 			PollIntervalSec: cfg.Section("sync").Key("poll_interval_sec").MustInt(60),
 		},
 		Management: Management{
 			SupabaseURL: cfg.Section("management").Key("supabase_url").MustString(""),
 			ServiceKey:  cfg.Section("management").Key("service_key").MustString(""),
-			CenterKey:   cfg.Section("management").Key("center_key").MustString(""),
 		},
 	}
 	// 未配置（缺键或显式留空）一律归一化为 session，与 scheduler.NewManager
