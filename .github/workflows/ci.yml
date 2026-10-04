@@ -25,6 +25,13 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# 测试专用主密钥。crypto 只认 APIGATEWAY_KEY（无文件兜底），缺则 db.Init 直接
+# fatal，任何跑 go test 的 job 都会红。放在 workflow 级让所有 job（含将来新增的）
+# 自动继承，避免"某个测试忘了 t.Setenv 就让整个 CI 变红"。
+# 这是**固定测试值**，与生产密钥无关，也不构成任何秘密。
+env:
+  APIGATEWAY_KEY: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+
 jobs:
   # ===========================================================================
   # Job 1: 校验 —— 单元测试 + go vet + 编译。这是合入门槛。
