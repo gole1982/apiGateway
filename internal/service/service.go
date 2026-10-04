@@ -76,35 +76,10 @@ func validatePlatformInput(p *models.Platform) error {
 		return errors.New("Base URL 不允许包含用户名/密码信息")
 	}
 
-	// --- Billing address (provider console URL, optional) ---
-	p.BillingAddress = strings.TrimSpace(p.BillingAddress)
-	if len(p.BillingAddress) > 512 {
-		return errors.New("账单地址长度不能超过512字符")
-	}
-	if p.BillingAddress != "" {
-		billParsed, err := url.ParseRequestURI(p.BillingAddress)
-		if err != nil {
-			return errors.New("账单地址格式不合法")
-		}
-		if billParsed.Scheme != "http" && billParsed.Scheme != "https" {
-			return errors.New("账单地址必须以 http:// 或 https:// 开头")
-		}
-		if billParsed.User != nil {
-			return errors.New("账单地址不允许包含用户名/密码信息")
-		}
-	}
-
 	// --- Login account (provider console login, optional) ---
 	p.LoginAccount = strings.TrimSpace(p.LoginAccount)
 	if utf8.RuneCountInString(p.LoginAccount) > 200 {
 		return errors.New("登录账号不能超过200个字符")
-	}
-
-	// --- Login password (provider console password, optional; kept as-is so
-	// an empty value means "unchanged" in UpdatePlatform) ---
-	p.LoginPassword = strings.TrimSpace(p.LoginPassword)
-	if utf8.RuneCountInString(p.LoginPassword) > 512 {
-		return errors.New("登录密码不能超过512个字符")
 	}
 
 	return nil
@@ -198,9 +173,10 @@ func (s *Service) Run() error {
 		logger.DefaultConsole().Error("service", "database init failed", "error", err.Error())
 		return err
 	}
-	// 定义类持久层接缝：默认绑定本地 SQLite；管理模式（[management] 配置）
-	// 在后面换成 supabase Store 直写中心。
-	store.Init(db.Get())
+	// 定义类持久层接缝：默认绑定本地 SQLite（经 edgeStore 包装，面板定义写
+	// 自动标脏）；管理模式（[management] 配置）在后面换成 supabase Store
+	// 直写中心（此时写穿透，无分歧，不标脏）。
+	store.Use(wrapEdgeStore(db.Get()))
 	// 冻结启动时本地定义表行数，供仪表盘「启动以来变化量」对比。
 	captureStartupSnapshot()
 
@@ -394,7 +370,6 @@ func (s *Service) Run() error {
 		sup, err := supabase.New(supabase.Config{
 			URL:        cfg.Management.SupabaseURL,
 			ServiceKey: cfg.Management.ServiceKey,
-			CenterKey:  cfg.Management.CenterKey,
 		}, func() {
 			mgmtMu.Lock()
 			defer mgmtMu.Unlock()
@@ -411,7 +386,6 @@ func (s *Service) Run() error {
 				SourceURL:       base + "/rest/v1/rpc/get_bundle",
 				VersionURL:      base + "/rest/v1/rpc/get_version",
 				AnonKey:         cfg.Management.ServiceKey,
-				CenterKey:       cfg.Management.CenterKey,
 				PollIntervalSec: cfg.Sync.PollIntervalSec,
 			}
 			logger.DefaultConsole().Info("service", "[MGMT] management mode: definitions write through to center",
@@ -432,15 +406,12 @@ func (s *Service) Run() error {
 	// 回退：操作员若在仪表盘「中心配置」页录入了 Supabase URL+key（存 settings
 	// 表）而非编辑 proxy.cfg [management]，则据此激活管理模式，使运行时 store、
 	// 同步循环与仪表盘 sync-center 卡都与 sb-config 页一致（否则卡显示未连接）。
-	// center_key 同样从 settings（sb_center_key）读，proxy.cfg 仅作兜底。
 	if !manageMode.Load() {
 		if sbURL, sbKey, ok := loadSavedSBConfig(); ok {
-			centerKeyHex := effectiveCenterKey("")
 			var mgmtMu sync.Mutex
 			sup, err := supabase.New(supabase.Config{
 				URL:        sbURL,
 				ServiceKey: sbKey,
-				CenterKey:  centerKeyHex,
 			}, func() {
 				mgmtMu.Lock()
 				defer mgmtMu.Unlock()
@@ -459,7 +430,6 @@ func (s *Service) Run() error {
 					SourceURL:       base + "/rest/v1/rpc/get_bundle",
 					VersionURL:      base + "/rest/v1/rpc/get_version",
 					AnonKey:         sbKey,
-					CenterKey:       centerKeyHex,
 					PollIntervalSec: cfg.Sync.PollIntervalSec,
 				}
 				logger.DefaultConsole().Info("service", "[MGMT] management mode from saved sb-config",
@@ -566,12 +536,32 @@ func discoverUpstreamModels(ctx context.Context, baseURL, fetchToken string) ([]
 	if err != nil {
 		return nil, 502, fmt.Errorf("fetch models failed: %v", err)
 	}
-	defer resp.Body.Close()
+
+	// Anthropic 兼容站（Anthropic 官方 / messages 结构中转）不认 Bearer：
+	// 401/403 时按 Anthropic 惯例换 x-api-key + anthropic-version 重试一次。
+	// 响应体同为 {data:[{id}]}，解析分支无需动。
+	if !googleNative && (resp.StatusCode == 401 || resp.StatusCode == 403) {
+		resp.Body.Close()
+		retryReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, modelsURL, nil)
+		retryReq.Header.Set("x-api-key", fetchToken)
+		retryReq.Header.Set("anthropic-version", "2023-06-01")
+		retryReq.Header.Set("Content-Type", "application/json")
+		logger.DefaultConsole().Info("service", "[FETCH] bearer rejected, retrying with x-api-key",
+			"url", modelsURL, "status", resp.StatusCode)
+		resp, err = client.Do(retryReq)
+		if err != nil {
+			return nil, 502, fmt.Errorf("fetch models failed: %v", err)
+		}
+	}
 
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		logger.DefaultConsole().Warn("service", "[FETCH] models fetch failed",
+			"url", modelsURL, "status", resp.StatusCode)
 		return nil, resp.StatusCode, fmt.Errorf("upstream returned %d: %s", resp.StatusCode, string(body))
 	}
+	defer resp.Body.Close()
 
 	var modelNames []string
 	if googleNative {
@@ -754,9 +744,12 @@ func createWebHandler() http.Handler {
 				writeJSONError(w, 500, err)
 				return
 			} else if exists {
-				writeJSONError(w, 409, fmt.Errorf("该平台下模型 %q 已存在（同 base_url + model 视为同一端点）", rapi.Model))
+				writeJSONError(w, 409, fmt.Errorf("该平台下模型 %q 已存在（同 base_url + model 视为同一端点，不建重复端点；如需让其它 Key 服务该模型，请在模型编辑页将其加入 Key 池）", rapi.Model))
 				return
 			}
+			// 新建默认启用：关闭是显式运维动作，走 toggle/编辑页。
+			rapi.Enabled = true
+			rapi.Available = true
 			if err := store.A().CreateRAPI(&rapi); err != nil {
 				logger.DefaultConsole().Error("service", "[API] CreateRAPI failed",
 					"alias", rapi.Alias, "platform_id", rapi.PlatformID, "error", err.Error())
@@ -790,7 +783,7 @@ func createWebHandler() http.Handler {
 				writeJSONError(w, 500, err)
 				return
 			} else if exists {
-				writeJSONError(w, 409, fmt.Errorf("该平台下模型 %q 已存在（同 base_url + model 视为同一端点）", rapi.Model))
+				writeJSONError(w, 409, fmt.Errorf("该平台下模型 %q 已存在（同 base_url + model 视为同一端点，不建重复端点；如需让其它 Key 服务该模型，请在模型编辑页将其加入 Key 池）", rapi.Model))
 				return
 			}
 			// Remember whether the model was unavailable before the edit, so a
@@ -805,11 +798,18 @@ func createWebHandler() http.Handler {
 				return
 			}
 			if wasUnavailable {
-				rep := proxyGateway.RecoverRAPIs(r.Context(), []int64{rapi.ID}, 1, 8)
-				if len(rep.Recovered) > 0 {
-					logger.DefaultConsole().Info("service", "[API] auto-recovered model after whitelist edit",
-						"rapi_id", rapi.ID, "alias", rapi.Alias)
-				}
+				// 重探测放后台：上游探测（多格式 × 多候选 URL，超时可达数十秒）
+				// 不能挡住保存响应，否则纯改名也要等很久。用独立 context，
+				// handler 返回后 r.Context() 会取消，不能直接传下去。
+				go func(rapiID int64, alias string) {
+					ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+					defer cancel()
+					rep := proxyGateway.RecoverRAPIs(ctx, []int64{rapiID}, 1, 8)
+					if len(rep.Recovered) > 0 {
+						logger.DefaultConsole().Info("service", "[API] auto-recovered model after whitelist edit",
+							"rapi_id", rapiID, "alias", alias)
+					}
+				}(rapi.ID, rapi.Alias)
 			}
 			w.Write([]byte(`{"success":true}`))
 
@@ -1375,12 +1375,13 @@ func createWebHandler() http.Handler {
 				writeJSONError(w, 400, err)
 				return
 			}
+			// 新建默认启用：关闭是显式运维动作，走 toggle/编辑页。
+			p.Enabled = true
+			p.Available = true
 			if err := store.A().CreatePlatform(&p); err != nil {
 				writeJSONError(w, 500, err)
 				return
 			}
-			// Never echo the plaintext login password back to the client.
-			p.LoginPassword = ""
 			data, _ := json.Marshal(p)
 			w.Write(data)
 
@@ -1570,7 +1571,10 @@ func createWebHandler() http.Handler {
 			}
 		} else {
 			baseURL = strings.TrimSpace(req.BaseURL)
-			fetchToken = req.Token
+			// 向导粘贴的 key 常带首尾空白/换行：入库前已 trim，这里同样处理，
+			// 否则 Bearer 尾随空格直接 401，而入库后反而能用，造成
+			// “新建发现失败、入库后发现成功”的假象。
+			fetchToken = strings.TrimSpace(req.Token)
 			platName = baseURL
 			if baseURL == "" || fetchToken == "" {
 				writeJSONError(w, http.StatusBadRequest,
@@ -1757,6 +1761,8 @@ func createWebHandler() http.Handler {
 				return
 			}
 			k.PlatformID = platformID
+			// 新建默认启用：关闭是显式运维动作，走 toggle/编辑页。
+			k.Enabled = true
 			if err := store.A().AddPlatformKey(&k); err != nil {
 				writeJSONError(w, 500, err)
 				return
@@ -1981,6 +1987,8 @@ func createWebHandler() http.Handler {
 			}
 			// Enforce lowercase: LAPI alias must be lowercase to match incoming request model names
 			lapi.Alias = strings.ToLower(strings.TrimSpace(lapi.Alias))
+			// 新建默认启用：关闭是显式运维动作，走 toggle/编辑页。
+			lapi.Enabled = true
 			if err := store.A().CreateLAPI(&lapi); err != nil {
 				logger.DefaultConsole().Error("service", "[API] CreateLAPI failed",
 					"alias", lapi.Alias, "error", err.Error())

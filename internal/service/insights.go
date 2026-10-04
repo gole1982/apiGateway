@@ -40,7 +40,6 @@ type CoolingRAPI struct {
 	// Platform context for hierarchical alert display / click-through navigation.
 	PlatformID     int64  `json:"platform_id"`
 	PlatformName   string `json:"platform_name"`
-	BillingAddress string `json:"billing_address,omitempty"`
 	KeyIDs         string `json:"key_ids,omitempty"` // RAPI's key pool whitelist (empty = all platform keys)
 }
 
@@ -53,7 +52,6 @@ type CoolingKey struct {
 	PlatformName   string `json:"platform_name"`
 	Label          string `json:"label,omitempty"`
 	KeyIndex       int    `json:"key_index"`
-	BillingAddress string `json:"billing_address,omitempty"`
 }
 
 type ErrorRow struct {
@@ -162,11 +160,11 @@ func buildHealth(snap scheduler.Snapshot, rapiStatByID map[int64]db.RAPIStat, ra
 		ErrorSummary: make([]ErrorRow, 0),
 	}
 
-	platformInfo := func(pid int64) (name, billing string) {
+	platformInfo := func(pid int64) string {
 		if p, ok := platformByID[pid]; ok {
-			return p.Name, p.BillingAddress
+			return p.Name
 		}
-		return "", ""
+		return ""
 	}
 
 	for _, rs := range snap.RAPIs {
@@ -177,13 +175,13 @@ func buildHealth(snap scheduler.Snapshot, rapiStatByID map[int64]db.RAPIStat, ra
 		if cfg, ok := rapiCfgByID[rs.ID]; ok {
 			alias, pid, keyIDs = cfg.Alias, cfg.PlatformID, cfg.KeyIDs
 		}
-		pname, billing := platformInfo(pid)
+		pname := platformInfo(pid)
 		h.CoolingRAPIs = append(h.CoolingRAPIs, CoolingRAPI{
 			ID: rs.ID, Alias: alias, Reason: rs.Reason,
 			ConsecutiveFailures: rs.ConsecutiveFailures,
 			RecoverAt:           rs.RecoverAt, LastSuccess: rs.LastSuccess,
 			LastFailure: rs.LastFailure, Invalidated: rs.Invalidated,
-			PlatformID: pid, PlatformName: pname, BillingAddress: billing, KeyIDs: keyIDs,
+			PlatformID: pid, PlatformName: pname, KeyIDs: keyIDs,
 		})
 	}
 
@@ -199,7 +197,7 @@ func buildHealth(snap scheduler.Snapshot, rapiStatByID map[int64]db.RAPIStat, ra
 			ck.PlatformID = key.PlatformID
 			ck.Label = key.Label
 			ck.KeyIndex = key.KeyIndex
-			ck.PlatformName, ck.BillingAddress = platformInfo(key.PlatformID)
+			ck.PlatformName = platformInfo(key.PlatformID)
 		}
 		h.CoolingKeys = append(h.CoolingKeys, ck)
 	}

@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"gateway/internal/config"
 	"gateway/internal/crypto"
 	"gateway/internal/db"
 	"gateway/internal/logger"
@@ -58,32 +57,37 @@ func roleError(status int) string {
 }
 
 // sbConfigSettings key 常量。
+// 注：历史版本曾有 sb_center_key（token 边界加解密）；已取消，残留值不再读取。
 const (
-	sbKeyURL    = "sb_url"
-	sbKeyAPI    = "sb_api_key"    // AES 加密密文
-	sbKeyCenter = "sb_center_key" // AES 加密密文：center_key（token 边界加解密，管理端必填）
+	sbKeyURL = "sb_url"
+	sbKeyAPI = "sb_api_key" // AES 加密密文
 )
 
 // sbConfigResponse 是 GET /api/sb-config 的响应。
 type sbConfigResponse struct {
-	Connected     bool           `json:"connected"`
-	Role          string         `json:"role"` // offline | proxy | management
-	URL           string         `json:"url"`
-	KeyMask       string         `json:"key_mask"`       // 脱敏回显
-	CenterKeySet  bool           `json:"center_key_set"` // center_key 是否已配置（settings 或 proxy.cfg）
-	Activated     bool           `json:"activated"`      // 保存后是否已热激活（免重启）
-	ActivateError string         `json:"activate_error,omitempty"`
-	CenterVer     int            `json:"center_ver"`
-	LocalVer      int            `json:"local_ver"`
-	InSync        bool           `json:"in_sync"`
-	Tables        any            `json:"tables,omitempty"`         // 中心各表行数
-	LocalTables   map[string]int `json:"local_tables,omitempty"`   // 本地 SQLite 各表行数
-	StartupTables map[string]int `json:"startup_tables,omitempty"` // 启动时本地行数快照
-	Error         string         `json:"error,omitempty"`
+	Connected      bool           `json:"connected"`
+	Role           string         `json:"role"` // offline | proxy | management
+	URL            string         `json:"url"`
+	KeyMask        string         `json:"key_mask"`  // 脱敏回显
+	Activated      bool           `json:"activated"` // 保存后是否已热激活（免重启）
+	ActivateError  string         `json:"activate_error,omitempty"`
+	CenterVer      int            `json:"center_ver"`
+	LocalVer       int            `json:"local_ver"`
+	InSync         bool           `json:"in_sync"`
+	Dirty          bool           `json:"dirty,omitempty"` // 端侧有未同步的本地修改
+	DirtyAt        string         `json:"dirty_at,omitempty"`
+	DirtyReason    string         `json:"dirty_reason,omitempty"`
+	CenterWritable bool           `json:"center_writable,omitempty"` // 录入的 key 可写（管理端级别）
+	Merging        bool           `json:"merging,omitempty"`         // 后台合并/回推进行中
+	LastMerge      any            `json:"last_merge,omitempty"`      // 最近一次并集摘要
+	Tables         any            `json:"tables,omitempty"`          // 中心各表行数
+	LocalTables    map[string]int `json:"local_tables,omitempty"`    // 本地 SQLite 各表行数
+	StartupTables  map[string]int `json:"startup_tables,omitempty"`  // 启动时本地行数快照
+	Error          string         `json:"error,omitempty"`
 }
 
-// handleSBConfig GET 返回当前配置（脱敏）+ 角色；POST 保存 URL+key(+可选
-// center_key）并即时探测 + 热激活（免重启）。
+// handleSBConfig GET 返回当前配置（脱敏）+ 角色；POST 保存 URL+key
+// 并即时探测 + 热激活（免重启）。
 func handleSBConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	switch r.Method {
@@ -91,9 +95,8 @@ func handleSBConfig(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(currentSBConfig())
 	case http.MethodPost:
 		var body struct {
-			URL       string `json:"url"`
-			Key       string `json:"key"`
-			CenterKey string `json:"center_key"` // 可选；留空=沿用已保存/proxy.cfg 的值
+			URL string `json:"url"`
+			Key string `json:"key"`
 		}
 		if err := json.NewDecoder(io.LimitReader(r.Body, 8<<10)).Decode(&body); err != nil {
 			writeJSONError(w, 400, err)
@@ -101,19 +104,12 @@ func handleSBConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		body.URL = normalizeSBURL(body.URL)
 		body.Key = strings.TrimSpace(body.Key)
-		body.CenterKey = strings.TrimSpace(body.CenterKey)
 		if body.URL == "" || body.Key == "" {
 			writeJSONError(w, 400, errors.New("Project ID / URL 和 key 均不能为空"))
 			return
 		}
-		// center_key 若提供则先校验格式（32 字节 hex），避免存下一把坏钥匙。
-		if body.CenterKey != "" {
-			if _, err := crypto.ParseKey(body.CenterKey); err != nil {
-				writeJSONError(w, 400, errors.New("center_key 须为 64 位 hex（32 字节）："+err.Error()))
-				return
-			}
-		}
-		// 加密保存 key（+可选 center_key）。settings 表为配置主源，proxy.cfg 仅回退。
+		// 加密保存 key。settings 表为配置主源，proxy.cfg 仅回退。
+		// 注：旧 center_key 字段已被前端移除；若请求体仍带 center_key 直接忽略。
 		enc, err := crypto.Encrypt(body.Key)
 		if err != nil {
 			writeJSONError(w, 500, err)
@@ -126,17 +122,6 @@ func handleSBConfig(w http.ResponseWriter, r *http.Request) {
 		if err := db.Get().SetSetting(sbKeyAPI, enc); err != nil {
 			writeJSONError(w, 500, err)
 			return
-		}
-		if body.CenterKey != "" {
-			encCK, err := crypto.Encrypt(body.CenterKey)
-			if err != nil {
-				writeJSONError(w, 500, err)
-				return
-			}
-			if err := db.Get().SetSetting(sbKeyCenter, encCK); err != nil {
-				writeJSONError(w, 500, err)
-				return
-			}
 		}
 		// 即时探测角色 + 热激活（免重启）：management→直写中心，proxy→只读同步。
 		role, _, perr := probeSBRole(body.URL, body.Key)
@@ -152,8 +137,7 @@ func handleSBConfig(w http.ResponseWriter, r *http.Request) {
 			resp.Error = perr.Error()
 		}
 		if perr == nil && role != sbRoleOffline {
-			ck := effectiveCenterKey(body.CenterKey)
-			actRole, aerr := activateCenter(body.URL, body.Key, ck)
+			actRole, aerr := activateCenter(body.URL, body.Key)
 			if aerr != nil {
 				resp.ActivateError = aerr.Error()
 				_ = db.Get().InsertSystemLog("warn", "center", "热激活失败: "+aerr.Error())
@@ -169,50 +153,12 @@ func handleSBConfig(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// loadSavedCenterKey 读取 settings 里保存的 center_key（解密后）。
-func loadSavedCenterKey() (string, bool) {
-	enc, _ := db.Get().GetSetting(sbKeyCenter)
-	if enc == "" {
-		return "", false
-	}
-	v, err := crypto.Decrypt(enc)
-	if err != nil {
-		return "", false
-	}
-	return v, true
-}
-
-// hasSavedCenterKey 报告 settings 是否已存 center_key（不解密校验内容）。
-func hasSavedCenterKey() bool {
-	_, ok := loadSavedCenterKey()
-	return ok
-}
-
-// effectiveCenterKey 解析生效的 center_key：本次提交值 > settings 已存 > proxy.cfg
-// [management]/[sync] 的 center_key。
-func effectiveCenterKey(submitted string) string {
-	if strings.TrimSpace(submitted) != "" {
-		return strings.TrimSpace(submitted)
-	}
-	if v, ok := loadSavedCenterKey(); ok {
-		return v
-	}
-	if c, err := config.Load(); err == nil {
-		if c.Management.CenterKey != "" {
-			return c.Management.CenterKey
-		}
-		return c.Sync.CenterKey
-	}
-	return ""
-}
-
 // currentSBConfig 读库组装当前配置（脱敏 key）+ 探测角色/连通/中心版本，并附
 // 本地各表行数与启动快照，供中心配置页「同步状态」中心/本地对比及仪表盘卡片。
 func currentSBConfig() sbConfigResponse {
 	url, _ := db.Get().GetSetting(sbKeyURL)
 	enc, _ := db.Get().GetSetting(sbKeyAPI)
 	resp := sbConfigResponse{URL: url, LocalTables: localTableCounts(), StartupTables: startupLocalCounts}
-	resp.CenterKeySet = effectiveCenterKey("") != ""
 	if url == "" || enc == "" {
 		resp.Role = sbRoleOffline
 		return resp
@@ -234,10 +180,21 @@ func currentSBConfig() sbConfigResponse {
 	if role != sbRoleOffline {
 		fillSBTables(&resp, url, key)
 	}
-	// 本地版本号 + 是否同步（中心版本 == 本地 last_good）。
+	// 本地版本号 + 是否同步（版本一致且本地无未同步修改）。
+	// 本次已探测角色：可写性直接复用，免二次探测。
 	if st, e := db.Get().GetSyncState(); e == nil {
 		resp.LocalVer = int(st.LastGoodVersion)
-		resp.InSync = centerVer != 0 && int64(centerVer) == st.LastGoodVersion
+		resp.InSync = edgeInSync(int64(centerVer), st.LastGoodVersion)
+	}
+	if dirty, at, reason := edgeDirtyState(); dirty {
+		resp.Dirty = true
+		resp.DirtyAt = at
+		resp.DirtyReason = reason
+		resp.CenterWritable = role == sbRoleManagement
+	}
+	resp.Merging = syncMerging.Load()
+	if sum := loadMergeSummary(); sum != nil {
+		resp.LastMerge = sum
 	}
 	return resp
 }

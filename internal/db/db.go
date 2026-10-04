@@ -321,9 +321,12 @@ func initAtPath(dbPath string) error {
 	// Migration: key×model capability block table (platform revoked a key's
 	// access to a model; the pair is skipped until the block expires).
 	instance.migrateKeyModelBlocks()
-	// Migration: platform console/account columns (billing_address,
-	// login_account, login_password — the latter stored encrypted, write-only).
+	// Migration: platform console login column (login_account). The former
+	// billing_address / login_password columns are dropped by
+	// migrateDropPlatformRemovedColumns below (feature removed; stale values
+	// purged, including encrypted passwords).
 	instance.migrateAddPlatformAccountColumns()
+	instance.migrateDropPlatformRemovedColumns()
 
 	// Migration: 自然键身份模型（platform_keys→credential 平移、key_ids→
 	// endpoint_credential 绑定物化、platform.name/rapi.alias 唯一约束降级为
@@ -678,22 +681,35 @@ func (db *DB) migrateKeyModelBlocks() {
 	`)
 }
 
-// migrateAddPlatformAccountColumns adds the provider-console columns to the
-// platform table: billing_address (console URL, e.g. billing page),
-// login_account (console login), login_password (console password, stored
-// encrypted — never selected on read, write-only). Idempotent.
+// migrateAddPlatformAccountColumns adds the provider-console login column to
+// the platform table. Idempotent.
 func (db *DB) migrateAddPlatformAccountColumns() {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	for name, definition := range map[string]string{
-		"billing_address": "TEXT NOT NULL DEFAULT ''",
-		"login_account":   "TEXT NOT NULL DEFAULT ''",
-		"login_password":  "TEXT NOT NULL DEFAULT ''",
+		"login_account": "TEXT NOT NULL DEFAULT ''",
 	} {
 		var count int
 		row := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('platform') WHERE name=?`, name)
 		if row.Scan(&count) == nil && count == 0 {
 			db.execMigrationDDL("migrateAddPlatformAccountColumns/platform."+name, "ALTER TABLE platform ADD COLUMN "+name+" "+definition)
+		}
+	}
+}
+
+// migrateDropPlatformRemovedColumns drops the removed provider-console columns
+// (billing_address, login_password) from existing databases, purging stale
+// values including encrypted passwords. Idempotent. Runs after
+// migrateAddPlatformAccountColumns; migrateNaturalKeys (below) no longer
+// recreates these columns.
+func (db *DB) migrateDropPlatformRemovedColumns() {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	for _, name := range []string{"billing_address", "login_password"} {
+		var count int
+		row := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('platform') WHERE name=?`, name)
+		if row.Scan(&count) == nil && count > 0 {
+			db.execMigrationDDL("migrateDropPlatformRemovedColumns/platform."+name, "ALTER TABLE platform DROP COLUMN "+name)
 		}
 	}
 }
@@ -981,7 +997,7 @@ func (db *DB) GetPlatforms() ([]models.Platform, error) {
 		SELECT id, name, base_url, token,
 		       last_token_fetch, enabled, available, notes, custom_headers,
 		       supported_formats, format_endpoints,
-		       billing_address, login_account,
+		       login_account,
 		       created_at, updated_at
 		FROM platform ORDER BY sort_order ASC, id ASC
 	`)
@@ -996,13 +1012,13 @@ func (db *DB) GetPlatforms() ([]models.Platform, error) {
 		var enabled, available sql.NullInt64
 		var lastFetch, created, updated sql.NullTime
 		var notes, customHeaders, supportedFormats, formatEndpoints sql.NullString
-		var billingAddress, loginAccount sql.NullString
+		var loginAccount sql.NullString
 
 		var encToken string
 		err := rows.Scan(&p.ID, &p.Name, &p.BaseURL, &encToken,
 			&lastFetch, &enabled, &available, &notes, &customHeaders,
 			&supportedFormats, &formatEndpoints,
-			&billingAddress, &loginAccount,
+			&loginAccount,
 			&created, &updated)
 		if err != nil {
 			return nil, err
@@ -1017,10 +1033,7 @@ func (db *DB) GetPlatforms() ([]models.Platform, error) {
 		p.CustomHeaders = customHeaders.String
 		p.SupportedFormats = supportedFormats.String
 		p.FormatEndpoints = formatEndpoints.String
-		p.BillingAddress = billingAddress.String
 		p.LoginAccount = loginAccount.String
-		// login_password is intentionally NOT selected: it is write-only, so the
-		// list/read API can never leak the encrypted console password.
 		if lastFetch.Valid {
 			p.LastTokenFetch = lastFetch.Time
 		}
@@ -1044,20 +1057,20 @@ func (db *DB) GetPlatformByID(id int64) (*models.Platform, error) {
 	var enabled, available sql.NullInt64
 	var lastFetch, created, updated sql.NullTime
 	var notes, customHeaders, supportedFormats, formatEndpoints sql.NullString
-	var billingAddress, loginAccount sql.NullString
+	var loginAccount sql.NullString
 
 	var encToken string
 	err := db.conn.QueryRow(`
 		SELECT id, name, base_url, token,
 		       last_token_fetch, enabled, available, notes, custom_headers,
 		       supported_formats, format_endpoints,
-		       billing_address, login_account,
+		       login_account,
 		       created_at, updated_at
 		FROM platform WHERE id = ?
 	`, id).Scan(&p.ID, &p.Name, &p.BaseURL, &encToken,
 		&lastFetch, &enabled, &available, &notes, &customHeaders,
 		&supportedFormats, &formatEndpoints,
-		&billingAddress, &loginAccount,
+		&loginAccount,
 		&created, &updated)
 
 	if err != nil {
@@ -1073,9 +1086,7 @@ func (db *DB) GetPlatformByID(id int64) (*models.Platform, error) {
 	p.CustomHeaders = customHeaders.String
 	p.SupportedFormats = supportedFormats.String
 	p.FormatEndpoints = formatEndpoints.String
-	p.BillingAddress = billingAddress.String
 	p.LoginAccount = loginAccount.String
-	// login_password is intentionally NOT selected (write-only).
 	if lastFetch.Valid {
 		p.LastTokenFetch = lastFetch.Time
 	}
@@ -1109,22 +1120,15 @@ func (db *DB) CreatePlatform(p *models.Platform) error {
 		return fmt.Errorf("encrypt token: %w", err)
 	}
 
-	// Login password is stored encrypted with the same mechanism as Token;
-	// an empty password is stored as empty (no ciphertext for empty input).
-	encLoginPw, err := crypto.Encrypt(p.LoginPassword)
-	if err != nil {
-		return fmt.Errorf("encrypt login password: %w", err)
-	}
-
 	formats := p.SupportedFormats
 	if formats == "" {
 		formats = `["openai"]`
 	}
 
 	result, err := db.conn.Exec(`
-		INSERT INTO platform (name, base_url, token, last_token_fetch, enabled, available, notes, custom_headers, supported_formats, format_endpoints, billing_address, login_account, login_password)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, p.Name, p.BaseURL, encToken, time.Now(), boolToInt(p.Enabled), boolToInt(p.Available), p.Notes, p.CustomHeaders, formats, p.FormatEndpoints, p.BillingAddress, p.LoginAccount, encLoginPw)
+		INSERT INTO platform (name, base_url, token, last_token_fetch, enabled, available, notes, custom_headers, supported_formats, format_endpoints, login_account)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, p.Name, p.BaseURL, encToken, time.Now(), boolToInt(p.Enabled), boolToInt(p.Available), p.Notes, p.CustomHeaders, formats, p.FormatEndpoints, p.LoginAccount)
 
 	if err != nil {
 		return err
@@ -1158,30 +1162,15 @@ func (db *DB) UpdatePlatform(p *models.Platform) error {
 		return fmt.Errorf("encrypt token: %w", err)
 	}
 
-	// Login password semantics: an empty payload password means "keep the
-	// existing one" (mirrors the key-token edit semantics). Reuse the stored
-	// ciphertext from the DB so a password save never blanks it out.
-	encLoginPw := ""
-	if strings.TrimSpace(p.LoginPassword) != "" {
-		encLoginPw, err = crypto.Encrypt(p.LoginPassword)
-		if err != nil {
-			return fmt.Errorf("encrypt login password: %w", err)
-		}
-	} else {
-		if err := db.conn.QueryRow(`SELECT login_password FROM platform WHERE id = ?`, p.ID).Scan(&encLoginPw); err != nil && err != sql.ErrNoRows {
-			return fmt.Errorf("load existing login password: %w", err)
-		}
-	}
-
 	formats := p.SupportedFormats
 	if formats == "" {
 		formats = `["openai"]`
 	}
 
 	_, err = db.conn.Exec(`
-		UPDATE platform SET name = ?, base_url = ?, token = ?, enabled = ?, available = ?, notes = ?, custom_headers = ?, supported_formats = ?, format_endpoints = ?, billing_address = ?, login_account = ?, login_password = ?, updated_at = CURRENT_TIMESTAMP
+		UPDATE platform SET name = ?, base_url = ?, token = ?, enabled = ?, available = ?, notes = ?, custom_headers = ?, supported_formats = ?, format_endpoints = ?, login_account = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?
-	`, p.Name, p.BaseURL, encToken, boolToInt(p.Enabled), boolToInt(p.Available), p.Notes, p.CustomHeaders, formats, p.FormatEndpoints, p.BillingAddress, p.LoginAccount, encLoginPw, p.ID)
+	`, p.Name, p.BaseURL, encToken, boolToInt(p.Enabled), boolToInt(p.Available), p.Notes, p.CustomHeaders, formats, p.FormatEndpoints, p.LoginAccount, p.ID)
 
 	return err
 }
