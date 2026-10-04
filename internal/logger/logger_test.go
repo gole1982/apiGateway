@@ -7,6 +7,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"gateway/internal/crypto"
 	"gateway/internal/db"
 )
 
@@ -15,6 +16,13 @@ import (
 // silently routes every request to failed_events.log and leaves the dashboard empty.
 func TestSaveRequestLogPersists(t *testing.T) {
 	t.Setenv("APIGATEWAY_DATA_DIR", t.TempDir())
+	// db.Init 要求主密钥（与 db 包 initTestCrypto 同一把固定测试 key，
+	// 否则无 APIGATEWAY_KEY 环境的机器——含 CI——直接失败）。
+	t.Setenv("APIGATEWAY_KEY", "000102030405060708090a0b0c0d0e0f"+
+		"101112131415161718191a1b1c1d1e1f")
+	if err := crypto.Init(); err != nil {
+		t.Fatalf("crypto.Init: %v", err)
+	}
 	if err := db.Init(); err != nil {
 		t.Fatalf("db.Init: %v", err)
 	}
