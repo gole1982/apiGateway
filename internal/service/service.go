@@ -744,9 +744,12 @@ func createWebHandler() http.Handler {
 				writeJSONError(w, 500, err)
 				return
 			} else if exists {
-				writeJSONError(w, 409, fmt.Errorf("该平台下模型 %q 已存在（同 base_url + model 视为同一端点）", rapi.Model))
+				writeJSONError(w, 409, fmt.Errorf("该平台下模型 %q 已存在（同 base_url + model 视为同一端点，不建重复端点；如需让其它 Key 服务该模型，请在模型编辑页将其加入 Key 池）", rapi.Model))
 				return
 			}
+			// 新建默认启用：关闭是显式运维动作，走 toggle/编辑页。
+			rapi.Enabled = true
+			rapi.Available = true
 			if err := store.A().CreateRAPI(&rapi); err != nil {
 				logger.DefaultConsole().Error("service", "[API] CreateRAPI failed",
 					"alias", rapi.Alias, "platform_id", rapi.PlatformID, "error", err.Error())
@@ -780,7 +783,7 @@ func createWebHandler() http.Handler {
 				writeJSONError(w, 500, err)
 				return
 			} else if exists {
-				writeJSONError(w, 409, fmt.Errorf("该平台下模型 %q 已存在（同 base_url + model 视为同一端点）", rapi.Model))
+				writeJSONError(w, 409, fmt.Errorf("该平台下模型 %q 已存在（同 base_url + model 视为同一端点，不建重复端点；如需让其它 Key 服务该模型，请在模型编辑页将其加入 Key 池）", rapi.Model))
 				return
 			}
 			// Remember whether the model was unavailable before the edit, so a
@@ -1372,6 +1375,9 @@ func createWebHandler() http.Handler {
 				writeJSONError(w, 400, err)
 				return
 			}
+			// 新建默认启用：关闭是显式运维动作，走 toggle/编辑页。
+			p.Enabled = true
+			p.Available = true
 			if err := store.A().CreatePlatform(&p); err != nil {
 				writeJSONError(w, 500, err)
 				return
@@ -1755,6 +1761,8 @@ func createWebHandler() http.Handler {
 				return
 			}
 			k.PlatformID = platformID
+			// 新建默认启用：关闭是显式运维动作，走 toggle/编辑页。
+			k.Enabled = true
 			if err := store.A().AddPlatformKey(&k); err != nil {
 				writeJSONError(w, 500, err)
 				return
@@ -1979,6 +1987,8 @@ func createWebHandler() http.Handler {
 			}
 			// Enforce lowercase: LAPI alias must be lowercase to match incoming request model names
 			lapi.Alias = strings.ToLower(strings.TrimSpace(lapi.Alias))
+			// 新建默认启用：关闭是显式运维动作，走 toggle/编辑页。
+			lapi.Enabled = true
 			if err := store.A().CreateLAPI(&lapi); err != nil {
 				logger.DefaultConsole().Error("service", "[API] CreateLAPI failed",
 					"alias", lapi.Alias, "error", err.Error())

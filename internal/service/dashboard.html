@@ -3400,6 +3400,7 @@
                                             <input type="checkbox" :id="'vs-'+m" :value="m" v-model="importWizard.selected" style="cursor:pointer;margin-top:2px;flex-shrink:0;">
                                             <label :for="'vs-'+m" style="font-family:var(--font-mono);font-size:0.78rem;cursor:pointer;flex:1;min-width:0;overflow-wrap:anywhere;line-height:1.35;" :title="m">{{ m }}</label>
                                             <span v-if="importWizard.existing[m.toLowerCase()]" style="font-size:0.62rem;color:var(--color-success);background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.25);border-radius:3px;padding:0 4px;flex-shrink:0;margin-top:1px;">已添加</span>
+                                            <span v-if="poolJoinState(m) === 'join'" style="font-size:0.62rem;color:var(--color-primary);background:rgba(56,189,248,0.1);border:1px solid rgba(56,189,248,0.3);border-radius:3px;padding:0 4px;flex-shrink:0;margin-top:1px;" title="保存时将当前 Key 加入该模型的 Key 池">＋入池</span>
                                         </div>
                                     </div>
                                 </div>
@@ -4269,7 +4270,7 @@
                 const headersModal = reactive({ show: false, rapi: null, headers: [] });
                 const lapiModal = reactive({ show: false, item: null, fromRapiId: 0, form: { alias: '', notes: '', vendor: '', series: '', version: '', suffix: '' } });
                 const lapiRoutesModal = reactive({ show: false, lapi: null, chain: [], selectedRapiId: '' });
-                const importWizard = reactive({ show: false, platform: null, loading: false, fetchError: '', emptyList: false, models: [], selected: [], manualInput: '', existing: {}, manualAdded: [] });
+                const importWizard = reactive({ show: false, platform: null, keyId: null, loading: false, fetchError: '', emptyList: false, models: [], selected: [], manualInput: '', existing: {}, manualAdded: [] });
                 // 各分类折叠状态：默认全部展开，用户可点击标题折叠/展开。
                 // 每个分类体独立滚动，避免大类目把其他类目挤到视线外。
                 const wizardCollapsed = reactive({ manual: false, validSelected: false, invalidSelected: false, validUnselected: false });
@@ -5293,7 +5294,8 @@
                 const discoverKeyModels = (k) => {
                     const p = platforms.value.find(x => String(x.id) === String(k.platform_id));
                     if (!p) { showToast('错误', '未找到该密钥所属平台', 'error'); return; }
-                    fetchPlatformModels(p);
+                    // 带上触发发现的 Key：勾选已存在模型保存时，把该 Key 并入其 Key 池。
+                    fetchPlatformModels(p, k.id);
                 };
                 const toggleKeyFlat = async (k) => {
                     const newEnabled = !k.enabled;
@@ -5488,13 +5490,25 @@
                             keyId = Number(addWizard.keyId) || 0;
                         }
                         // 3) model
+                        let boundPoolName = '';
                         if (addWizard.modelMode === 'new') {
-                            const body = { ...addWizard.modelForm, platform_id: platId };
-                            if (keyId) body.key_ids = String(keyId);
-                            const r = await fetch('/api/rapis', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-                            if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || '模型创建失败'); }
+                            const modelName = (addWizard.modelForm.model || '').trim();
+                            // 同平台同名模型已存在：不建重复端点（后端会 409），
+                            // 有 Key 则直接并入其 Key 池。
+                            const dup = rapis.value.find(r => String(r.platform_id) === String(platId) && r.model === modelName);
+                            if (dup && keyId) {
+                                const st = await bindKeyToModelPool(dup.id, keyId);
+                                if (st !== 'joined' && st !== 'already') throw new Error(st.slice(6) || '加入 Key 池失败');
+                                boundPoolName = dup.alias || dup.model;
+                            } else {
+                                const body = { ...addWizard.modelForm, platform_id: platId };
+                                if (keyId) body.key_ids = String(keyId);
+                                const r = await fetch('/api/rapis', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+                                if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || '模型创建失败'); }
+                            }
                         }
-                        showToast('已添加', '新增内容已保存，旧内容已复用', 'success');
+                        if (boundPoolName) showToast('已加入 Key 池', `模型「${boundPoolName}」已存在，新 Key 已加入其 Key 池`, 'success');
+                        else showToast('已添加', '新增内容已保存，旧内容已复用', 'success');
                         addWizard.show = false;
                         addWizard.confirmMode = false;
                         refreshData();
@@ -5755,8 +5769,9 @@
                     } catch (e) {}
                 };
 
-                const fetchPlatformModels = async (plat) => {
+                const fetchPlatformModels = async (plat, keyId = null) => {
                     importWizard.platform = plat;
+                    importWizard.keyId = keyId;
                     importWizard.loading = true;
                     importWizard.models = [];
                     importWizard.selected = [];
@@ -5773,13 +5788,14 @@
                     importWizard.show = true;
 
                     // Build a map of models already added to this platform.
-                    // Key: lowercase model name → { id, source, model }
+                    // Key: lowercase model name → { id, source, model, key_ids }
                     // source distinguishes manual (never auto-pruned) from auto_discover.
+                    // key_ids 用于判断触发发现的 Key 是否已在池中（在则无需并入）。
                     const existingMap = {};
                     for (const r of rapis.value) {
                         if (r.platform_id === plat.id) {
                             const key = (r.model || r.alias || '').toLowerCase();
-                            if (key) existingMap[key] = { id: r.id, source: r.source || 'manual', model: r.model || r.alias };
+                            if (key) existingMap[key] = { id: r.id, source: r.source || 'manual', model: r.model || r.alias, key_ids: r.key_ids || '' };
                         }
                     }
                     importWizard.existing = existingMap;
@@ -5934,10 +5950,46 @@
                 // 保存时会按 sync 级联删除——这是用户显式操作的结果。
                 const clearSelection = () => { importWizard.selected = []; };
 
+                // 把 key 并入已存在模型的 Key 池（key_ids 白名单）。
+                // 空 key_ids = 全平台 Key，天然在池中，无需请求。
+                // 返回 'joined' | 'already' | 'error:原因'；成功后同步本地缓存，
+                // 避免同批次内重复 PUT。
+                const bindKeyToModelPool = async (rapiId, keyId) => {
+                    const rapi = rapis.value.find(x => String(x.id) === String(rapiId));
+                    if (!rapi) return 'error:未找到模型';
+                    const ids = String(rapi.key_ids || '').split(',').map(s => s.trim()).filter(Boolean);
+                    if (ids.length === 0 || ids.includes(String(keyId))) return 'already';
+                    ids.push(String(keyId));
+                    try {
+                        const r = await fetch('/api/rapis', {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ ...rapi, key_ids: ids.join(',') })
+                        });
+                        if (!r.ok) {
+                            const d = await r.json().catch(() => ({}));
+                            return 'error:' + (d.error || ('服务器返回 ' + r.status));
+                        }
+                        rapi.key_ids = ids.join(',');
+                        const lk = (rapi.model || '').toLowerCase();
+                        if (importWizard.existing[lk]) importWizard.existing[lk].key_ids = ids.join(',');
+                        return 'joined';
+                    } catch (e) { return 'error:网络请求失败'; }
+                };
+
+                // 已存在模型行的小徽标状态：na（无 key 上下文）/ in（已在池中）/ join（保存时将并入）。
+                const poolJoinState = (m) => {
+                    const info = importWizard.existing[m.toLowerCase()];
+                    if (!info || !importWizard.keyId) return 'na';
+                    const ids = String(info.key_ids || '').split(',').map(s => s.trim()).filter(Boolean);
+                    if (ids.length === 0 || ids.includes(String(importWizard.keyId))) return 'in';
+                    return 'join';
+                };
+
                 const importSelectedModels = async () => {
                     const toAdd = importToAdd.value;
                     const toRemove = importToRemove.value;
-                    let created = 0, failed = 0, removed = 0;
+                    let created = 0, failed = 0, removed = 0, bound = 0;
                     const errors = [];
 
                     // 1. Create newly-checked models, split by source (batch API takes one source per call).
@@ -5974,7 +6026,24 @@
                     await createBatch(autoAdd, 'auto_discover');
                     await createBatch(manualAdd, 'manual');
 
-                    // 2. Delete existing auto_discover models no longer in remote. Use sync=true to
+                    // 2. 已存在且被勾选的模型：把触发发现的 Key 并入其 Key 池
+                    //    （解决“新 Key 发现到已存在的模型却加不进去”）。
+                    //    仅当 key 与本平台一致时执行；已在池中（或空白名单）则跳过。
+                    if (importWizard.keyId) {
+                        const kid = String(importWizard.keyId);
+                        const kObj = (keysList.value || []).find(x => String(x.id) === kid);
+                        if (kObj && String(kObj.platform_id) === String(importWizard.platform.id)) {
+                            for (const m of importWizard.selected) {
+                                const info = importWizard.existing[m.toLowerCase()];
+                                if (!info) continue; // 新模型走上面的 batch 创建
+                                const st = await bindKeyToModelPool(info.id, kid);
+                                if (st === 'joined') bound++;
+                                else if (st.startsWith('error')) errors.push(`模型 ${m} 加入 Key 池失败：${st.slice(6)}`);
+                            }
+                        }
+                    }
+
+                    // 3. Delete existing auto_discover models no longer in remote. Use sync=true to
                     //    bypass the enabled/available guard — these models are no longer supported
                     //    upstream and should be pruned regardless of current state.
                     for (const id of toRemove) {
@@ -5992,6 +6061,7 @@
 
                     const parts = [];
                     if (toAdd.length > 0) parts.push(`新增 ${created} 个`);
+                    if (bound > 0) parts.push(`加入 Key 池 ${bound} 个`);
                     if (toRemove.length > 0) parts.push(`移除 ${removed} 个`);
                     const summary = parts.length > 0 ? parts.join('，') : '无变更';
                     const failMsg = (failed > 0 || errors.length > 0) ? `，${errors.length || failed} 个失败: ${errors.slice(0, 3).join('; ')}` : '';
@@ -7035,7 +7105,7 @@
                     keyModelBlock, blockedKeysForRapi, unblockKeyModel, keyBadgeStyleFor, keyBadgeTitleFor, poolOverflow,
                     headersModal, openHeadersModal, closeHeadersModal, saveHeaders,
                     importWizard, closeImportWizard, importSelectedModels, addManualModel, removeManualSession, deleteManualExisting,
-                    importToAdd, importToRemove, wizardSections, selectAllFiltered, clearSelection, wizardCollapsed, toggleSection,
+                    importToAdd, importToRemove, wizardSections, selectAllFiltered, clearSelection, wizardCollapsed, toggleSection, bindKeyToModelPool, poolJoinState,
                     lapiRoutesModal, editLapiRoutes, closeLapiRoutesModal, moveRouteUp, moveRouteDown, removeRoute, addRouteToChain, quickAddToChain, saveLapiRoutes,
                     onChainDragStart, onChainDragOver, onChainDragLeave, onChainDrop, onChainDragEnd,
                     onCardDragStart, onCardDragOver, onCardDragLeave, onCardDrop, onCardDragEnd,
