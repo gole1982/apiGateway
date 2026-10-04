@@ -14,7 +14,10 @@
 sudo apt-get update -qq && sudo apt-get install -y golang-go
 
 go vet ./...
-go test ./... -count=1
+# crypto 只认 APIGATEWAY_KEY（无文件兜底），缺则 db.Init fatal —— CI 已在
+# workflow 级注入同一把固定测试 key，本地跑测试也要显式带上。
+APIGATEWAY_KEY=000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f \
+  go test ./... -count=1
 gofmt -l internal scripts          # CI 只检查改动文件的格式
 CGO_ENABLED=0 go build -o /tmp/gateway ./cmd/gateway
 ```
@@ -81,4 +84,7 @@ CGO_ENABLED=0 go build -o /tmp/gateway ./cmd/gateway
   的 `version` 字段自报。Dockerfile 用 `ARG VERSION`、CI 用 `build-args`/`env` 传入；
   不传则为 `dev`。
 - `.env` 存 `APIGATEWAY_KEY` 主密钥，已在 `.gitignore`；**切勿提交**。
+- **测试主密钥由 CI 在 workflow 级注入**（`ci.yml` 顶层 `env.APIGATEWAY_KEY`，固定测试值）。
+  它保证任何跑 `go test` 的 job 都不会因缺 `APIGATEWAY_KEY` 而红；**不要删**，新增 job 也无需重复声明。
+  新增会调 `db.Init()` 的测试仍应 `t.Setenv` 自带 key（见 `logger_test.go`），以支持本地无 env 直跑。
 - 改过 `ci.yml` 后用 `actionlint .github/workflows/ci.yml` 自检（本地已装于 /tmp/actionlint）。
