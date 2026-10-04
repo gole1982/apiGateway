@@ -100,7 +100,7 @@ type Platform struct {
 	FormatEndpoints  string     `json:"format_endpoints"`  // JSON {format:url} as TEXT
 	CustomHeaders    string     `json:"custom_headers"`    // JSON array as TEXT
 	LoginAccount     string     `json:"login_account"`
-	SortOrder     int    `json:"sort_order"`
+	SortOrder        int        `json:"sort_order"`
 }
 
 // RAPI —— 上游模型端点定义。

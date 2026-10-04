@@ -201,5 +201,3 @@ func legacyKeyHint() string {
 
 // errMissingEnv 让"没配 key"可被 errors.Is 判定，与"key 格式错"区分开。
 var errMissingEnv = errors.New("missing master key")
-
-

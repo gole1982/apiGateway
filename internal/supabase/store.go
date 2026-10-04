@@ -236,8 +236,8 @@ func platRow(p *models.Platform) map[string]any {
 		"enabled":          p.Enabled, "notes": p.Notes,
 		"supported_formats": p.SupportedFormats, "format_endpoints": p.FormatEndpoints,
 		"custom_headers": p.CustomHeaders,
-		"login_account": p.LoginAccount,
-		"updated_at": nowPtr(), // sort_order 只经 SetPlatformSortOrder 改，模型无此字段
+		"login_account":  p.LoginAccount,
+		"updated_at":     nowPtr(), // sort_order 只经 SetPlatformSortOrder 改，模型无此字段
 	}
 }
 
