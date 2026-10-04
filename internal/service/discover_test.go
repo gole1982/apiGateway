@@ -76,6 +76,35 @@ func TestDiscoverNetworkError(t *testing.T) {
 	}
 }
 
+// Anthropic 兼容站：Bearer 被拒（401）后应换 x-api-key + anthropic-version
+// 重试一次，成功则返回模型列表（真 Anthropic / messages 结构中转同此惯例）。
+func TestDiscoverRetriesWithXAPIKeyOn401(t *testing.T) {
+	var calls []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("x-api-key") == "sk-anthropic" && r.Header.Get("anthropic-version") != "" {
+			calls = append(calls, "x-api-key")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":[{"id":"claude-x"}]}`))
+			return
+		}
+		calls = append(calls, "bearer:"+r.Header.Get("Authorization"))
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"invalid x-api-key"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	got, status, err := discoverUpstreamModels(context.Background(), srv.URL, "sk-anthropic")
+	if err != nil || status != 0 {
+		t.Fatalf("discover = %v,%d,%v", got, status, err)
+	}
+	if len(got) != 1 || got[0] != "claude-x" {
+		t.Errorf("models = %v, want [claude-x]", got)
+	}
+	if len(calls) != 2 || calls[0] != "bearer:Bearer sk-anthropic" || calls[1] != "x-api-key" {
+		t.Errorf("request sequence = %v, want [bearer x-api-key]", calls)
+	}
+}
+
 // Google 原生分支（x-goog-api-key + models[].name）故意不在此做端到端测试：
 // 分支判定只认 *.googleapis.com 真实域名，mock 绕不过，打 live 会让单测依赖
 // 外网且消耗配额。分支判定、URL 拼装、响应解析在 apiformat 包已有单测

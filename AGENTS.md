@@ -28,7 +28,7 @@ CGO_ENABLED=0 go build -o /tmp/gateway ./cmd/gateway
 
 | 主题 | 权威位置 |
 |------|---------|
-| 信任边界 / 写隔离 / center_key 边界 / token 保密 / 为什么不做 RBAC | **[docs/安全模型.md](docs/安全模型.md)** |
+| 信任边界 / 写隔离 / token 保密 / 为什么不做 RBAC | **[docs/安全模型.md](docs/安全模型.md)** |
 | 搭建、隔离 SQL、FAQ | [docs/初次配置指南.md](docs/初次配置指南.md) |
 | 运维流程 | [docs/日常操作手册.md](docs/日常操作手册.md) |
 | 编码规范 / 常见错误模式 | [dev-guide.md](dev-guide.md) |
@@ -41,8 +41,20 @@ CGO_ENABLED=0 go build -o /tmp/gateway ./cmd/gateway
 - **角色判定靠写探测，不靠配置段名**。`probeSBRole` 做 `PATCH /rest/v1/platform?id=eq.-1`；
   并用 key 前缀（意图）交叉校验写探测结果（事实）。`sb_publishable_` 却能写 = 中心没做写隔离
   → 返回代理端 + 显式报错，**绝不静默当管理端**。
-- **`login_password` 是 write-only**。中心 `get_bundle` 刻意不返回该列；同步落库必须保留本地既有密文
-  （`bundle_apply.go` 的 `CASE WHEN ? = '' THEN ...`），否则每次同步会清空它。
+- **控制台密码/计费网址字段已删除**。`platform` 表不再有 `billing_address` /
+  `login_password` 列（本地删列迁移 + 中心 v2 schema 已移除）；面板不再录入，
+  `get_bundle` 不再下发。历史残留以删列为准，不要再加回来。
+- **同步动作由 `syncAction` 四分支决定**：skip（版本一致，不打扰）/ pending（manual
+  非强制，只记待拉取）/ merge（版本不一致 + 本地脏 → 并集合并）/ pull（版本不一致 +
+  本地干净 → 直接拉取覆盖）。
+- **并集合并（`sync_merge.go`，纯函数）**：自然键取并集，同键冲突**本地胜**；
+  `AddsToCenter` 为真才回推中心（否则只空转 bump 版本号）；只读 key 只合本地、
+  保留脏标记；**合并不传播删除**（删行走推送发布）。时间戳只比到秒（亚秒级差异不算冲突）。
+- **脏标记经 Store 接缝自动标**（`edgeStore` 包装本地实现，`store.Use(wrapEdgeStore(...))`）：
+  管理模式（直写中心）不标、离线不标、网关运行时写（走 db 直写）不标。
+  **面板定义写必须走 `store.A()`**，绕过 store 直接调 db 会漏标。
+- **`/api/sync/refresh` 是异步触发**（回 `{"accepted":true}`，后台执行），面板 toast
+  不要写"拉取成功"；进度看状态接口 `merging` 字段。`syncOpMu` 串行化应用类操作。
 - **`token` 可被 publishable key 读取**——设计内行为（代理端转发必需）。publishable key 等价于
   「全部上游 token 的钥匙」，按高价值密钥管理。
 - **写隔离（中心 RLS）只落实权限约定，不是身份层**；准入靠人工分发 key。不要把它读成引入 RBAC。

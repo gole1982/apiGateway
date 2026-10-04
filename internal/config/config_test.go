@@ -72,12 +72,10 @@ file_path = logs/x.log
 source_url = https://example.supabase.co/rest/v1/rpc/get_bundle
 version_url = https://example.supabase.co/rest/v1/rpc/get_version
 anon_key = anon-key
-center_key = abcdef
 poll_interval_sec = 30
 [management]
 supabase_url = https://example.supabase.co
 service_key = secret-key
-center_key = 123456
 `)
 	c, err := LoadFrom(p)
 	if err != nil {

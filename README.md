@@ -16,7 +16,7 @@
 
 角色探测用无副作用写：`PATCH /rest/v1/platform?id=eq.-1`（0 行受影响；200/204 = 管理端，401/403 = 代理端，连不上 = 未连接；404/5xx = 代理端 + 诊断错误）。程序还会把 **key 前缀（意图）** 与 **写探测结果（事实）** 交叉校验：若 `sb_publishable_` 前缀的 key 竟然能写，说明中心库没做写隔离，会以安全侧（代理端）为准并显式报错，而不是静默当成管理端。
 
-> 信任边界、写隔离的职责、`center_key` 的边界、token 保密口径 → **[docs/安全模型.md](docs/安全模型.md)**（权威口径，勿在别处重新推导）。
+> 信任边界、写隔离的职责、token 保密口径 → **[docs/安全模型.md](docs/安全模型.md)**（权威口径，勿在别处重新推导）。
 > 搭建与隔离 SQL → [docs/初次配置指南.md](docs/初次配置指南.md) + [`scripts/supabase_schema_v2.sql`](scripts/supabase_schema_v2.sql) 第 7 节。
 
 ---
@@ -105,14 +105,14 @@ file_path = logs/gateway.log
 source_url = https://你的项目.supabase.co/rest/v1/rpc/get_bundle
 version_url = https://你的项目.supabase.co/rest/v1/rpc/get_version
 anon_key = <sb_publishable_…，只读，可放代理端>
-center_key = <可选：32字节hex；留空 = 中心存明文 token>
+# 中心 token 一律存明文（访问安全由 Supabase 负责，无需额外密钥）
 poll_interval_sec = 60
 
 # —— 管理端（可选，只配在你自己的管理机）——
 [management]
 supabase_url = https://你的项目.supabase.co
 service_key = <sb_secret_…，可写全表；切勿提交进仓库>
-center_key = <留空 = 中心存明文；填了则与所有代理端一致>
+# 中心 token 一律存明文（访问安全由 Supabase 负责，无需额外密钥）
 ```
 
 ### `key_cursor_scope`

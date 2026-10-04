@@ -16,7 +16,7 @@ import (
 
 // TestSyncPullApplyE2E 用本地 HTTP 桩模拟中心 Supabase 的 get_version / get_bundle
 // RPC，端到端验证代理读路径：PullVersion → 版本变了 → PullBundle → ApplyBundle →
-// 本地 SQLite 落库。center_key 留空 = 中心存明文 token，代理 reencrypt 本地重加密。
+// 本地 SQLite 落库。中心 token 一律明文，代理转存时用本地主密钥重加密。
 func TestSyncPullApplyE2E(t *testing.T) {
 	db := setupTestDB(t)
 
@@ -96,8 +96,8 @@ func TestSyncPullApplyE2E(t *testing.T) {
 		t.Fatalf("envelope version = %d, want %d", env.Version, remoteVersion)
 	}
 
-	// 3) 应用（center_key=nil = 明文模式）
-	if err := db.ApplyBundle(env, nil, srv.URL); err != nil {
+	// 3) 应用（中心一律明文）
+	if err := db.ApplyBundle(env, srv.URL); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 
