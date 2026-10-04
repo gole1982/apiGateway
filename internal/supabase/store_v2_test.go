@@ -216,7 +216,7 @@ func TestKeyRowV2NaturalKey(t *testing.T) {
 
 // 读出时 sort_order → KeyIndex，且 token 解密回明文，上层对中心/本地无感知。
 func TestCredRowToPlatformKeyMapsSortOrder(t *testing.T) {
-	plain := func(s string) string { return s } // 空 center_key → 解密即恒等
+	plain := func(s string) string { return s } // 中心明文，解密即恒等
 	r := credRow{
 		ID: 5, PlatformID: 2, TokenHash: models.TokenHash("sk-x"),
 		SortOrder: 4, Token: "sk-x", Label: "L", Enabled: true, IsFree: true,

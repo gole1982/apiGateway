@@ -28,7 +28,7 @@ CGO_ENABLED=0 go build -o /tmp/gateway ./cmd/gateway
 
 | 主题 | 权威位置 |
 |------|---------|
-| 信任边界 / 写隔离 / center_key 边界 / token 保密 / 为什么不做 RBAC | **[docs/安全模型.md](docs/安全模型.md)** |
+| 信任边界 / 写隔离 / token 保密 / 为什么不做 RBAC | **[docs/安全模型.md](docs/安全模型.md)** |
 | 搭建、隔离 SQL、FAQ | [docs/初次配置指南.md](docs/初次配置指南.md) |
 | 运维流程 | [docs/日常操作手册.md](docs/日常操作手册.md) |
 | 编码规范 / 常见错误模式 | [dev-guide.md](dev-guide.md) |

@@ -15,15 +15,15 @@ import (
 // 本地是权威源，导出结果可直接 push 到中心，也可与中心快照做 Merge。
 //
 // 转换要点：
-//   - token 本地是主密钥密文，这里解密成明文再用
-//     centerKey 重新加密（centerKey 为空 = 中心存明文，与中心侧 enc/dec 约定一致）。
+//   - token 本地是主密钥密文，这里解密成明文直接给出（中心一律存明文，
+//     访问安全由 Supabase RLS/API key 负责）。
 //   - 业务键全部取自然键原样值：platform.base_url、credential.token_hash、
 //     rapi.(platform.base_url, model)。不做任何归一化，镜像本地唯一索引。
 //   - credential 带出 platform_id→base_url 与 sort_order（平台内轮换序号）。
 //   - 绑定来自 endpoint_credential 真实行；某端点若一条绑定都没有，则**不产出**
 //     绑定条目（消费端按"该平台全部凭据"处理，与 v1 key_ids 为空同义）。
 //   - 健康态/遥测（available、failure_*、metrics、logs）不进快照，沿用既有边界。
-func (db *DB) ExportBundle(centerKey []byte) (*bundle.Bundle, error) {
+func (db *DB) ExportBundle() (*bundle.Bundle, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -52,7 +52,7 @@ func (db *DB) ExportBundle(centerKey []byte) (*bundle.Bundle, error) {
 			rows.Close()
 			return nil, fmt.Errorf("export platform scan: %w", err)
 		}
-		ct, err := reencryptLocal(token, centerKey)
+		ct, err := decryptLocal(token)
 		if err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("export platform %q token: %w", name, err)
@@ -92,7 +92,7 @@ func (db *DB) ExportBundle(centerKey []byte) (*bundle.Bundle, error) {
 			rows.Close()
 			return nil, fmt.Errorf("export credential scan: %w", err)
 		}
-		ct, err := reencryptLocal(token, centerKey)
+		ct, err := decryptLocal(token)
 		if err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("export credential %s token: %w", hash, err)
@@ -265,22 +265,11 @@ func (db *DB) ExportBundle(centerKey []byte) (*bundle.Bundle, error) {
 	return out, nil
 }
 
-// reencryptLocal 把本地密文（~/.apiGateway.key）解密后用 centerKey 重新加密，
-// 供本地 → 中心方向使用（ApplyBundle 里的 reencrypt 是反方向）。
-// centerKey 为空 = 中心存明文，直接透传解密结果。
-func reencryptLocal(localCiphertext string, centerKey []byte) (string, error) {
+// decryptLocal 把本地密文解密成明文，供本地 → 中心方向使用
+// （中心一律存明文；ApplyBundle 里的 centerToLocal 是反方向）。
+func decryptLocal(localCiphertext string) (string, error) {
 	if localCiphertext == "" {
 		return "", nil
 	}
-	plain, err := crypto.Decrypt(localCiphertext)
-	if err != nil {
-		return "", err
-	}
-	if plain == "" {
-		return "", nil
-	}
-	if len(centerKey) == 0 {
-		return plain, nil // 中心明文模式
-	}
-	return crypto.EncryptWithKey(plain, centerKey)
+	return crypto.Decrypt(localCiphertext)
 }

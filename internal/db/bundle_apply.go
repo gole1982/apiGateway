@@ -81,14 +81,15 @@ func (db *DB) GetSyncState() (SyncState, error) {
 //     某端点无绑定 = 绑定该平台全部凭据（与旧 key_ids 为空同义）。
 //   - 事务内显式归零健康态：platform/rapi.available、key 失败列、key_model_blocks。
 //     rapi_metrics / request_trends / request_logs 保留不清零。
-//   - bundle 的 token 是 center_key 密文：解出明文后用本地
-//     key 重新加密入库（与本地录入同路，热路径零改动）。
+//   - bundle 的 token 是中心明文：用本地主密钥重新加密入库
+//     （与本地录入同路，热路径零改动）。中心历史加密残留（enc: 前缀）
+//     直接报错，操作员用「本地到中心」整体覆盖推送把中心改写为明文。
 //   - 全部成功才 COMMIT 并写 sync_state（current=last_good=env.Version）；
 //     任何一步失败整体 rollback、保留 last_good（fail-open 由调用方保证）。
 //
 // 调用方在 Apply 成功后需重建 scheduler 快照（service 层持有 scheduler，
 // db 层不感知）。设计 §5.3。
-func (db *DB) ApplyBundle(env *bundle.Envelope, centerKey []byte, sourceURL string) error {
+func (db *DB) ApplyBundle(env *bundle.Envelope, sourceURL string) error {
 	if env == nil {
 		return errors.New("apply bundle: nil envelope")
 	}
@@ -122,7 +123,7 @@ func (db *DB) ApplyBundle(env *bundle.Envelope, centerKey []byte, sourceURL stri
 	platID := make(map[string]int64, len(b.Platforms))
 	id2BaseURL := make(map[int64]string, len(b.Platforms))
 	for _, p := range b.Platforms {
-		encToken, err := reencrypt(p.Token, centerKey)
+		encToken, err := centerToLocal(p.Token)
 		if err != nil {
 			return fmt.Errorf("platform %q token: %w", p.Name, err)
 		}
@@ -204,7 +205,7 @@ func (db *DB) ApplyBundle(env *bundle.Envelope, centerKey []byte, sourceURL stri
 		if !ok {
 			return fmt.Errorf("credential %s: platform base_url %q missing (validate should have caught)", hash, k.PlatformBaseURL)
 		}
-		encToken, plainToken, err := reencryptPlain(k.Token, centerKey)
+		encToken, plainToken, err := centerToLocalPlain(k.Token)
 		if err != nil {
 			return fmt.Errorf("credential %s token: %w", hash, err)
 		}
@@ -508,22 +509,19 @@ func (db *DB) ApplyBundle(env *bundle.Envelope, centerKey []byte, sourceURL stri
 	return nil
 }
 
-// reencryptPlain 同 reencrypt，但额外返回明文（调用方算 token_hash 用）。
-func reencryptPlain(centerCiphertext string, centerKey []byte) (enc string, plain string, err error) {
-	if centerCiphertext == "" {
+// centerToLocalPlain 把中心明文 token 转存为本地密文，同时返回明文
+// （调用方算 token_hash 用）。空串原样返回。
+// 中心值带 enc: 前缀（历史加密残留，center_key 已取消无法解密）：直接报错，
+// 给出明确指引而不是返回 "key not initialised" 这种误导性错误。
+func centerToLocalPlain(centerValue string) (enc string, plain string, err error) {
+	if centerValue == "" {
 		return "", "", nil
 	}
-	if len(centerKey) == 0 && strings.HasPrefix(centerCiphertext, "enc:") {
-		return "", "", errors.New("中心存储为密文但本地未配置 center_key，无法解密；" +
-			"请在中心配置页填入当时的 center_key，或用「本地到中心」整体覆盖推送把中心改写为明文")
+	if strings.HasPrefix(centerValue, "enc:") {
+		return "", "", errors.New("中心 token 为历史加密残留（center_key 已取消，无法解密）；" +
+			"用「本地到中心」整体覆盖推送把中心改写为明文")
 	}
-	plain, err = crypto.DecryptWithKey(centerCiphertext, centerKey)
-	if err != nil {
-		return "", "", err
-	}
-	if plain == "" {
-		return "", "", nil
-	}
+	plain = centerValue
 	enc, err = crypto.Encrypt(plain)
 	if err != nil {
 		return "", "", err
@@ -531,12 +529,9 @@ func reencryptPlain(centerCiphertext string, centerKey []byte) (enc string, plai
 	return enc, plain, nil
 }
 
-// reencrypt 把中心值转存为本地密文。空串原样返回；中心存了无 enc: 前缀的明文
-// （容忍路径，含 center_key 留空的"中心明文"模式）时视作明文重新本地加密。
-// centerKey 为空而中心值却带 enc: 前缀（历史加密残留）：无法解密，给出明确指引
-// 而不是返回 "key not initialised" 这种误导性错误。
-func reencrypt(centerCiphertext string, centerKey []byte) (string, error) {
-	enc, _, err := reencryptPlain(centerCiphertext, centerKey)
+// centerToLocal 把中心明文 token 转存为本地密文。空串原样返回。
+func centerToLocal(centerValue string) (string, error) {
+	enc, _, err := centerToLocalPlain(centerValue)
 	return enc, err
 }
 

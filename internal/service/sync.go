@@ -14,7 +14,6 @@ import (
 
 	"gateway/internal/bundle"
 	"gateway/internal/config"
-	"gateway/internal/crypto"
 	"gateway/internal/db"
 	"gateway/internal/logger"
 	"gateway/internal/store"
@@ -37,7 +36,6 @@ func sbSystemLog(level, msg string) {
 var (
 	syncMu         sync.RWMutex
 	syncClient     *bundle.Client
-	syncCenterKey  []byte
 	syncSourceURL  string
 	syncConfigured bool
 	syncStarted    bool            // 轮询 goroutine 是否已启动（热激活复用）
@@ -51,10 +49,10 @@ var (
 
 // syncSnapshot 在读锁内取同步配置的当前快照，供 syncOnce / 状态接口使用——
 // 热切换可能随时替换 client，直接裸读包变量存在数据竞争。
-func syncSnapshot() (client *bundle.Client, centerKey []byte, sourceURL string, configured bool) {
+func syncSnapshot() (client *bundle.Client, sourceURL string, configured bool) {
 	syncMu.RLock()
 	defer syncMu.RUnlock()
-	return syncClient, syncCenterKey, syncSourceURL, syncConfigured
+	return syncClient, syncSourceURL, syncConfigured
 }
 
 // startupLocalCounts 是网关启动那一刻本地 SQLite 6 张定义表的行数快照，
@@ -64,8 +62,7 @@ func syncSnapshot() (client *bundle.Client, centerKey []byte, sourceURL string, 
 var startupLocalCounts = map[string]int{}
 
 // startSyncLoop 初始化并启动中心同步。cfg.Sync 未配置（无 source_url）时只记录
-// stopCh/间隔（供后续热激活使用）并返回，网关以纯本地模式运行；center_key 配错
-// 也只禁用同步，不影响启动（fail-open）。
+// stopCh/间隔（供后续热激活使用）并返回，网关以纯本地模式运行。
 func startSyncLoop(stopCh <-chan struct{}, syncCfg config.Sync) {
 	syncMu.Lock()
 	syncStopCh = stopCh
@@ -82,22 +79,12 @@ func startSyncLoop(stopCh <-chan struct{}, syncCfg config.Sync) {
 	ensureSyncLoop()
 }
 
-// configureSync 校验并热应用一份同步配置（替换 client/key/source）。调用方需已
-// 确认 cfg.Enabled()。center_key 可选：留空 = 中心存明文 token；填 32 字节 hex =
-// 中心存 center_key 密文。返回错误时保持旧配置不变。
+// configureSync 校验并热应用一份同步配置（替换 client/source）。调用方需已
+// 确认 cfg.Enabled()。中心 token 一律存明文，无需密钥配置。
 func configureSync(syncCfg config.Sync) error {
-	var centerKey []byte
-	if strings.TrimSpace(syncCfg.CenterKey) != "" {
-		k, err := crypto.ParseKey(syncCfg.CenterKey)
-		if err != nil {
-			return errors.New("invalid center_key (want 32-byte hex): " + err.Error())
-		}
-		centerKey = k
-	}
 	c := bundle.NewClient(syncCfg.SourceURL, syncCfg.VersionURL, syncCfg.AnonKey)
 	syncMu.Lock()
 	syncClient = c
-	syncCenterKey = centerKey
 	syncSourceURL = syncCfg.SourceURL
 	syncConfigured = true
 	if syncCfg.PollIntervalSec > 0 {
@@ -179,7 +166,7 @@ func syncAction(remote, lastGood int64, dirty, manual, force bool) string {
 // 中心（只读 key 则本地生效、保留脏标记待手动推送）。全程在调用方 goroutine
 // （轮询/手动刷新/管理写后拉回）执行，不阻塞面板与转发。
 func syncOnce(force bool) error {
-	client, centerKey, sourceURL, configured := syncSnapshot()
+	client, sourceURL, configured := syncSnapshot()
 	if !configured {
 		return errors.New("sync not configured")
 	}
@@ -214,9 +201,9 @@ func syncOnce(force bool) error {
 		if err != nil {
 			return err
 		}
-		return applyMerge(env, centerKey, sourceURL)
+		return applyMerge(env, sourceURL)
 	default: // pull
-		if _, err := pullApplyBundle(ctx, client, centerKey, sourceURL, st.LastGoodVersion); err != nil {
+		if _, err := pullApplyBundle(ctx, client, sourceURL, st.LastGoodVersion); err != nil {
 			return err
 		}
 		return nil
@@ -225,7 +212,7 @@ func syncOnce(force bool) error {
 
 // pullApplyBundle 拉取全量并单事务应用（本地干净时的直接覆盖路径，以及合并
 // 回推后的版本对齐）。返回应用的 envelope（ErrNoChange 时返回 nil,nil）。
-func pullApplyBundle(ctx context.Context, client *bundle.Client, centerKey []byte, sourceURL string, lastGood int64) (*bundle.Envelope, error) {
+func pullApplyBundle(ctx context.Context, client *bundle.Client, sourceURL string, lastGood int64) (*bundle.Envelope, error) {
 	env, err := client.PullBundle(ctx, lastGood)
 	if errors.Is(err, bundle.ErrNoChange) {
 		return nil, nil // 轮询间隙版本又追平（拉取时已一致）
@@ -233,7 +220,7 @@ func pullApplyBundle(ctx context.Context, client *bundle.Client, centerKey []byt
 	if err != nil {
 		return nil, err
 	}
-	if err := db.Get().ApplyBundle(env, centerKey, sourceURL); err != nil {
+	if err := db.Get().ApplyBundle(env, sourceURL); err != nil {
 		sbSystemLog("error", "应用中心配置失败: "+err.Error())
 		return nil, err
 	}
@@ -257,11 +244,11 @@ func pullApplyBundle(ctx context.Context, client *bundle.Client, centerKey []byt
 // 可写）回推中心 → 拉回对齐。只读 key 时本地生效、保留脏标记。
 // 合并中途的本地新修改靠脏 generation 守卫：回推/清脏前 generation 变了则
 // 保留脏标记，横幅持续提示，由用户手动推送，不静默吞修改。
-func applyMerge(env *bundle.Envelope, centerKey []byte, sourceURL string) error {
+func applyMerge(env *bundle.Envelope, sourceURL string) error {
 	gen := edgeDirtyGen.Load()
 	d := db.Get()
 
-	localSnap, err := d.ExportBundle(centerKey)
+	localSnap, err := d.ExportBundle()
 	if err != nil {
 		sbSystemLog("error", "并集合并：本地快照导出失败: "+err.Error())
 		return err
@@ -269,7 +256,7 @@ func applyMerge(env *bundle.Envelope, centerKey []byte, sourceURL string) error 
 	merged, sum := MergeBundles(*localSnap, env.Bundle)
 	sum.CenterVer = env.Version
 	mergedEnv := &bundle.Envelope{SchemaVersion: bundle.SchemaVersion, Version: env.Version, Bundle: merged}
-	if err := d.ApplyBundle(mergedEnv, centerKey, sourceURL); err != nil {
+	if err := d.ApplyBundle(mergedEnv, sourceURL); err != nil {
 		sbSystemLog("error", "并集合并：本地应用失败: "+err.Error())
 		return err
 	}
@@ -307,12 +294,12 @@ func applyMerge(env *bundle.Envelope, centerKey []byte, sourceURL string) error 
 	// 回推 bump 了中心版本，拉回对齐（此时本地干净，走直接拉取分支）。
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	client, ck, src, _ := syncSnapshot()
+	client, src, _ := syncSnapshot()
 	st, err := db.Get().GetSyncState()
 	if err != nil {
 		return err
 	}
-	if _, err := pullApplyBundle(ctx, client, ck, src, st.LastGoodVersion); err != nil {
+	if _, err := pullApplyBundle(ctx, client, src, st.LastGoodVersion); err != nil {
 		sbSystemLog("warn", "合并回推后拉回对齐失败: "+err.Error())
 	}
 	return nil
@@ -517,7 +504,7 @@ func captureStartupSnapshot() {
 
 // localRole 返回本地运行角色：manageMode=管理端、syncConfigured=代理端、否则未连接。
 func localRole() string {
-	_, _, _, configured := syncSnapshot()
+	_, _, configured := syncSnapshot()
 	switch {
 	case manageMode.Load():
 		return "management"
@@ -568,7 +555,7 @@ func handleSyncState(w http.ResponseWriter, r *http.Request) {
 	if !st.LastSyncedAt.IsZero() {
 		lastSynced = st.LastSyncedAt.Format(time.RFC3339)
 	}
-	_, _, _, configured := syncSnapshot()
+	_, _, configured := syncSnapshot()
 	out := map[string]any{
 		"enabled":           configured,
 		"role":              localRole(),
@@ -595,7 +582,7 @@ func handleSyncRefresh(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
 		return
 	}
-	if _, _, _, configured := syncSnapshot(); !configured {
+	if _, _, configured := syncSnapshot(); !configured {
 		writeJSONError(w, http.StatusForbidden, errors.New("sync not configured (no [sync] source_url)"))
 		return
 	}
@@ -629,7 +616,7 @@ func handleSyncCenter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	client, _, _, configured := syncSnapshot()
+	client, _, configured := syncSnapshot()
 	out := map[string]any{
 		"enabled":        configured,
 		"role":           localRole(),
@@ -711,7 +698,7 @@ func handleSyncCenter(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleSyncDiagnostics GET /api/sync/diagnostics —— 排障：当面板已保存 sb-config
-// 但运行时未激活管理模式（多为 center_key 为空、或保存后未重启）时，明确指出
+// 但运行时未激活管理模式（多为保存后未重启）时，明确指出
 // "管理端无法直写中心"的具体原因，避免静默回退本地。管理端"无法上传"看这里。
 func handleSyncDiagnostics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -720,12 +707,8 @@ func handleSyncDiagnostics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sbURL, _, hasSaved := loadSavedSBConfig()
-	_, _, _, syncOn := syncSnapshot()
+	_, _, syncOn := syncSnapshot()
 	manage := manageMode.Load()
-	var cfg config.Sync
-	if c, err := config.Load(); err == nil {
-		cfg = c.Sync
-	}
 	var issues []string
 	if hasSaved && !manage {
 		issues = append(issues,
@@ -734,17 +717,13 @@ func handleSyncDiagnostics(w http.ResponseWriter, r *http.Request) {
 	if hasSaved && manage {
 		issues = append(issues, "管理模式已由面板配置激活，可正常直写中心。")
 	}
-	if cfg.CenterKey == "" && !hasSavedCenterKey() {
-		issues = append(issues, "center_key 未配置（可选）：中心库 token 将存明文，访问安全由 Supabase RLS/API key 负责。多代理共享中心、担心 key 泄露时建议配置。")
-	}
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"manage_mode":           manage,
-		"sync_configured":       syncOn,
-		"role":                  localRole(),
-		"sb_saved":              hasSaved,
-		"sb_url":                sbURL,
-		"center_key_configured": cfg.CenterKey != "" || hasSavedCenterKey(),
-		"issues":                issues,
+		"manage_mode":     manage,
+		"sync_configured": syncOn,
+		"role":            localRole(),
+		"sb_saved":        hasSaved,
+		"sb_url":          sbURL,
+		"issues":          issues,
 	})
 }
 
@@ -890,7 +869,12 @@ func handleSyncPush(w http.ResponseWriter, r *http.Request) {
 		sup = t
 	}
 
+	// 推送体（备份 + ReplaceAll）持 syncOpMu：与轮询 syncOnce 互斥，避免双份
+	// ReplaceAll 并发空转 bump 中心版本。末尾的 syncOnce(true) 留在锁外——
+	// 它自己会取锁，包进去死锁。
+	syncOpMu.Lock()
 	counts, err := doSyncPushCore(sup)
+	syncOpMu.Unlock()
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err)
 		return
@@ -904,15 +888,16 @@ func handleSyncPush(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// activateCenter 热激活中心连接（免重启）：中心配置页保存 URL+key(+可选
-// center_key）后调用。按探测到的角色激活：
-//   - management：supabase.Store 直写中心（store.Use）+ 同步循环（读路径保持一致）；
-//     center_key 可选——留空中心存明文 token，填了则写中心前加密。
-//   - proxy：仅配置只读同步循环（等效于 proxy.cfg [sync]）。
+// activateCenter 热激活中心连接（免重启）：中心配置页保存 URL+key 后调用。
+// 按探测到的角色激活：
+//   - management：supabase.Store 直写中心（store.Use）+ 同步循环（读路径保持一致）。
+//     中心 token 一律存明文（访问安全由 Supabase RLS/API key 负责）。
+//   - proxy：切回本地 store（防之前管理模式残留旧 key 直写中心）+ 只读同步循环
+//     （等效于 proxy.cfg [sync]）。
 //
 // proxy.cfg [management]/[sync] 降级为可选的无头启动回退；面板 settings 为主。
 // 返回激活后的角色；offline/校验失败返回错误，不改变现有状态。
-func activateCenter(sbURL, sbKey, centerKeyHex string) (string, error) {
+func activateCenter(sbURL, sbKey string) (string, error) {
 	role, _, err := probeSBRole(sbURL, sbKey)
 	if err != nil {
 		return sbRoleOffline, err
@@ -926,17 +911,13 @@ func activateCenter(sbURL, sbKey, centerKeyHex string) (string, error) {
 		SourceURL:       base + "/rest/v1/rpc/get_bundle",
 		VersionURL:      base + "/rest/v1/rpc/get_version",
 		AnonKey:         sbKey,
-		CenterKey:       centerKeyHex,
 		PollIntervalSec: 60,
 	}
 
 	if role == sbRoleManagement {
-		// center_key 可选：留空 = 中心库 token 存明文（访问安全由 Supabase 负责）。
-		// 提供了则校验格式并在写中心时加密 token（enc/dec 对空 key 自动退化为明文透传）。
 		sup, nerr := supabase.New(supabase.Config{
 			URL:        sbURL,
 			ServiceKey: sbKey,
-			CenterKey:  centerKeyHex,
 		}, func() {
 			_ = syncOnce(true) // 写后立即拉回，本地镜像即时一致
 		})
@@ -954,9 +935,15 @@ func activateCenter(sbURL, sbKey, centerKeyHex string) (string, error) {
 		return role, nil
 	}
 
-	// proxy 角色：只读同步循环。
+	// proxy 角色：只读同步循环，并把 store 切回本地实现。
+	// 若之前热激活过管理模式（store 是持旧 secret key 的 supabase.Store），
+	// 不切回会导致面板定义写继续用旧 key 直写中心——与探测出的 proxy 角色矛盾，
+	// 还会绕过脏标记。切回本地后定义写落本地 SQLite 并正常标脏。
 	if cerr := configureSync(syncCfg); cerr != nil {
 		return role, cerr
+	}
+	if db.Get() != nil {
+		store.Use(wrapEdgeStore(db.Get()))
 	}
 	manageMode.Store(false)
 	ensureSyncLoop()

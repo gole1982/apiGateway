@@ -2745,7 +2745,7 @@
                     <span v-if="sbConfig.error" style="color:var(--color-danger);font-size:0.8rem;">⚠ {{ sbConfig.error }}</span>
                     <span class="u-flex1"></span>
                     <button class="btn btn-secondary btn-sm" @click="fetchSBConfig">重新探测</button>
-                    <button class="btn btn-primary btn-sm" @click="saveSBConfig(sbConfigForm.url, sbConfigForm.key, sbConfigForm.centerKey)">保存并激活</button>
+                    <button class="btn btn-primary btn-sm" @click="saveSBConfig(sbConfigForm.url, sbConfigForm.key)">保存并激活</button>
                 </div>
 
                 <!-- 录入 API Key（紧凑：URL + Key 同行） -->
@@ -2754,7 +2754,7 @@
                         <span class="card-title" style="font-size:0.95rem;">录入 API Key</span>
                         <span class="u-muted-md">角色由 key 权限自动判定：可写=管理端 / 只读=代理端 / 空=未连接</span>
                     </div>
-                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
                         <div>
                             <div class="u-muted-sm u-mb3">Supabase Project ID 或完整 URL</div>
                             <input type="text" class="form-control" placeholder="abcdefghijk（Project ID）或 https://xxx.supabase.co" v-model="sbConfigForm.url">
@@ -2764,13 +2764,8 @@
                             <input type="password" class="form-control" placeholder="粘贴 key（不会明文回显）" v-model="sbConfigForm.key">
                             <div v-if="sbConfig.key_mask" class="u-muted-sm" style="margin-top:3px;">当前：{{ sbConfig.key_mask }}</div>
                         </div>
-                        <div>
-                            <div class="u-muted-sm u-mb3">center_key（可选，64 位 hex；填了中心存密文 token）</div>
-                            <input type="password" class="form-control" placeholder="留空 = 中心存明文 token" v-model="sbConfigForm.centerKey">
-                            <div class="u-muted-sm" style="margin-top:3px;">{{ sbConfig.center_key_set ? '当前：已配置（中心存密文）' : '当前：未配置（中心存明文）' }}</div>
-                        </div>
                     </div>
-                    <div class="u-muted-sm" style="margin-top:8px;">保存即热激活，无需重启；配置加密存本地数据库，proxy.cfg 仅作无头启动回退。</div>
+                    <div class="u-muted-sm" style="margin-top:8px;">保存即热激活，无需重启；配置加密存本地数据库，proxy.cfg 仅作无头启动回退。中心 token 一律存明文（访问安全由 Supabase RLS/API key 负责）。</div>
                 </div>
 
                 <!-- 同步状态：中心/本地各表对比 + 角色相关同步按钮 -->
@@ -3898,7 +3893,7 @@
                 // 和中心配置页徽章。启动时拉一次。
                 const sbRole = ref('offline');
                 const sbConfig = ref({ connected: false, role: 'offline', url: '', key_mask: '', tables: {}, error: '' });
-                const sbConfigForm = ref({ url: '', key: '', centerKey: '' });
+                const sbConfigForm = ref({ url: '', key: '' });
                 const sbRoleLabel = computed(() => ({
                     management: '管理端（可写）', proxy: '代理端（只读）', offline: '未连接'
                 }[sbConfig.value.role] || sbConfig.value.role));
@@ -4561,17 +4556,16 @@
                         }
                     } catch (e) {}
                 };
-                const saveSBConfig = async (url, key, centerKey) => {
+                const saveSBConfig = async (url, key) => {
                     try {
                         const r = await fetch('/api/sb-config', {
                             method: 'POST', headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ url, key, center_key: centerKey || '' })
+                            body: JSON.stringify({ url, key })
                         });
                         const d = await r.json();
                         if (r.ok) {
                             sbConfig.value = d;
                             sbRole.value = d.role || 'offline';
-                            sbConfigForm.value.centerKey = ''; // 不落表单
                             if (d.activate_error) {
                                 showToast('已保存但未激活', d.activate_error, 'error');
                             } else if (d.activated) {

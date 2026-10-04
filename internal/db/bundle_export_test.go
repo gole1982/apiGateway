@@ -3,10 +3,10 @@ package db
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	"gateway/internal/bundle"
-	"gateway/internal/crypto"
 	"gateway/internal/models"
 )
 
@@ -60,7 +60,7 @@ func TestExportBundle_ProducesSelfConsistentV2(t *testing.T) {
 	db := setupTestDB(t)
 	seedLocalDefs(t, db)
 
-	b, err := db.ExportBundle(nil) // nil centerKey = 中心明文模式
+	b, err := db.ExportBundle() // 中心一律明文
 	if err != nil {
 		t.Fatalf("export: %v", err)
 	}
@@ -94,65 +94,37 @@ func TestExportBundle_ProducesSelfConsistentV2(t *testing.T) {
 	}
 }
 
-// normalizeBundleForCompare 把密文字段换成明文再比。
-// crypto.Encrypt* 每次用新 nonce（非确定性），同明文两次密文必不同，
-// 所以往返一致性必须比"语义"而非字节。
-func normalizeBundleForCompare(t *testing.T, b *bundle.Bundle, ck []byte) *bundle.Bundle {
-	t.Helper()
-	cp := *b
-	cp.Platforms = append([]bundle.Platform(nil), b.Platforms...)
-	cp.Credentials = append([]bundle.Credential(nil), b.Credentials...)
-	dec := func(s string) string {
-		if s == "" {
-			return ""
-		}
-		if p, err := crypto.DecryptWithKey(s, ck); err == nil {
-			return p
-		}
-		return s
-	}
-	for i := range cp.Platforms {
-		cp.Platforms[i].Token = dec(cp.Platforms[i].Token)
-	}
-	for i := range cp.Credentials {
-		cp.Credentials[i].Token = dec(cp.Credentials[i].Token)
-	}
-	return &cp
-}
-
 // 往返一致性：export → ApplyBundle → export 语义必须完全相等。
 // 这是"本地数据能安全穿过 v2 契约"的回归闸门。
+// 中心一律明文，导出 token 即明文，可直接 DeepEqual。
 func TestExportBundle_RoundTripIsStable(t *testing.T) {
 	db := setupTestDB(t)
 	seedLocalDefs(t, db)
-	ck := mustCenterKey(t)
 
-	first, err := db.ExportBundle(ck)
+	first, err := db.ExportBundle()
 	if err != nil {
 		t.Fatalf("export #1: %v", err)
 	}
 	env := &bundle.Envelope{SchemaVersion: bundle.SchemaVersion, Version: 1, Bundle: *first}
-	if err := db.ApplyBundle(env, ck, "http://test"); err != nil {
+	if err := db.ApplyBundle(env, "http://test"); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
-	second, err := db.ExportBundle(ck)
+	second, err := db.ExportBundle()
 	if err != nil {
 		t.Fatalf("export #2: %v", err)
 	}
-	n1 := normalizeBundleForCompare(t, first, ck)
-	n2 := normalizeBundleForCompare(t, second, ck)
-	if !reflect.DeepEqual(n1, n2) {
-		j1, _ := json.Marshal(n1)
-		j2, _ := json.Marshal(n2)
+	if !reflect.DeepEqual(first, second) {
+		j1, _ := json.Marshal(first)
+		j2, _ := json.Marshal(second)
 		t.Errorf("round trip changed the bundle:\n#1=%s\n#2=%s", j1, j2)
 	}
-	// 中心密文模式下 token 必须真的用 center_key 加过密（不是明文透传）
+	// 中心明文模式下导出 token 必须就是明文（无 enc: 前缀）
 	for _, c := range second.Credentials {
 		if c.Token == "" {
 			continue
 		}
-		if plain, err := crypto.DecryptWithKey(c.Token, ck); err != nil || plain == "" {
-			t.Errorf("credential token not encrypted with center key: %v", err)
+		if strings.HasPrefix(c.Token, "enc:") {
+			t.Errorf("credential token must be center plaintext, got ciphertext")
 		}
 	}
 }
@@ -168,7 +140,7 @@ func TestExportBundle_SameNamePlatformsStayDistinct(t *testing.T) {
 			t.Fatalf("create platform %s: %v", u, err)
 		}
 	}
-	b, err := db.ExportBundle(nil)
+	b, err := db.ExportBundle()
 	if err != nil {
 		t.Fatalf("export: %v", err)
 	}
@@ -199,7 +171,7 @@ func TestExportBundle_BindingsFollowEndpointCredential(t *testing.T) {
 		t.Fatalf("update binding limit: %v", err)
 	}
 
-	b, err := db.ExportBundle(nil)
+	b, err := db.ExportBundle()
 	if err != nil {
 		t.Fatalf("export: %v", err)
 	}
@@ -220,7 +192,7 @@ func TestExportBundle_BindingsFollowEndpointCredential(t *testing.T) {
 	if _, err := db.conn.Exec(`DELETE FROM rapi WHERE id=(SELECT min(rapi_id) FROM endpoint_credential)`); err != nil {
 		t.Fatalf("delete rapi: %v", err)
 	}
-	b2, err := db.ExportBundle(nil)
+	b2, err := db.ExportBundle()
 	if err != nil {
 		t.Fatalf("export with dangling binding: %v", err)
 	}

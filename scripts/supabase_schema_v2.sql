@@ -63,7 +63,7 @@ CREATE TABLE IF NOT EXISTS platform (
     id                BIGSERIAL PRIMARY KEY,
     name              TEXT NOT NULL DEFAULT '',   -- 显示名（v2 起无唯一约束）
     base_url          TEXT NOT NULL DEFAULT '',   -- 业务键
-    token             TEXT NOT NULL DEFAULT '',   -- center_key 密文
+    token             TEXT NOT NULL DEFAULT '',   -- 中心明文（访问安全由 RLS/API key 负责）
     last_token_fetch  TIMESTAMPTZ,
     enabled           BOOLEAN NOT NULL DEFAULT TRUE,
     notes             TEXT NOT NULL DEFAULT '',
@@ -85,7 +85,7 @@ CREATE TABLE IF NOT EXISTS credential (
     platform_id BIGINT NOT NULL REFERENCES platform(id) ON DELETE CASCADE,
     token_hash  TEXT,                                 -- 业务键；NULL = 不参与唯一
     sort_order  INTEGER NOT NULL DEFAULT 0,           -- 平台内轮换序号
-    token       TEXT NOT NULL DEFAULT '',             -- center_key 密文
+    token       TEXT NOT NULL DEFAULT '',             -- 中心明文（访问安全由 RLS/API key 负责）
     label       TEXT NOT NULL DEFAULT '',
     enabled     BOOLEAN NOT NULL DEFAULT TRUE,
     expires_at  TIMESTAMPTZ,
@@ -415,7 +415,6 @@ GRANT EXECUTE ON FUNCTION get_bundle(BIGINT) TO anon, authenticated;
 --
 --   c) token 保密（知情项）：publishable key 的准入由人工分发控制（本身不公开、
 --      不进前端），故中心把 token 交给它是设计内行为。但持有它即等于能读全部
---      token。center_key（可选）只防**中心库落库数据被盗**——中心侧泄露、或有人
---      只拿到中心库副本却没碰过你的机器时只得到密文；它**不防凭据泄露**，因为
---      center_key 与 publishable key 同在 proxy.cfg，能读到 key 的路径同样能读到它。
+--      token，按高价值密钥管理，泄露即轮换。中心 token 一律存明文
+--      （历史 center_key 应用层加密已取消）。
 -- ---------------------------------------------------------------------------

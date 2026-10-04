@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"strings"
 	"testing"
 
 	"gateway/internal/bundle"
@@ -9,28 +10,6 @@ import (
 
 	"gateway/internal/models"
 )
-
-// 固定中心密钥（32 字节 hex）。测试用，生产请随机生成。
-const testCenterKeyHex = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
-
-func mustCenterKey(t *testing.T) []byte {
-	t.Helper()
-	k, err := crypto.ParseKey(testCenterKeyHex)
-	if err != nil {
-		t.Fatalf("parse center key: %v", err)
-	}
-	return k
-}
-
-// encCenter 用中心密钥加密一个明文（模拟管理端写入中心库的密文形态）。
-func encCenter(t *testing.T, plain string, ck []byte) string {
-	t.Helper()
-	c, err := crypto.EncryptWithKey(plain, ck)
-	if err != nil {
-		t.Fatalf("encrypt with center key: %v", err)
-	}
-	return c
-}
 
 func countRows(t *testing.T, conn *sql.DB, query string, args ...any) int {
 	t.Helper()
@@ -43,10 +22,10 @@ func countRows(t *testing.T, conn *sql.DB, query string, args ...any) int {
 
 func TestApplyBundle_InsertUpdateDelete(t *testing.T) {
 	db := setupTestDB(t)
-	ck := mustCenterKey(t)
 
 	// v1：1 平台 + 1 凭据 + 1 端点 + 1 lapi + 1 绑定 + 1 路由链
 	// （v2 自然键：platform=base_url、credential=token_hash、rapi=(base_url, model)）
+	// 中心 token 一律明文。
 	credToken := "sk-key0"
 	v1 := &bundle.Envelope{
 		SchemaVersion: bundle.SchemaVersion,
@@ -54,10 +33,10 @@ func TestApplyBundle_InsertUpdateDelete(t *testing.T) {
 		Bundle: bundle.Bundle{
 			Platforms: []bundle.Platform{{
 				Name: "openai", BaseURL: "https://api.openai.com",
-				Token: encCenter(t, "sk-aaa", ck), Enabled: true, SupportedFormats: `["openai"]`,
+				Token: "sk-aaa", Enabled: true, SupportedFormats: `["openai"]`,
 			}},
 			Credentials: []bundle.Credential{{
-				TokenHash: models.TokenHash(credToken), PlatformBaseURL: "https://api.openai.com", Token: encCenter(t, credToken, ck), Enabled: true,
+				TokenHash: models.TokenHash(credToken), PlatformBaseURL: "https://api.openai.com", Token: credToken, Enabled: true,
 			}},
 			RAPIs: []bundle.RAPI{{
 				PlatformBaseURL: "https://api.openai.com", Alias: "gpt-4", Model: "gpt-4", Enabled: true,
@@ -75,7 +54,7 @@ func TestApplyBundle_InsertUpdateDelete(t *testing.T) {
 		},
 	}
 
-	if err := db.ApplyBundle(v1, ck, "http://test"); err != nil {
+	if err := db.ApplyBundle(v1, "http://test"); err != nil {
 		t.Fatalf("apply v1: %v", err)
 	}
 
@@ -121,11 +100,11 @@ func TestApplyBundle_InsertUpdateDelete(t *testing.T) {
 		Bundle: bundle.Bundle{
 			Platforms: []bundle.Platform{{
 				Name: "openai", BaseURL: "https://api.openai.com/v2",
-				Token: encCenter(t, "sk-aaa2", ck), Enabled: true, SupportedFormats: `["openai"]`,
+				Token: "sk-aaa2", Enabled: true, SupportedFormats: `["openai"]`,
 			}},
 		},
 	}
-	if err := db.ApplyBundle(v2, ck, "http://test"); err != nil {
+	if err := db.ApplyBundle(v2, "http://test"); err != nil {
 		t.Fatalf("apply v2: %v", err)
 	}
 
@@ -158,7 +137,6 @@ func TestApplyBundle_InsertUpdateDelete(t *testing.T) {
 // 平台登录账号随 bundle 同步：apply 落库 login_account，二次同步更新它。
 func TestApplyBundle_SyncsLoginAccount(t *testing.T) {
 	db := setupTestDB(t)
-	ck := mustCenterKey(t)
 
 	v1 := &bundle.Envelope{
 		SchemaVersion: bundle.SchemaVersion,
@@ -166,12 +144,12 @@ func TestApplyBundle_SyncsLoginAccount(t *testing.T) {
 		Bundle: bundle.Bundle{
 			Platforms: []bundle.Platform{{
 				Name: "openai", BaseURL: "https://api.openai.com",
-				Token: encCenter(t, "sk-aaa", ck), Enabled: true,
+				Token: "sk-aaa", Enabled: true,
 				LoginAccount: "ops@example.com",
 			}},
 		},
 	}
-	if err := db.ApplyBundle(v1, ck, "http://test"); err != nil {
+	if err := db.ApplyBundle(v1, "http://test"); err != nil {
 		t.Fatalf("apply v1: %v", err)
 	}
 
@@ -190,12 +168,12 @@ func TestApplyBundle_SyncsLoginAccount(t *testing.T) {
 		Bundle: bundle.Bundle{
 			Platforms: []bundle.Platform{{
 				Name: "openai", BaseURL: "https://api.openai.com",
-				Token: encCenter(t, "sk-aaa", ck), Enabled: true,
+				Token: "sk-aaa", Enabled: true,
 				LoginAccount: "ops2@example.com",
 			}},
 		},
 	}
-	if err := db.ApplyBundle(v2, ck, "http://test"); err != nil {
+	if err := db.ApplyBundle(v2, "http://test"); err != nil {
 		t.Fatalf("apply v2: %v", err)
 	}
 
@@ -211,26 +189,25 @@ func TestApplyBundle_SyncsLoginAccount(t *testing.T) {
 
 func TestApplyBundle_IdempotentReapply(t *testing.T) {
 	db := setupTestDB(t)
-	ck := mustCenterKey(t)
 
 	v := &bundle.Envelope{
 		SchemaVersion: bundle.SchemaVersion,
 		Version:       5,
 		Bundle: bundle.Bundle{
 			Platforms: []bundle.Platform{{
-				Name: "p1", BaseURL: "https://x", Token: encCenter(t, "sk", ck),
+				Name: "p1", BaseURL: "https://x", Token: "sk",
 				Enabled: true, SupportedFormats: `["openai"]`,
 			}},
 			Credentials: []bundle.Credential{{
-				TokenHash: models.TokenHash("k0"), PlatformBaseURL: "https://x", Token: encCenter(t, "k0", ck), Enabled: true,
+				TokenHash: models.TokenHash("k0"), PlatformBaseURL: "https://x", Token: "k0", Enabled: true,
 			}},
 		},
 	}
-	if err := db.ApplyBundle(v, ck, "http://test"); err != nil {
+	if err := db.ApplyBundle(v, "http://test"); err != nil {
 		t.Fatalf("apply #1: %v", err)
 	}
 	// 重复应用同一 envelope：不应产生重复行，platform base_url 不变
-	if err := db.ApplyBundle(v, ck, "http://test"); err != nil {
+	if err := db.ApplyBundle(v, "http://test"); err != nil {
 		t.Fatalf("apply #2: %v", err)
 	}
 	if n := countRows(t, db.conn, `SELECT count(*) FROM platform WHERE name=?`, "p1"); n != 1 {
@@ -243,7 +220,6 @@ func TestApplyBundle_IdempotentReapply(t *testing.T) {
 
 func TestApplyBundle_RejectsInvalidReference(t *testing.T) {
 	db := setupTestDB(t)
-	ck := mustCenterKey(t)
 
 	// v2 里凭据不直接引用平台（归属由绑定的端点决定），等价的悬空引用是
 	// 绑定指向不存在的端点 → bundle.Validate 在 ApplyBundle 内拒掉。
@@ -252,14 +228,14 @@ func TestApplyBundle_RejectsInvalidReference(t *testing.T) {
 		Version:       1,
 		Bundle: bundle.Bundle{
 			Platforms:   []bundle.Platform{{Name: "p1", BaseURL: "https://x", Enabled: true, SupportedFormats: `["openai"]`}},
-			Credentials: []bundle.Credential{{TokenHash: models.TokenHash("k"), PlatformBaseURL: "https://x", Token: encCenter(t, "k", ck), Enabled: true}},
+			Credentials: []bundle.Credential{{TokenHash: models.TokenHash("k"), PlatformBaseURL: "https://x", Token: "k", Enabled: true}},
 			Bindings: []bundle.CredentialBinding{{
 				PlatformBaseURL: "https://ghost", Model: "nope",
 				TokenHash: models.TokenHash("k"), Enabled: true,
 			}},
 		},
 	}
-	if err := db.ApplyBundle(bad, ck, "http://test"); err == nil {
+	if err := db.ApplyBundle(bad, "http://test"); err == nil {
 		t.Fatal("expected validation error for dangling platform reference, got nil")
 	}
 	// sync_state 不应被写入（fail-open：不动现有配置）
@@ -271,7 +247,6 @@ func TestApplyBundle_RejectsInvalidReference(t *testing.T) {
 
 func TestApplyBundle_RejectsEmptyBundle(t *testing.T) {
 	db := setupTestDB(t)
-	ck := mustCenterKey(t)
 
 	// 空定义集（中心被误删一切）→ 必须拒绝，绝不落库后清空
 	empty := &bundle.Envelope{
@@ -287,16 +262,44 @@ func TestApplyBundle_RejectsEmptyBundle(t *testing.T) {
 			Platforms: []bundle.Platform{{Name: "p1", BaseURL: "https://x", Enabled: true, SupportedFormats: `["openai"]`}},
 		},
 	}
-	if err := db.ApplyBundle(seed, ck, "http://test"); err != nil {
+	if err := db.ApplyBundle(seed, "http://test"); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
 	// 空 bundle：Validate 不会拦（无引用问题），但 ApplyBundle 必须拒绝以防误删一切
-	if err := db.ApplyBundle(empty, ck, "http://test"); err == nil {
+	if err := db.ApplyBundle(empty, "http://test"); err == nil {
 		t.Fatal("expected error applying empty bundle (anti-mass-delete guard), got nil")
 	}
 	// 原有数据保留
 	if n := countRows(t, db.conn, `SELECT count(*) FROM platform`); n != 1 {
 		t.Fatalf("platform count after empty apply = %d, want 1 (preserved)", n)
+	}
+}
+
+// 中心历史加密残留（enc: 前缀，center_key 已取消无法解密）→ 直接报错并指引
+// 用推送改写为明文，而不是存下解不开的密文。
+func TestApplyBundle_RejectsLegacyCiphertext(t *testing.T) {
+	db := setupTestDB(t)
+
+	enc := &bundle.Envelope{
+		SchemaVersion: bundle.SchemaVersion,
+		Version:       1,
+		Bundle: bundle.Bundle{
+			Platforms: []bundle.Platform{{
+				Name: "openai", BaseURL: "https://api.openai.com",
+				Token: "enc:deadbeef", Enabled: true, SupportedFormats: `["openai"]`,
+			}},
+		},
+	}
+	err := db.ApplyBundle(enc, "http://test")
+	if err == nil {
+		t.Fatal("expected error for legacy center ciphertext, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, "整体覆盖推送") {
+		t.Errorf("error = %q, want push-to-center guidance", got)
+	}
+	// 失败不得落库（fail-open：沿用本地旧配置）
+	if n := countRows(t, db.conn, `SELECT count(*) FROM platform`); n != 0 {
+		t.Fatalf("platform count = %d, want 0 (nothing applied on failure)", n)
 	}
 }

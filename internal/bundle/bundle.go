@@ -55,7 +55,7 @@ type Bundle struct {
 }
 
 // Credential —— 平台密钥定义。**业务键 = TokenHash**（全局唯一，token 内容判据）。
-// token 为 center_key 密文；token_hash 是相等性判据（高熵，离线爆破不可行）。
+// token 为中心明文；token_hash 是相等性判据（高熵，离线爆破不可行）。
 //
 // PlatformBaseURL / SortOrder 是**普通属性，不是键的一部分**：token_hash 全局唯一，
 // 但凭据仍需声明归属平台（本地 credential.platform_id 是 NOT NULL 外键，且调度器按
@@ -65,7 +65,7 @@ type Credential struct {
 	TokenHash       string     `json:"token_hash"`
 	PlatformBaseURL string     `json:"platform_base_url"` // 归属平台（引用 platform.base_url）
 	SortOrder       int        `json:"sort_order"`        // 平台内轮换序号
-	Token           string     `json:"token"`             // center_key 密文
+	Token           string     `json:"token"`             // 中心明文
 	Label           string     `json:"label"`
 	Enabled         bool       `json:"enabled"`
 	ExpiresAt       *time.Time `json:"expires_at"` // null = 永不失效
@@ -88,11 +88,11 @@ type CredentialBinding struct {
 }
 
 // Platform —— 平台定义。**业务键 = BaseURL**（name 已降级为显示名，本地表无 UNIQUE）。
-// token 为 center_key 密文。
+// token 为中心明文。
 type Platform struct {
 	BaseURL          string     `json:"base_url"` // 业务键（归一化后）
 	Name             string     `json:"name"`     // 显示名
-	Token            string     `json:"token"`    // center_key 密文
+	Token            string     `json:"token"`    // 中心明文
 	LastTokenFetch   *time.Time `json:"last_token_fetch"`
 	Enabled          bool       `json:"enabled"`
 	Notes            string     `json:"notes"`

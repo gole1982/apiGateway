@@ -370,7 +370,6 @@ func (s *Service) Run() error {
 		sup, err := supabase.New(supabase.Config{
 			URL:        cfg.Management.SupabaseURL,
 			ServiceKey: cfg.Management.ServiceKey,
-			CenterKey:  cfg.Management.CenterKey,
 		}, func() {
 			mgmtMu.Lock()
 			defer mgmtMu.Unlock()
@@ -387,7 +386,6 @@ func (s *Service) Run() error {
 				SourceURL:       base + "/rest/v1/rpc/get_bundle",
 				VersionURL:      base + "/rest/v1/rpc/get_version",
 				AnonKey:         cfg.Management.ServiceKey,
-				CenterKey:       cfg.Management.CenterKey,
 				PollIntervalSec: cfg.Sync.PollIntervalSec,
 			}
 			logger.DefaultConsole().Info("service", "[MGMT] management mode: definitions write through to center",
@@ -408,15 +406,12 @@ func (s *Service) Run() error {
 	// 回退：操作员若在仪表盘「中心配置」页录入了 Supabase URL+key（存 settings
 	// 表）而非编辑 proxy.cfg [management]，则据此激活管理模式，使运行时 store、
 	// 同步循环与仪表盘 sync-center 卡都与 sb-config 页一致（否则卡显示未连接）。
-	// center_key 同样从 settings（sb_center_key）读，proxy.cfg 仅作兜底。
 	if !manageMode.Load() {
 		if sbURL, sbKey, ok := loadSavedSBConfig(); ok {
-			centerKeyHex := effectiveCenterKey("")
 			var mgmtMu sync.Mutex
 			sup, err := supabase.New(supabase.Config{
 				URL:        sbURL,
 				ServiceKey: sbKey,
-				CenterKey:  centerKeyHex,
 			}, func() {
 				mgmtMu.Lock()
 				defer mgmtMu.Unlock()
@@ -435,7 +430,6 @@ func (s *Service) Run() error {
 					SourceURL:       base + "/rest/v1/rpc/get_bundle",
 					VersionURL:      base + "/rest/v1/rpc/get_version",
 					AnonKey:         sbKey,
-					CenterKey:       centerKeyHex,
 					PollIntervalSec: cfg.Sync.PollIntervalSec,
 				}
 				logger.DefaultConsole().Info("service", "[MGMT] management mode from saved sb-config",

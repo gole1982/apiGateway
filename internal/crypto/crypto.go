@@ -12,10 +12,10 @@
 //  2. 它没有增加安全性，只是把明文密钥从环境变量搬到了磁盘。
 //
 // 丢 key 的后果与恢复路径：定义类数据（平台 token / Key /
-// 模型 / 接口）可从中心（Supabase）重新拉回 —— center_key 留空时中心存明文
-// （见 internal/db/bundle_export.go 的 reencryptLocal）；不可恢复的只有
+// 模型 / 接口）可从中心（Supabase）重新拉回 —— 中心 token 一律存明文，
+// 拉回后用新本地密钥重新加密入库；不可恢复的只有
 // 本地遥测（request_logs / rapi_metrics / sessions 等，从不同步）与
-// settings 里的中心连接凭据本身（sb_api_key / sb_center_key，需从 Supabase
+// settings 里的中心连接凭据本身（sb_api_key，需从 Supabase
 // 控制台重新录入后才能再连中心）。详见 docs/日常操作手册.md「换密钥」。
 package crypto
 
@@ -88,29 +88,6 @@ func Decrypt(ciphertext string) (string, error) {
 	key := activeKey
 	mu.RUnlock()
 	return decryptWithKey(ciphertext, key)
-}
-
-// EncryptWithKey / DecryptWithKey 用显式 key 加解密，供中心库密文 ↔ 本地密文的
-// 边界转换：管理端写入中心前用 center_key 加密；代理 Apply 拉到中心密文后用
-// center_key 解出明文，再用本地 active key 重新加密入库。格式与 Encrypt/Decrypt 一致。
-func EncryptWithKey(plaintext string, key []byte) (string, error) {
-	return encryptWithKey(plaintext, key)
-}
-
-func DecryptWithKey(ciphertext string, key []byte) (string, error) {
-	return decryptWithKey(ciphertext, key)
-}
-
-// ParseKey 把 hex 编码的 32 字节密钥文本解析为原始 key（center_key 配置用）。
-func ParseKey(hexKey string) ([]byte, error) {
-	key, err := hex.DecodeString(strings.TrimSpace(hexKey))
-	if err != nil {
-		return nil, fmt.Errorf("crypto: parse key: %w", err)
-	}
-	if len(key) != 32 {
-		return nil, fmt.Errorf("crypto: key must be 32 bytes, got %d", len(key))
-	}
-	return key, nil
 }
 
 func encryptWithKey(plaintext string, key []byte) (string, error) {

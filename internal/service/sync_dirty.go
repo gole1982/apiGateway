@@ -15,7 +15,6 @@ package service
 //     在 service 单测里为 nil，默认实现 nil-safe 直接跳过）。
 
 import (
-	"encoding/hex"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -97,7 +96,7 @@ func edgeDirtyState() (dirty bool, at, reason string) {
 // 离线模式（都不知道）下脏标记无意义，markEdgeDirty 直接跳过。
 // db 未就绪（单测）一律按"不知道"处理。
 func centerKnown() bool {
-	_, _, _, configured := syncSnapshot()
+	_, _, configured := syncSnapshot()
 	if configured {
 		return true
 	}
@@ -135,7 +134,7 @@ func probeCenterWritability() (writable bool, sbURL, sbKey string) {
 		}
 	}
 	if sbURL == "" {
-		client, _, sourceURL, configured := syncSnapshot()
+		client, sourceURL, configured := syncSnapshot()
 		if !configured || client == nil {
 			return false, "", ""
 		}
@@ -155,11 +154,9 @@ func probeCenterWritability() (writable bool, sbURL, sbKey string) {
 // transientCenterStore 用可写 key 建一次性中心 Store（只用于回推，不切换
 // 运行模式、不翻 manageMode）。调用方已用 probeCenterWritability 确认可写。
 func transientCenterStore(sbURL, sbKey string) (*supabase.Store, error) {
-	_, centerKey, _, _ := syncSnapshot()
 	return supabase.New(supabase.Config{
 		URL:        sbURL,
 		ServiceKey: sbKey,
-		CenterKey:  hex.EncodeToString(centerKey),
 	}, nil)
 }
 

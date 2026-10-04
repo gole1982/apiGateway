@@ -14,7 +14,7 @@ import (
 // ---------------------------------------------------------------------------
 
 // AddPlatformKey 必须一次写对三件事：token_hash 由明文算、sort_order 携带
-// 轮换序号、token 按 center_key 加密（此处空 key → 明文直写）。
+// 轮换序号、token 明文直写（中心一律存明文）。
 func TestAddPlatformKeyWritesV2Row(t *testing.T) {
 	rt := newRouter()
 	srv := rt.serve(t)
@@ -42,7 +42,7 @@ func TestAddPlatformKeyWritesV2Row(t *testing.T) {
 		t.Errorf("platform_id = %v, want 7", body["platform_id"])
 	}
 	if body["token"] != "sk-new" {
-		t.Errorf("token = %v, want plaintext (empty center_key)", body["token"])
+		t.Errorf("token = %v, want center plaintext", body["token"])
 	}
 }
 

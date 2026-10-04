@@ -2,7 +2,7 @@
 // 直写 Supabase（写穿透、同步、失败即报错），本地 SQLite 仅作运行时镜像。
 //
 // 语义对齐（与 *db.DB 完全一致，handler 无感知）：
-//   - token：读=center_key 解密为明文，写=center_key 加密落库；
+//   - token：中心一律存明文，读写均为透传；
 //   - 凭据（v2）：中心表 credential，身份 = token_hash（由明文算），平台内轮换
 //     序号 = sort_order。读出时映射回 models.PlatformKey（KeyIndex ← sort_order）；
 //   - 端点↔凭据绑定（v2）：中心表 endpoint_credential，取代 v1 的 rapi.key_ids
@@ -27,41 +27,29 @@ import (
 	"sync"
 	"time"
 
-	"gateway/internal/crypto"
 	"gateway/internal/db"
+	"gateway/internal/logger"
 	"gateway/internal/models"
 )
 
 // Config 管理端连接参数（对应 proxy.cfg [management]）。
+// 中心 token 一律存明文（访问安全由 Supabase RLS/API key 负责）。
 type Config struct {
 	URL        string // https://xxx.supabase.co
 	ServiceKey string // service_role / sb_secret_… （读写全表；勿放代理端）
-	CenterKey  string // 可选：32 字节 hex，token 写中心前加密；留空 = 中心存明文
 }
 
 // Store 实现 store.Store。
 type Store struct {
 	url       string
 	key       string
-	centerKey []byte
 	onChanged func() // 每次成功写之后触发（刷新本地镜像）
 	http      *http.Client
 }
 
 // New 构造中心 Store。onChanged 在每次成功写后被调用（service 层用它触发
 // syncOnce 立即刷新本地镜像；可为 nil）。
-// CenterKey 可选（2026-09 起）：留空 = 中心库 token 存明文（中心访问安全由
-// Supabase RLS/API key 负责）；填 32 字节 hex = 写中心前加密、读出时解密
-// （兼容旧的 GitHub 分发威胁模型，多代理共享中心时仍建议使用）。
 func New(cfg Config, onChanged func()) (*Store, error) {
-	var ck []byte
-	if strings.TrimSpace(cfg.CenterKey) != "" {
-		k, err := crypto.ParseKey(cfg.CenterKey)
-		if err != nil {
-			return nil, fmt.Errorf("supabase store: %w", err)
-		}
-		ck = k
-	}
 	u := strings.TrimSuffix(strings.TrimSpace(cfg.URL), "/")
 	if u == "" || strings.TrimSpace(cfg.ServiceKey) == "" {
 		return nil, fmt.Errorf("supabase store: url/service_key required")
@@ -69,7 +57,6 @@ func New(cfg Config, onChanged func()) (*Store, error) {
 	return &Store{
 		url:       u,
 		key:       strings.TrimSpace(cfg.ServiceKey),
-		centerKey: ck,
 		onChanged: onChanged,
 		http:      &http.Client{Timeout: 20 * time.Second},
 	}, nil
@@ -158,28 +145,23 @@ func wrapCredErr(err error) error {
 // token 边界 + 通用行转换
 // ---------------------------------------------------------------------------
 
+// 中心 token 一律明文：dec/enc 均为透传。
+// 历史加密残留（enc: 前缀，center_key 已取消无法解密）：dec 记错并返回空，
+// fail-closed —— 透传会把 "enc:..." 当 token 用，错得更隐蔽。
 func (s *Store) dec(center string) string {
 	if center == "" {
 		return ""
 	}
-	p, err := crypto.DecryptWithKey(center, s.centerKey)
-	if err != nil {
-		// 密文解不开（center_key 换过/数据异常）：按明文容忍路径透传，
-		// 与本地 legacy 语义一致。
-		return center
+	if strings.HasPrefix(center, "enc:") {
+		logger.DefaultConsole().Error("supabase", "center token is legacy ciphertext (center_key removed, undecryptable), treating as empty",
+			"hint", "push local-over-center to rewrite center as plaintext")
+		return ""
 	}
-	return p
+	return center
 }
 
 func (s *Store) enc(plain string) string {
-	if plain == "" {
-		return ""
-	}
-	c, err := crypto.EncryptWithKey(plain, s.centerKey)
-	if err != nil {
-		return plain // 加密失败时退回明文会让问题在读取侧暴露，而不是静默丢密钥
-	}
-	return c
+	return plain
 }
 
 func timePtr(t time.Time) any {
@@ -339,8 +321,8 @@ type credRow struct {
 	IsFree     bool       `json:"is_free"`
 }
 
-// toPlatformKey 转成 store 接口形态。token 在中心是 center_key 密文，
-// 此处解出明文（与本地 store 行为对齐，热路径零改动）。
+// toPlatformKey 转成 store 接口形态。token 在中心是明文，
+// 此处直接透传（与本地 store 行为对齐，热路径零改动）。
 func (r credRow) toPlatformKey(dec func(string) string) models.PlatformKey {
 	return models.PlatformKey{
 		ID:         r.ID,
@@ -1129,9 +1111,8 @@ func (s *Store) ReplaceAll(local LocalSnapshot) (map[string]int, error) {
 	return counts, nil
 }
 
-// DumpAll 读出中心 6 张定义表的全部行（select=*）。token
-// 保持中心存储形态（center_key 密文），不会把明文引入备份。用于 push 覆盖前
-// 自动备份中心快照（service 层存 settings.center_backup_latest）。
+// DumpAll 读出中心 6 张定义表的全部行（select=*，含明文 token）。
+// 用于 push 覆盖前自动备份中心快照（service 层存 settings.center_backup_latest）。
 func (s *Store) DumpAll() (map[string][]map[string]any, error) {
 	out := map[string][]map[string]any{}
 	for _, t := range []string{tblPlatform, tblCred, tblRAPI, tblBind, tblLAPI, tblOrder} {
