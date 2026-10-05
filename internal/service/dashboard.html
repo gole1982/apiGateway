@@ -3949,7 +3949,7 @@
                             setTimeout(fetchSyncCenter, 8000);
                         } else {
                             const d = await r.json().catch(() => ({}));
-                            showToast('拉取失败', d.error?.message || '', 'error');
+                            showToast('拉取失败', d.error?.message || d.error || '', 'error');
                         }
                     } catch (e) { showToast('拉取失败', String(e), 'error'); }
                     syncPulling.value = false;
