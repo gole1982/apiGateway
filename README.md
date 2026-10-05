@@ -128,7 +128,7 @@ service_key = <sb_secret_…，可写全表；切勿提交进仓库>
 
 | 变量 | 作用 |
 |------|------|
-| `APIGATEWAY_KEY` | 主密钥（64 位 hex）。容器重建不丢 key 全靠它；留空则首启生成随机 key 且只存容器内 |
+| `APIGATEWAY_KEY` | 主密钥（64 位 hex，**必填**）。平台 token / 中心凭据都经它加密落库，**留空或非 64 位 hex 时网关拒绝启动**（不再自动生成）。务必固定并随数据库一起备份；生成：`openssl rand -hex 32` |
 | `APIGATEWAY_DATA_DIR` | 数据目录（`gateway.db` 落此），Docker 下设为持久化卷 `/app/data` |
 | `APIGATEWAY_WEB_HOST` | 面板绑定地址，覆盖默认的 `127.0.0.1`（容器内自动为 `0.0.0.0`） |
 
