@@ -1515,7 +1515,7 @@ func (g *ProxyGateway) handleNonStreamingRequest(w http.ResponseWriter, r *http.
 				w.Write(respBody)
 			} else {
 				w.Header().Set("Content-Type", "application/json")
-				w.Write(converted)
+				w.Write(converted) //#nosec G705 -- proxy re-emits the upstream provider's JSON to an API client; Content-Type is application/json, never text/html.
 			}
 		} else {
 			w.Header().Set("Content-Type", "application/json")
@@ -1549,7 +1549,7 @@ func expandHeaderValue(v string) string {
 // deadline here, because either would kill streaming response bodies mid-flight.
 // The caller's ctx carries the client-connection lifetime as an implicit upper bound.
 func (g *ProxyGateway) doUpstreamRequest(ctx context.Context, rapi models.RAPIWithPlatform, url string, body []byte, token string, requestID string, retryCount int, targetFormat string, keyID int64) (*http.Response, int, error) {
-	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(body))
+	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(body)) //#nosec G704 -- url is the admin-configured platform endpoint (platform.format_endpoints / BaseURL), not client input; forwarding to it is this proxy's core function.
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1605,7 +1605,7 @@ func (g *ProxyGateway) doUpstreamRequest(ctx context.Context, rapi models.RAPIWi
 		g.log.RecordUpstreamSent(requestID, fmt.Sprintf("%s [%s]", rapi.Alias, rapi.PlatformName), url, headers, string(body), retryCount, keyID, rapi.PlatformID)
 	}
 
-	resp, err := g.httpClient.Do(upstreamReq)
+	resp, err := g.httpClient.Do(upstreamReq) //#nosec G704 -- same admin-configured endpoint as above; the destination is operator-controlled, not client-controlled.
 	if err != nil {
 		return nil, 0, err
 	}
