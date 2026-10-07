@@ -42,7 +42,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version: '1.25'
           cache: true
 
       # 固定版本：latest 会随时间漂移，同一份代码今天绿明天红，且无法复现。

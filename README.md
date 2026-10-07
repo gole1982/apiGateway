@@ -264,7 +264,7 @@ go run ./cmd/naturalmigrate -db gateway.db
 go run ./cmd/naturalmigrate -db gateway.db -apply
 ```
 
-Go 1.21+，纯 Go SQLite 驱动（modernc.org/sqlite），无 CGO 依赖。
+Go 1.25+，纯 Go SQLite 驱动（modernc.org/sqlite），无 CGO 依赖。
 
 版本号在构建时注入（供面板显示）：
 
