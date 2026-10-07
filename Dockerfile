@@ -53,7 +53,7 @@ ARG VERSION=dev
 RUN CGO_ENABLED=0 go build -ldflags="-s -w -X gateway/internal/service.Version=${VERSION}" -o /gateway ./cmd/gateway
 
 # ---- Stage 2: Runtime ----
-FROM alpine:3.19
+FROM alpine:3.24
 
 RUN apk add --no-cache ca-certificates tzdata
 
