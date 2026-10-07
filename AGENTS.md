@@ -23,7 +23,21 @@ CGO_ENABLED=0 go build -o /tmp/gateway ./cmd/gateway
 ```
 
 - CI 见 `.github/workflows/ci.yml`：`test` / `coverage` / `gofmt` 阻断，`lint` 当前允许失败。
-- `gofmt` 全量会报 `internal/gateway/gateway_test.go`、`internal/service/metrics_test.go` —— 这两个**本来就未格式化**，非改动引入，不要顺手改。
+- **工具链统一 Go 1.25**（go.mod `go 1.25.0`；CI 全部 job、Dockerfile、README 均 1.25）。
+  `modernc.org/sqlite` ≥ 1.49 硬性要求 Go 1.25，升 Go 是升 sqlite 的前提。
+- **golangci-lint 必须 v2.x**：v1.60.3 由 go1.23 构建，目标 Go 1.25 时直接拒绝运行
+  （"the Go language version used to build golangci-lint is lower than the targeted Go version"）。
+  现用 `golangci-lint-action@v9` + `v2.12`，`.golangci.yml` 为 `version: "2"` 格式。
+  `run.timeout` 在 v2 已废弃，别再传 `--timeout`。
+- **gosec 的 G704/G705 是代理网关的架构性误报**（SSRF/XSS taint 分析，v2.12 起新增）：
+  上游 url 来自管理员配置的 `platform.format_endpoints`/`BaseURL`，非客户端输入；
+  已在 `internal/gateway/gateway.go` 三处内联 `#nosec` 并写明理由。**不要在配置里整条
+  禁用 SSRF/XSS 规则**，那会同时放过未来代码的真问题。
+- `Lint` job 的存量（`continue-on-error`，非阻断）：gofmt×2 + unparam×2 + unused×1。
+- `gofmt` 全量会报 5 个文件：`internal/gateway/gateway_test.go`、`internal/service/metrics_test.go`、
+  `internal/models/models.go`、`internal/service/insights.go`、`internal/crypto/crypto_test.go`
+  —— 这些**本来就未格式化**（Go 1.25 gofmt 对结构体字段对齐更严），非改动引入，不要顺手改。
+  它们不在 lint job 的存量清单里（该 job 的 gofmt 只扫它自己启用的路径）。
 - 仓库是**浅克隆**（`git rev-parse --is-shallow-repository`）。`master` 落后 `origin/master`；**不要擅自推送或开 PR**。
 - git user 已配置（gole1982）。提交信息末尾加 `Co-authored-by: openhands <openhands@all-hands.dev>`。
 
