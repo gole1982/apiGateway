@@ -189,7 +189,7 @@ jobs:
   # Job 4: 静态分析 (golangci-lint)
   #
   # 说明：本仓库 .golangci.yml 启用了较严格的 linter 集合（gosec / staticcheck
-  # / lll / gocyclo 等）。为让 CI 先稳定跑起来，此 job 当前【允许失败】——
+  # / dupl / unparam 等）。为让 CI 先稳定跑起来，此 job 当前【允许失败】——
   # 先让它给出报告，回头收敛问题、再由 has_* 输出改为阻断。
   #   has_errors 也可以通过到时再把 continue-on-error 移除。
   # ===========================================================================
@@ -205,14 +205,14 @@ jobs:
           go-version: '1.25'
           cache: true
 
-      # 固定版本而非 latest：latest 会随时间漂移，且 .golangci.yml 的
-      # depguard 规则块是旧格式（rules ->），新版本已改名为 linters。先固定到
-      # v1.60 稳妥跑通，后续需要再升。
+      # 固定版本而非 latest：latest 会随时间漂移。必须用 v2.x —— v1.60.3 由
+      # go1.23 构建，低于本模块目标 Go 1.25 时会直接拒绝运行（"the Go language
+      # version used to build golangci-lint is lower than the targeted Go
+      # version"）；.golangci.yml 也已迁移到 v2 的 version: "2" 格式。
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v9
         with:
-          version: v1.60.3
-          args: --timeout=5m
+          version: v2.12
 
   # ===========================================================================
   # Job 6: 自动版本标签 —— 每次 master 构建自动打「<大>.<小>.<YYYYMMDD>」tag。
