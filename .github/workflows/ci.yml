@@ -415,7 +415,7 @@ jobs:
             type=raw,value=${{ needs.tag.outputs.version }},enable=${{ needs.tag.result == 'success' }}
 
       - name: Build and push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: true
