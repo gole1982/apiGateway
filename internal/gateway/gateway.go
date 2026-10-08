@@ -26,6 +26,12 @@ import (
 	"gateway/internal/scheduler"
 )
 
+// maxProxyBodyBytes 是代理入口请求体的硬上限（64 MiB）。代理端口按设计绑
+// 0.0.0.0 且不做下游认证（见 README），任何能连到端口的人都能发请求 —— 不设
+// 上限时一个超大 body 就能把进程内存打爆（DoS）。64 MiB 远超合法 LLM 请求的
+// 体积（长上下文 + 多模态 base64 通常 < 20 MiB），只拦恶意/异常流量。
+const maxProxyBodyBytes = 64 << 20
+
 // keyModelBlock is the in-memory view of a key×model capability block: the
 // platform denied this key for this model. Expired blocks are ignored so the
 // pair is retried naturally and re-blocked on the next denial.
@@ -645,8 +651,15 @@ func (g *ProxyGateway) HandleChatCompletions(w http.ResponseWriter, r *http.Requ
 	// Detect client format from URL path.
 	clientFormat := apiformat.DetectFormatFromPath(r.URL.Path)
 
-	body, err := io.ReadAll(r.Body)
+	// MaxBytesReader 兜底内存安全（见 maxProxyBodyBytes）；超限返回 413 而不是
+	// 400 —— 客户端能据此区分"请求太大"与"请求格式错"。
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxProxyBodyBytes))
 	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			writeGatewayJSONError(w, http.StatusRequestEntityTooLarge, "Request body too large", "invalid_request")
+			return
+		}
 		http.Error(w, "Failed to read request", http.StatusBadRequest)
 		return
 	}
