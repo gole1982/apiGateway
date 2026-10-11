@@ -3,8 +3,10 @@ package gateway
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -145,5 +147,32 @@ func TestRespHeaders(t *testing.T) {
 	}
 	if len(respHeaders(&http.Response{})) != 0 {
 		t.Error("empty headers should yield empty map")
+	}
+}
+
+// infiniteZeros 是无限的 0 字节流，用于构造超限请求体而不真实分配 64MiB。
+type infiniteZeros struct{}
+
+func (infiniteZeros) Read(p []byte) (int, error) { return len(p), nil }
+
+// 请求体硬上限（maxProxyBodyBytes）：超限返回 413，上限内的请求正常走完读体
+// 流程（这里用非法 JSON 落到 400，证明没被上限误伤）。
+func TestHandleChatCompletionsBodyLimit(t *testing.T) {
+	g := &ProxyGateway{}
+
+	oversized := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		io.LimitReader(infiniteZeros{}, maxProxyBodyBytes+1))
+	rec := httptest.NewRecorder()
+	g.HandleChatCompletions(rec, oversized)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("oversized body: got %d, want 413", rec.Code)
+	}
+
+	small := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader("not-json"))
+	rec = httptest.NewRecorder()
+	g.HandleChatCompletions(rec, small)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("small invalid body: got %d, want 400", rec.Code)
 	}
 }
