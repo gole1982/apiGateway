@@ -697,6 +697,10 @@ func createWebHandler() http.Handler {
 	// 中心同步状态 + 手动刷新（设计 §5.1）。只读，定义类 CRUD 在代理端按需只读化。
 	mux.HandleFunc("/api/sync/state", handleSyncState)
 	mux.HandleFunc("/api/sync/refresh", handleSyncRefresh)
+
+	// key×model 授权探测（纯诊断：只写本地 key_model_probe 表，不改生效配置）。
+	// POST 实跑一轮并返回"现状 vs 探测真相"的偏差；GET 只读已落库的记录。
+	registerProbeRoutes(mux)
 	mux.HandleFunc("/api/sync/pull-mode", handleSyncPullMode)
 	// 排障：管理端无法上传/管理模式未激活的具体原因。
 	mux.HandleFunc("/api/sync/diagnostics", handleSyncDiagnostics)

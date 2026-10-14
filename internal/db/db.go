@@ -336,6 +336,11 @@ func initAtPath(dbPath string) error {
 		return fmt.Errorf("migrateNaturalKeys: %w", err)
 	}
 
+	// Migration: key×model 授权探测的观测记录（纯诊断，见 key_model_probe.go）。
+	// 必须排在 migrateNaturalKeys 之后 —— 它要给 credential 加列，依赖自然键终态。
+	// 不参与生效路径：网关读的是 rapi.key_ids，不读本表。
+	instance.migrateKeyModelProbe()
+
 	// Cleanup: remove orphan RAPIs whose platform no longer exists
 	instance.cleanupOrphanedRAPIs()
 
