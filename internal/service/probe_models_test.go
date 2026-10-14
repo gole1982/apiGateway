@@ -236,6 +236,36 @@ func TestDiffRealDAHLData(t *testing.T) {
 	})
 }
 
+// TestManualSourceModelsExcludedFromCatalogDiff 事故回归：source='manual' 的模型
+// 不进 /v1/models。用目录判定它们必然得出"过度授权"的假结论 —— 实测 LLM7 的
+// default（目录 67 个）、灵码的 Ling-*（目录 0）、AIHUBMIX 的 gpt-5.5-free（696 个）
+// 全部属于这一类。按需求方澄清，它们必须改用真实 API 调用探测。
+func TestManualSourceModelsExcludedFromCatalogDiff(t *testing.T) {
+	rapis := []models.RAPIWithPlatform{
+		{ID: 83, Model: "gpt-5.5-free", KeyIDs: "", Source: "manual"},
+		{ID: 84, Model: "gpt-4o", KeyIDs: "", Source: "auto_discover"},
+	}
+	catalog := []string{"gpt-4o"} // 目录里没有 gpt-5.5-free（manual 不进目录，正常）
+
+	eligible := catalogEligibleRAPIs(rapis)
+	if len(eligible) != 1 || eligible[0].Model != "gpt-4o" {
+		t.Fatalf("eligible = %v, want 只剩 auto_discover 的 gpt-4o", eligible)
+	}
+
+	over, under, agreed := diffKeyAuthorization(1, catalog, eligible)
+	if len(over) != 0 {
+		t.Errorf("manual 模型被误判成过度授权: %v", over)
+	}
+	if len(agreed) != 1 || agreed[0] != "gpt-4o" {
+		t.Errorf("agreed = %v, want [gpt-4o]", agreed)
+	}
+	_ = under
+
+	if got := manualOnlyModels(rapis); len(got) != 1 || got[0] != "gpt-5.5-free" {
+		t.Errorf("manualOnlyModels = %v, want [gpt-5.5-free]", got)
+	}
+}
+
 // TestCutoverSafe healthy 是切量闸门，不能因为"没查出问题"就放行 ——
 // 必须同时排除"没探测"和"探测失败"这两种无知状态。
 func TestCutoverSafe(t *testing.T) {
@@ -259,6 +289,10 @@ func TestCutoverSafe(t *testing.T) {
 		{
 			"有探测失败 —— 无知而非无害，必须阻断",
 			probePlatformReport{FailedKeys: 1}, false,
+		},
+		{
+			"上游没给目录 —— 同样是无从判断，必须阻断",
+			probePlatformReport{UninformativeKeys: 1}, false,
 		},
 		{
 			"只有授权不足 —— 不阻断（只是浪费容量，不是故障）",

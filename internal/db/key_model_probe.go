@@ -46,9 +46,31 @@ func (db *DB) migrateKeyModelProbe() {
 // RecordKeyModelProbe 用一次探测结果**整体替换**该 Key 的目录记录，并盖上
 // probed_at 时间戳。整体替换而非增量追加：一次成功的探测就是该 Key 目录的全量
 // 快照，增量会让"上游已下架"的模型永久残留在表里。
+//
+// 上游目录里出现重复模型名是真实存在的（实测 unorouter / TokenRouter 均有），
+// 而 PRIMARY KEY(key_id, model) 是二进制比较、大小写敏感，一个重复项就能让整个
+// INSERT 失败并回滚事务 —— 那会让该平台整轮探测白跑。所以这里先按大小写不敏感
+// 去重（与 diffKeyAuthorization 的匹配口径一致，保留首个原始大小写），再用
+// INSERT OR IGNORE 兜底。
 func (db *DB) RecordKeyModelProbe(keyID int64, modelNames []string, probedAt time.Time) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
+
+	// 大小写不敏感去重：探测目录里同一个模型因为大小写不同出现两次是常见的，
+	// 匹配判定本来就把大小写抹平，重复行只会制造约束冲突。
+	seenLV := make(map[string]string, len(modelNames))
+	names := make([]string, 0, len(modelNames))
+	for _, name := range modelNames {
+		lv := strings.ToLower(strings.TrimSpace(name))
+		if lv == "" {
+			continue
+		}
+		if _, dup := seenLV[lv]; dup {
+			continue
+		}
+		seenLV[lv] = name
+		names = append(names, strings.TrimSpace(name))
+	}
 
 	tx, err := db.conn.Begin()
 	if err != nil {
@@ -60,12 +82,8 @@ func (db *DB) RecordKeyModelProbe(keyID int64, modelNames []string, probedAt tim
 		return err
 	}
 	stamp := probedAt.UTC().Format(time.RFC3339)
-	for _, name := range modelNames {
-		name = strings.TrimSpace(name)
-		if name == "" {
-			continue
-		}
-		if _, err := tx.Exec(`INSERT INTO key_model_probe (key_id, model, probed_at) VALUES (?, ?, ?)`,
+	for _, name := range names {
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO key_model_probe (key_id, model, probed_at) VALUES (?, ?, ?)`,
 			keyID, name, stamp); err != nil {
 			return fmt.Errorf("record probe key=%d model=%q: %w", keyID, name, err)
 		}

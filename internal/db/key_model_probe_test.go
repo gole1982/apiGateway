@@ -7,6 +7,45 @@ import (
 	"gateway/internal/models"
 )
 
+// TestRecordKeyModelProbeDedupes 真实事故回归：上游目录含重复模型名，
+// 原实现逐个 INSERT 撞 PRIMARY KEY(key_id, model) 后回滚整个事务，
+// 导致该平台整轮探测白跑（实测 lock 住全部 19 个平台）。现在必须能顶住。
+func TestRecordKeyModelProbeDedupes(t *testing.T) {
+	db := setupTestDB(t)
+	db.migrateKeyModelProbe()
+
+	p := &models.Platform{Name: "dup-plat", BaseURL: "https://api.dup.test/v1", Enabled: true, Available: true}
+	if err := db.CreatePlatform(p); err != nil {
+		t.Fatalf("CreatePlatform: %v", err)
+	}
+	k := models.PlatformKey{PlatformID: p.ID, Token: "sk-dup", Enabled: true}
+	if err := db.AddPlatformKey(&k); err != nil {
+		t.Fatalf("AddPlatformKey: %v", err)
+	}
+
+	// 原样重复 + 大小写变体 + 带空白 —— 都算同一个模型
+	dupCatalog := []string{
+		"inclusionAI/Ling-3.0-flash-fin",
+		"inclusionAI/Ling-3.0-flash-fin", // 完全重复（撞 PK 的那个）
+		"  inclusionai/ling-3.0-flash-fin  ",
+		"gpt-4o",
+		"gpt-4o",
+	}
+	if err := db.RecordKeyModelProbe(k.ID, dupCatalog, time.Now()); err != nil {
+		t.Fatalf("RecordKeyModelProbe 被重复模型名打回: %v —— 整轮探测会白跑", err)
+	}
+	got, err := db.GetKeyModelProbe(k.ID)
+	if err != nil {
+		t.Fatalf("GetKeyModelProbe: %v", err)
+	}
+	if len(got) != 2 {
+		t.Errorf("去重后应有 2 个模型, got %v", got)
+	}
+	if _, ok := db.KeyProbedAt(k.ID); !ok {
+		t.Error("写成功必须盖上 probed_at（否则 GET 视图会把已探测显示成未探测）")
+	}
+}
+
 // TestKeyModelProbeRoundTrip 探测记录落库/读回，且 probed_at 能区分"从未探测"
 // 与"探测过但目录为空" —— 这两者对偏差报告的含义完全相反。
 func TestKeyModelProbeRoundTrip(t *testing.T) {

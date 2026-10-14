@@ -37,17 +37,24 @@ import (
 
 // probeKeyReport 是单把 Key 的探测结果与偏差。
 type probeKeyReport struct {
-	KeyID        int64    `json:"key_id"`
-	KeyIndex     int      `json:"key_index"`
-	KeyLabel     string   `json:"key_label"`
-	Enabled      bool     `json:"enabled"`
-	Probed       bool     `json:"probed"`
-	ProbeError   string   `json:"probe_error,omitempty"`
-	ProbedAt     string   `json:"probed_at,omitempty"`
-	CatalogSize  int      `json:"catalog_size"`
+	KeyID       int64  `json:"key_id"`
+	KeyIndex    int    `json:"key_index"`
+	KeyLabel    string `json:"key_label"`
+	Enabled     bool   `json:"enabled"`
+	Probed      bool   `json:"probed"`
+	ProbeError  string `json:"probe_error,omitempty"`
+	ProbedAt    string `json:"probed_at,omitempty"`
+	CatalogSize int    `json:"catalog_size"`
+	// Informative=false 表示上游没给目录（HTTP 200 + 空 data，聚合站常见）。
+	// 这时该 Key 对"任何模型存不存在"都提供不了信息 —— 此时 over/under 全部为空，
+	// 而不是满屏过度授权。它必须与 cutoverSafe 联动：未提供信息的探测不能放行切量。
+	Informative  bool     `json:"informative"`
 	OverGranted  []string `json:"over_granted"`
 	UnderGranted []string `json:"under_granted"`
 	Agreed       []string `json:"agreed"`
+	// ManualOnly 是 source=manual 的端点：它们本就不出现在 /v1/models 里，
+	// 目录探测对它们不适用，必须按需求方澄清用真实 API 调用探测。
+	ManualOnly []string `json:"manual_only"`
 }
 
 // probePlatformReport 是整个平台的偏差汇总。
@@ -57,13 +64,12 @@ type probePlatformReport struct {
 	Keys         []probeKeyReport `json:"keys"`
 	UnprobedKeys int              `json:"unprobed_keys"`
 	FailedKeys   int              `json:"failed_keys"`
-	OverTotal    int              `json:"over_granted_total"`
-	UnderTotal   int              `json:"under_granted_total"`
-	// Healthy 是"切量闸门"，不是"运行正常"。
-	// 它要求：无过度授权 **且** 每把可用 Key 都探测成功。
-	// 只有未探测/探测失败而恰好没查出过度授权时 healthy 必须为 false ——
-	// 那是"什么都不知道"，不是"没问题"。据此切量等于盲切。
-	Healthy bool `json:"healthy"`
+	// UninformativeKeys 是"探测成功但上游没给目录"的 Key 数。它们不能参与判定，
+	// 单看 over/under 得不出任何结论。
+	UninformativeKeys int  `json:"uninformative_keys"`
+	OverTotal         int  `json:"over_granted_total"`
+	UnderTotal        int  `json:"under_granted_total"`
+	Healthy           bool `json:"healthy"`
 }
 
 // ---------------------------------------------------------------------------
@@ -121,6 +127,32 @@ func diffKeyAuthorization(keyID int64, catalog []string, rapis []models.RAPIWith
 	return over, under, agreed
 }
 
+// catalogEligibleRAPIs 过滤出"能用目录判定"的端点。
+// source=manual 的模型是用户手工录入的，**不进 /v1/models** —— 拿目录去判定
+// 必然得出"过度授权"的假结论（实测 LLM7 的 default、灵码的 Ling-* 就是这样）。
+// 它们必须按需求方澄清用真实 API 调用探测，所以单独归类。
+func catalogEligibleRAPIs(rapis []models.RAPIWithPlatform) []models.RAPIWithPlatform {
+	out := make([]models.RAPIWithPlatform, 0, len(rapis))
+	for _, r := range rapis {
+		if strings.TrimSpace(r.Source) == "manual" {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// manualOnlyRAPIs 返回 source=manual 的端点（模型名列表），供报告标注"待真实调用探测"。
+func manualOnlyModels(rapis []models.RAPIWithPlatform) []string {
+	out := make([]string, 0)
+	for _, r := range rapis {
+		if strings.TrimSpace(r.Source) == "manual" {
+			out = append(out, r.Model)
+		}
+	}
+	return out
+}
+
 // probeHasModel 判断探测目录里是否出现该端点。Model 与 Alias 任一命中即可。
 func probeHasModel(inProbe map[string]bool, r models.RAPIWithPlatform) bool {
 	for _, name := range []string{r.Model, r.Alias} {
@@ -161,7 +193,7 @@ func probePlatformKeysModels(ctx context.Context, platformID int64) (*probePlatf
 		return nil, fmt.Errorf("读取模型失败: %w", err)
 	}
 
-	report := buildProbeReport(plat, keys, rapis)
+	report, eligible := buildProbeReport(plat, keys, rapis)
 
 	for i := range keys {
 		k := &keys[i]
@@ -190,7 +222,17 @@ func probePlatformKeysModels(ctx context.Context, platformID int64) (*probePlatf
 		kr.Probed = true
 		kr.ProbedAt = now.Format(time.RFC3339)
 		kr.CatalogSize = len(names)
-		kr.OverGranted, kr.UnderGranted, kr.Agreed = diffKeyAuthorization(k.ID, names, rapis)
+		kr.Informative = len(names) > 0
+		if !kr.Informative {
+			// 上游没给目录：该 Key 对任何模型的存废都提供不了信息。
+			// 绝不能让空目录把每个模型都算成过度授权（实测京东/灵码正是如此）。
+			report.UninformativeKeys++
+			logger.DefaultConsole().Info("probe", "[PROBE] upstream returned empty catalog, no verdict possible",
+				"platform", plat.Name, "key_id", k.ID)
+			continue
+		}
+
+		kr.OverGranted, kr.UnderGranted, kr.Agreed = diffKeyAuthorization(k.ID, names, eligible)
 		report.OverTotal += len(kr.OverGranted)
 		report.UnderTotal += len(kr.UnderGranted)
 
@@ -203,17 +245,19 @@ func probePlatformKeysModels(ctx context.Context, platformID int64) (*probePlatf
 	return report, nil
 }
 
-// cutoverSafe 只有在"掌握足够真相且没查出过度授权"时才为 true。
-// 单看 OverTotal == 0 是错的：一把 Key 都没探测过时它同样是 0，但那是无知
+// cutoverSafe 只有在"掌握足够真相且没查出过度授权"时才为 true。// 单看 OverTotal == 0 是错的：一把 Key 都没探测过时它同样是 0，但那是无知
 // 而非无害 —— 用它当闸门会导致盲切。
 func (r *probePlatformReport) cutoverSafe() bool {
-	return r.OverTotal == 0 && r.UnprobedKeys == 0 && r.FailedKeys == 0
+	return r.OverTotal == 0 &&
+		r.UnprobedKeys == 0 &&
+		r.FailedKeys == 0 &&
+		r.UninformativeKeys == 0
 }
 
 // buildProbeReportGrouped 只读视图：不发任何上游请求，直接用已落库的探测记录
 // 重建同一份偏差报告。用于事后复查，避免每次看报告都打上游。
 func buildProbeReportGrouped(plat *models.Platform, keys []models.PlatformKey, rapis []models.RAPIWithPlatform) (*probePlatformReport, error) {
-	report := buildProbeReport(plat, keys, rapis)
+	report, eligible := buildProbeReport(plat, keys, rapis)
 	for i := range keys {
 		k := &keys[i]
 		kr := &report.Keys[i]
@@ -236,7 +280,12 @@ func buildProbeReportGrouped(plat *models.Platform, keys []models.PlatformKey, r
 		kr.Probed = true
 		kr.ProbedAt = at.Format(time.RFC3339)
 		kr.CatalogSize = len(catalog)
-		kr.OverGranted, kr.UnderGranted, kr.Agreed = diffKeyAuthorization(k.ID, catalog, rapis)
+		kr.Informative = len(catalog) > 0
+		if !kr.Informative {
+			report.UninformativeKeys++
+			continue
+		}
+		kr.OverGranted, kr.UnderGranted, kr.Agreed = diffKeyAuthorization(k.ID, catalog, eligible)
 		report.OverTotal += len(kr.OverGranted)
 		report.UnderTotal += len(kr.UnderGranted)
 	}
@@ -245,12 +294,14 @@ func buildProbeReportGrouped(plat *models.Platform, keys []models.PlatformKey, r
 }
 
 // buildProbeReport 铺好骨架（逐 Key 一一对应），偏差字段由调用方填充。
-func buildProbeReport(plat *models.Platform, keys []models.PlatformKey, rapis []models.RAPIWithPlatform) *probePlatformReport {
+// eligible/manual 预先分好类，两个调用方（POST 实跑 / GET 只读）共用同一套口径。
+func buildProbeReport(plat *models.Platform, keys []models.PlatformKey, rapis []models.RAPIWithPlatform) (*probePlatformReport, []models.RAPIWithPlatform) {
 	report := &probePlatformReport{
 		PlatformID:   plat.ID,
 		PlatformName: plat.Name,
 		Keys:         make([]probeKeyReport, 0, len(keys)),
 	}
+	manual := manualOnlyModels(rapis)
 	for i := range keys {
 		k := &keys[i]
 		report.Keys = append(report.Keys, probeKeyReport{
@@ -261,9 +312,10 @@ func buildProbeReport(plat *models.Platform, keys []models.PlatformKey, rapis []
 			OverGranted:  []string{},
 			UnderGranted: []string{},
 			Agreed:       []string{},
+			ManualOnly:   manual,
 		})
 	}
-	return report
+	return report, catalogEligibleRAPIs(rapis)
 }
 
 // ---------------------------------------------------------------------------
