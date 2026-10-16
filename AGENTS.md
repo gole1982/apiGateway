@@ -120,6 +120,9 @@ CGO_ENABLED=0 go build -o /tmp/gateway ./cmd/gateway
   `gateway.db-wal`、`gateway.db-shm` 三个文件，否则读到的是上次 checkpoint 的旧数据。
 - **`modernc.org/sqlite` 的 DATETIME 列以字符串返回**，不能直接 `Scan` 进
   `sql.NullTime`（报 unsupported Scan）。先接 `sql.NullString` 再 `time.Parse(time.RFC3339, ...)`。
+- **迁移不能每次启动都 DROP + CREATE 业务表**：`key_model_probe` 旧实现每次
+  `db.Init()` 都 DROP + CREATE，清空所有已探测数据，导致"该平台是否已探测过"永远为假
+  → 每轮启动都全量重探。迁移必须先检查 schema 是否已正确，已正确就什么都不做。
 - **诊断表不进 store 接缝**：`key_model_probe` 是纯本地诊断数据，刻意不走
   `store.A()`——否则会触发 sync 脏标记、进 bundle 契约、需要中心 schema 迁移。
   它只写 `db.Get()`，与 `endpoint_credential` 完全解耦，因此**写它绝不改变网关行为**。

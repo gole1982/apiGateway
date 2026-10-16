@@ -28,27 +28,62 @@ import (
 
 // migrateKeyModelProbe 建 key_model_probe 表。幂等。
 //
-// 主键从 (key_id, model) 换成 (credential_token_hash, model)：见文件头说明。
-// 旧表数据在管理端下全部悬空（key_id 指向本地不存在的行），无可抢救价值，直接重建。
+// 主键是 (credential_token_hash, model)（见文件头说明）。
+//
+// **绝对不要每次启动都 DROP + CREATE**：那会清空所有已探测数据，让"该平台是否
+// 已探测过"的判断永远为假，导致每轮启动都全量重探（实测触发过）。
+// 只在 schema 确实不对（旧 id 主键版本）时才重建。
 func (db *DB) migrateKeyModelProbe() {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	db.execMigrationDDL("migrateKeyModelProbe/drop legacy id-keyed table", `
-		DROP TABLE IF EXISTS key_model_probe`)
-	db.execMigrationDDL("migrateKeyModelProbe/create key_model_probe", `
-		CREATE TABLE IF NOT EXISTS key_model_probe (
-			credential_token_hash TEXT NOT NULL,
-			model                 TEXT NOT NULL,
-			probed_at             DATETIME DEFAULT CURRENT_TIMESTAMP,
-			PRIMARY KEY (credential_token_hash, model)
-		)`)
-	db.execMigrationDDL("migrateKeyModelProbe/index key_model_probe.model", `
-		CREATE INDEX IF NOT EXISTS idx_key_model_probe_model ON key_model_probe(model)`)
+	// 检查当前 schema：有 key_id 列说明是旧版本，需要重建。
+	var hasKeyID, hasTokenHash bool
+	rows, err := db.conn.Query(`SELECT name FROM pragma_table_info('key_model_probe')`)
+	if err == nil {
+		for rows.Next() {
+			var n string
+			_ = rows.Scan(&n)
+			if n == "key_id" {
+				hasKeyID = true
+			}
+			if n == "credential_token_hash" {
+				hasTokenHash = true
+			}
+		}
+		rows.Close()
+	}
+	tableExists := hasKeyID || hasTokenHash
 
-	// credential.models_probed_at 是主键还是 id 时代留下的标记列，随主键一起作废：
-	// "是否已探测"现在由 key_model_probe 里有没有该 token_hash 的行决定，
-	// 两份真相只会打架。
+	if tableExists && hasKeyID {
+		// 旧 schema（id 主键）→ 重建。旧数据在管理端下全部悬空，无可抢救价值。
+		db.execMigrationDDL("migrateKeyModelProbe/drop legacy id-keyed table", `
+			DROP TABLE IF EXISTS key_model_probe`)
+		db.execMigrationDDL("migrateKeyModelProbe/create key_model_probe", `
+			CREATE TABLE key_model_probe (
+				credential_token_hash TEXT NOT NULL,
+				model                 TEXT NOT NULL,
+				probed_at             DATETIME DEFAULT CURRENT_TIMESTAMP,
+				PRIMARY KEY (credential_token_hash, model)
+			)`)
+		db.execMigrationDDL("migrateKeyModelProbe/index key_model_probe.model", `
+			CREATE INDEX IF NOT EXISTS idx_key_model_probe_model ON key_model_probe(model)`)
+	} else if !tableExists {
+		// 表不存在 → 首次创建。
+		db.execMigrationDDL("migrateKeyModelProbe/create key_model_probe", `
+			CREATE TABLE IF NOT EXISTS key_model_probe (
+				credential_token_hash TEXT NOT NULL,
+				model                 TEXT NOT NULL,
+				probed_at             DATETIME DEFAULT CURRENT_TIMESTAMP,
+				PRIMARY KEY (credential_token_hash, model)
+			)`)
+		db.execMigrationDDL("migrateKeyModelProbe/index key_model_probe.model", `
+			CREATE INDEX IF NOT EXISTS idx_key_model_probe_model ON key_model_probe(model)`)
+	}
+	// tableExists && hasTokenHash → schema 已正确，什么都不做。
+
+	// credential.models_probed_at 是旧主键时代的标记列，随主键一起作废。
+	// 只在列还存在时才 DROP（避免每次启动都跑 ALTER）。
 	var colCount int
 	row := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('credential') WHERE name='models_probed_at'`)
 	if row.Scan(&colCount) == nil && colCount > 0 {

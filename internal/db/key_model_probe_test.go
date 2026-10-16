@@ -171,16 +171,37 @@ func TestKeyModelProbeIsIndependentOfBindings(t *testing.T) {
 	}
 }
 
-// TestMigrateKeyModelProbeDropsLegacyIdKeyedTable 主键从 credential.id 换成
-// token_hash 时，旧表必须被清掉 —— 它的 key_id 在管理端下全部悬空，留着只会
-// 让"哪些凭据探测过"的判断失真。
-func TestMigrateKeyModelProbeDropsLegacyIdKeyedTable(t *testing.T) {
+// TestMigrateKeyModelProbeKeepsDataWhenSchemaCorrect 关键回归：schema 已正确时
+// 迁移必须**什么都不做**。旧实现每次启动都 DROP + CREATE，清空所有探测数据，
+// 导致"该平台是否已探测过"永远为假 → 每轮启动都全量重探（实测触发过）。
+func TestMigrateKeyModelProbeKeepsDataWhenSchemaCorrect(t *testing.T) {
 	db := setupTestDB(t)
 	db.migrateKeyModelProbe()
 
-	// 模拟旧 schema：id 主键 + 一行悬空数据。
-	// 必须先 DROP —— CREATE TABLE IF NOT EXISTS 在表已存在时不会改结构，
-	// 那样 INSERT 会撞"no column named key_id"。
+	hash := models.TokenHash("sk-keep")
+	if err := db.RecordKeyModelProbe(hash, []string{"m1", "m2"}, time.Now()); err != nil {
+		t.Fatalf("RecordKeyModelProbe: %v", err)
+	}
+
+	// 再跑一次迁移：schema 已正确，不应清空数据。
+	db.migrateKeyModelProbe()
+
+	got, err := db.GetKeyModelProbe(hash)
+	if err != nil {
+		t.Fatalf("GetKeyModelProbe: %v", err)
+	}
+	if len(got) != 2 {
+		t.Errorf("迁移后数据被清空, got %v, want 2 行", got)
+	}
+}
+
+// TestMigrateKeyModelProbeRebuildsLegacyIdKeyedTable 旧 schema（id 主键）必须被
+// 重建为 token_hash 主键。旧数据在管理端下全部悬空，无可抢救价值。
+func TestMigrateKeyModelProbeRebuildsLegacyIdKeyedTable(t *testing.T) {
+	db := setupTestDB(t)
+	db.migrateKeyModelProbe()
+
+	// 模拟旧 schema：先 DROP 再建 id 主键版本（CREATE IF NOT EXISTS 不会改结构）。
 	db.execMigrationDDL("test/drop key_model_probe", `DROP TABLE IF EXISTS key_model_probe`)
 	if _, err := db.conn.Exec(`CREATE TABLE key_model_probe (
 		key_id INTEGER NOT NULL, model TEXT NOT NULL,
@@ -192,7 +213,7 @@ func TestMigrateKeyModelProbeDropsLegacyIdKeyedTable(t *testing.T) {
 		t.Fatalf("insert legacy row: %v", err)
 	}
 
-	// 再跑一次迁移：应重建为 token_hash 主键
+	// 再跑一次迁移：应重建为 token_hash 主键。
 	db.migrateKeyModelProbe()
 
 	var cols string
@@ -214,6 +235,13 @@ func TestMigrateKeyModelProbeDropsLegacyIdKeyedTable(t *testing.T) {
 		t.Errorf("旧表数据应被清空, got %d 行", legacyRows)
 	}
 
-	// 幂等：再跑一次不报错
+	// 幂等：再跑一次不报错、不清数据。
+	if err := db.RecordKeyModelProbe(models.TokenHash("sk-new"), []string{"m"}, time.Now()); err != nil {
+		t.Fatalf("RecordKeyModelProbe after rebuild: %v", err)
+	}
 	db.migrateKeyModelProbe()
+	got, _ := db.GetKeyModelProbe(models.TokenHash("sk-new"))
+	if len(got) != 1 {
+		t.Errorf("二次迁移后数据丢失, got %v", got)
+	}
 }
