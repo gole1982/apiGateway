@@ -1,6 +1,7 @@
 package db
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -8,8 +9,8 @@ import (
 )
 
 // TestRecordKeyModelProbeDedupes 真实事故回归：上游目录含重复模型名，
-// 原实现逐个 INSERT 撞 PRIMARY KEY(key_id, model) 后回滚整个事务，
-// 导致该平台整轮探测白跑（实测 lock 住全部 19 个平台）。现在必须能顶住。
+// 原实现逐个 INSERT 撞 PRIMARY KEY 后回滚整个事务，导致该平台整轮探测白跑
+// （实测曾让全部 19 个平台的探测都读不回来）。现在必须能顶住。
 func TestRecordKeyModelProbeDedupes(t *testing.T) {
 	db := setupTestDB(t)
 	db.migrateKeyModelProbe()
@@ -22,27 +23,46 @@ func TestRecordKeyModelProbeDedupes(t *testing.T) {
 	if err := db.AddPlatformKey(&k); err != nil {
 		t.Fatalf("AddPlatformKey: %v", err)
 	}
+	hash := models.TokenHash("sk-dup")
 
-	// 原样重复 + 大小写变体 + 带空白 —— 都算同一个模型
+	// 完全重复 + 大小写变体 + 带空白 —— 都算同一个模型
 	dupCatalog := []string{
 		"inclusionAI/Ling-3.0-flash-fin",
-		"inclusionAI/Ling-3.0-flash-fin", // 完全重复（撞 PK 的那个）
+		"inclusionAI/Ling-3.0-flash-fin", // 撞 PK 的那个
 		"  inclusionai/ling-3.0-flash-fin  ",
 		"gpt-4o",
 		"gpt-4o",
 	}
-	if err := db.RecordKeyModelProbe(k.ID, dupCatalog, time.Now()); err != nil {
+	if err := db.RecordKeyModelProbe(hash, dupCatalog, time.Now()); err != nil {
 		t.Fatalf("RecordKeyModelProbe 被重复模型名打回: %v —— 整轮探测会白跑", err)
 	}
-	got, err := db.GetKeyModelProbe(k.ID)
+	got, err := db.GetKeyModelProbe(hash)
 	if err != nil {
 		t.Fatalf("GetKeyModelProbe: %v", err)
 	}
 	if len(got) != 2 {
 		t.Errorf("去重后应有 2 个模型, got %v", got)
 	}
-	if _, ok := db.KeyProbedAt(k.ID); !ok {
-		t.Error("写成功必须盖上 probed_at（否则 GET 视图会把已探测显示成未探测）")
+	if _, ok, err := db.CredentialProbedAt(hash); err != nil || !ok {
+		t.Errorf("写成功必须能读回 probed_at, ok=%v err=%v", ok, err)
+	}
+}
+
+// TestRecordKeyModelProbeEmptyTokenSkipped 空 token 的凭据（动态令牌占位行）
+// 没有可探测的上游凭据，必须安静跳过而不是写出一堆空记录。
+func TestRecordKeyModelProbeEmptyTokenSkipped(t *testing.T) {
+	db := setupTestDB(t)
+	db.migrateKeyModelProbe()
+
+	if err := db.RecordKeyModelProbe("", []string{"m1", "m2"}, time.Now()); err != nil {
+		t.Fatalf("空 token_hash 应安静跳过, got %v", err)
+	}
+	all, err := db.GetAllKeyModelProbes()
+	if err != nil {
+		t.Fatalf("GetAllKeyModelProbes: %v", err)
+	}
+	if len(all) != 0 {
+		t.Errorf("空 token_hash 不该写入任何行, got %v", all)
 	}
 }
 
@@ -50,8 +70,6 @@ func TestRecordKeyModelProbeDedupes(t *testing.T) {
 // 与"探测过但目录为空" —— 这两者对偏差报告的含义完全相反。
 func TestKeyModelProbeRoundTrip(t *testing.T) {
 	db := setupTestDB(t)
-	// setupTestDB 只跑到自然键终态；探测表由本测试单独跑迁移（与 db_test.go
-	// 里 migrateRAPIUniqueAliasToPerPlatform 的用法一致），顺带回归迁移路径。
 	db.migrateKeyModelProbe()
 
 	p := &models.Platform{Name: "probe-plat", BaseURL: "https://api.probe.test/v1", Enabled: true, Available: true}
@@ -62,56 +80,54 @@ func TestKeyModelProbeRoundTrip(t *testing.T) {
 	if err := db.AddPlatformKey(&k); err != nil {
 		t.Fatalf("AddPlatformKey: %v", err)
 	}
+	hash := models.TokenHash("sk-probe")
 
 	// 1. 从未探测
-	if _, ok := db.KeyProbedAt(k.ID); ok {
-		t.Error("新 Key 不应有 probed_at")
+	if _, ok, _ := db.CredentialProbedAt(hash); ok {
+		t.Error("新凭据不应有 probed_at")
 	}
-	if got, err := db.GetKeyModelProbe(k.ID); err != nil || len(got) != 0 {
+	if got, err := db.GetKeyModelProbe(hash); err != nil || len(got) != 0 {
 		t.Errorf("未探测时目录应为空: got=%v err=%v", got, err)
 	}
 
 	// 2. 探测到两个模型
 	at := time.Now().Add(-90 * time.Second)
-	if err := db.RecordKeyModelProbe(k.ID, []string{"m-a", "m-b"}, at); err != nil {
+	if err := db.RecordKeyModelProbe(hash, []string{"m-a", "m-b"}, at); err != nil {
 		t.Fatalf("RecordKeyModelProbe: %v", err)
 	}
-	got, err := db.GetKeyModelProbe(k.ID)
+	got, err := db.GetKeyModelProbe(hash)
 	if err != nil {
 		t.Fatalf("GetKeyModelProbe: %v", err)
 	}
 	if len(got) != 2 || got[0] != "m-a" || got[1] != "m-b" {
 		t.Errorf("目录 = %v, want [m-a m-b]", got)
 	}
-	gotAt, ok := db.KeyProbedAt(k.ID)
-	if !ok {
-		t.Fatal("探测后应有 probed_at")
+	gotAt, ok, err := db.CredentialProbedAt(hash)
+	if err != nil || !ok {
+		t.Fatalf("探测后应能读回 probed_at, ok=%v err=%v", ok, err)
 	}
 	if d := gotAt.Sub(at); d > 2*time.Second || d < -2*time.Second {
 		t.Errorf("probed_at 偏差 %v，期望贴近 %v", d, at)
 	}
 
 	// 3. 二次探测整体替换：上游下架 m-b 后，旧记录不得残留
-	if err := db.RecordKeyModelProbe(k.ID, []string{"m-a", "m-c"}, time.Now()); err != nil {
+	if err := db.RecordKeyModelProbe(hash, []string{"m-a", "m-c"}, time.Now()); err != nil {
 		t.Fatalf("RecordKeyModelProbe 2nd: %v", err)
 	}
-	got2, _ := db.GetKeyModelProbe(k.ID)
+	got2, _ := db.GetKeyModelProbe(hash)
 	if len(got2) != 2 || got2[0] != "m-a" || got2[1] != "m-c" {
 		t.Errorf("二次探测后目录 = %v, want [m-a m-c]（m-b 必须消失）", got2)
 	}
 
 	// 4. 空目录 + probed_at —— 与"从未探测"语义不同，必须区分得开
-	k2 := models.PlatformKey{PlatformID: p.ID, Token: "sk-probe-2", Enabled: true}
-	if err := db.AddPlatformKey(&k2); err != nil {
-		t.Fatalf("AddPlatformKey k2: %v", err)
-	}
-	if err := db.RecordKeyModelProbe(k2.ID, []string{"  ", ""}, time.Now()); err != nil {
+	hash2 := models.TokenHash("sk-probe-2")
+	if err := db.RecordKeyModelProbe(hash2, []string{"  ", ""}, time.Now()); err != nil {
 		t.Fatalf("RecordKeyModelProbe 空目录: %v", err)
 	}
-	if _, ok := db.KeyProbedAt(k2.ID); !ok {
+	if _, ok, _ := db.CredentialProbedAt(hash2); !ok {
 		t.Error("空目录的探测仍应标记 probed_at（它证明探测发生过）")
 	}
-	if got, _ := db.GetKeyModelProbe(k2.ID); len(got) != 0 {
+	if got, _ := db.GetKeyModelProbe(hash2); len(got) != 0 {
 		t.Errorf("空白模型名应被丢弃, got %v", got)
 	}
 }
@@ -142,7 +158,7 @@ func TestKeyModelProbeIsIndependentOfBindings(t *testing.T) {
 	beforeIDs := before.KeyIDs
 
 	// 探测到一堆这个 Key 根本无权访问的模型
-	if err := db.RecordKeyModelProbe(k.ID, []string{"m-x", "m-y", "m-z"}, time.Now()); err != nil {
+	if err := db.RecordKeyModelProbe(models.TokenHash("sk-iso"), []string{"m-x", "m-y", "m-z"}, time.Now()); err != nil {
 		t.Fatalf("RecordKeyModelProbe: %v", err)
 	}
 
@@ -153,4 +169,51 @@ func TestKeyModelProbeIsIndependentOfBindings(t *testing.T) {
 	if after.KeyIDs != beforeIDs {
 		t.Errorf("探测改变了生效配置！key_ids: %q -> %q", beforeIDs, after.KeyIDs)
 	}
+}
+
+// TestMigrateKeyModelProbeDropsLegacyIdKeyedTable 主键从 credential.id 换成
+// token_hash 时，旧表必须被清掉 —— 它的 key_id 在管理端下全部悬空，留着只会
+// 让"哪些凭据探测过"的判断失真。
+func TestMigrateKeyModelProbeDropsLegacyIdKeyedTable(t *testing.T) {
+	db := setupTestDB(t)
+	db.migrateKeyModelProbe()
+
+	// 模拟旧 schema：id 主键 + 一行悬空数据。
+	// 必须先 DROP —— CREATE TABLE IF NOT EXISTS 在表已存在时不会改结构，
+	// 那样 INSERT 会撞"no column named key_id"。
+	db.execMigrationDDL("test/drop key_model_probe", `DROP TABLE IF EXISTS key_model_probe`)
+	if _, err := db.conn.Exec(`CREATE TABLE key_model_probe (
+		key_id INTEGER NOT NULL, model TEXT NOT NULL,
+		probed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		PRIMARY KEY (key_id, model))`); err != nil {
+		t.Fatalf("create legacy table: %v", err)
+	}
+	if _, err := db.conn.Exec(`INSERT INTO key_model_probe (key_id, model) VALUES (999, 'legacy')`); err != nil {
+		t.Fatalf("insert legacy row: %v", err)
+	}
+
+	// 再跑一次迁移：应重建为 token_hash 主键
+	db.migrateKeyModelProbe()
+
+	var cols string
+	if err := db.conn.QueryRow(`SELECT group_concat(name) FROM pragma_table_info('key_model_probe')`).Scan(&cols); err != nil {
+		t.Fatalf("pragma: %v", err)
+	}
+	if strings.Contains(cols, "key_id") {
+		t.Errorf("旧主键 key_id 未被替换, cols=%s", cols)
+	}
+	if !strings.Contains(cols, "credential_token_hash") {
+		t.Errorf("新主键 credential_token_hash 未出现, cols=%s", cols)
+	}
+
+	var legacyRows int
+	if err := db.conn.QueryRow(`SELECT COUNT(*) FROM key_model_probe`).Scan(&legacyRows); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if legacyRows != 0 {
+		t.Errorf("旧表数据应被清空, got %d 行", legacyRows)
+	}
+
+	// 幂等：再跑一次不报错
+	db.migrateKeyModelProbe()
 }

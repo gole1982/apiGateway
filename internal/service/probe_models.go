@@ -213,7 +213,7 @@ func probePlatformKeysModels(ctx context.Context, platformID int64) (*probePlatf
 		}
 
 		now := time.Now()
-		if err := db.Get().RecordKeyModelProbe(k.ID, names, now); err != nil {
+		if err := db.Get().RecordKeyModelProbe(models.TokenHash(k.Token), names, now); err != nil {
 			// 落库失败不影响本次报告：偏差已经算出来了，只是下次读不到。
 			logger.DefaultConsole().Error("probe", "[PROBE] persist probe failed",
 				"key_id", k.ID, "error", err.Error())
@@ -265,13 +265,19 @@ func buildProbeReportGrouped(plat *models.Platform, keys []models.PlatformKey, r
 			kr.ProbeError = "密钥已禁用，未探测"
 			continue
 		}
-		at, ok := db.Get().KeyProbedAt(k.ID)
+		hash := models.TokenHash(k.Token)
+		at, ok, err := db.Get().CredentialProbedAt(hash)
+		if err != nil {
+			kr.ProbeError = "读取探测记录失败: " + err.Error()
+			report.FailedKeys++
+			continue
+		}
 		if !ok {
 			kr.ProbeError = "尚未探测"
 			report.UnprobedKeys++
 			continue
 		}
-		catalog, err := db.Get().GetKeyModelProbe(k.ID)
+		catalog, err := db.Get().GetKeyModelProbe(hash)
 		if err != nil {
 			kr.ProbeError = "读取探测记录失败: " + err.Error()
 			report.FailedKeys++
