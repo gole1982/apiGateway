@@ -341,6 +341,9 @@ func initAtPath(dbPath string) error {
 	// 不参与生效路径：网关读的是 rapi.key_ids，不读本表。
 	instance.migrateKeyModelProbe()
 
+	// Migration: rapi 目录判定的冷却状态（见 catalog_state.go）。
+	instance.migrateCatalogState()
+
 	// Cleanup: remove orphan RAPIs whose platform no longer exists
 	instance.cleanupOrphanedRAPIs()
 
