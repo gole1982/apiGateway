@@ -102,3 +102,24 @@ CGO_ENABLED=0 go build -o /tmp/gateway ./cmd/gateway
   它保证任何跑 `go test` 的 job 都不会因缺 `APIGATEWAY_KEY` 而红；**不要删**，新增 job 也无需重复声明。
   新增会调 `db.Init()` 的测试仍应 `t.Setenv` 自带 key（见 `logger_test.go`），以支持本地无 env 直跑。
 - 改过 `ci.yml` 后用 `actionlint .github/workflows/ci.yml` 自检（本地已装于 /tmp/actionlint）。
+- **管理端下 `store.A()` 与 `db.Get()` 是两套 id 空间**。`store.A()` 返回中心侧 id
+  （实测 key_id=72/74），本地 SQLite 镜像的 `credential.id` 是另一套自增序列
+  （实测只有 1..38，且本地镜像可能根本不含该平台）。**任何要落本地表的诊断数据
+  必须用 `token_hash` 做主键**（`models.TokenHash(token)`，凭据自然键，中心/本地一致）。
+  用 `credential.id` 做主键会让整表悬空、标记列永远匹配不到。
+- **上游 `/v1/models` 可能返回 200 + 空 `data`**（聚合站常见，无维护白名单）。
+  空目录 ≠ 全部模型缺席——**不能据此判定 over-grant**，否则满屏误报。判定前必须
+  区分"目录非空但模型缺席"（真实偏差）与"目录为空"（无从判断）。
+- **上游目录可能含重复模型名**（实测 unorouter / TokenRouter 均有）。写探测表时
+  必须去重 + `INSERT OR IGNORE`，否则一个重复项撞 PRIMARY KEY 会回滚整个事务，
+  让该平台整轮探测白跑。
+- **`source='manual'` 的模型不进 `/v1/models`**。用目录判定它们必然得出 over-grant
+  的假结论（实测 LLM7 `default`、AIHUBMIX `gpt-5.5-free`、灵码 `Ling-*`）。
+  手工模型必须改用真实 API 调用探测。
+- **`docker cp` 只拷主 DB 文件会读到陈旧状态**：必须同时拷 `gateway.db`、
+  `gateway.db-wal`、`gateway.db-shm` 三个文件，否则读到的是上次 checkpoint 的旧数据。
+- **`modernc.org/sqlite` 的 DATETIME 列以字符串返回**，不能直接 `Scan` 进
+  `sql.NullTime`（报 unsupported Scan）。先接 `sql.NullString` 再 `time.Parse(time.RFC3339, ...)`。
+- **诊断表不进 store 接缝**：`key_model_probe` 是纯本地诊断数据，刻意不走
+  `store.A()`——否则会触发 sync 脏标记、进 bundle 契约、需要中心 schema 迁移。
+  它只写 `db.Get()`，与 `endpoint_credential` 完全解耦，因此**写它绝不改变网关行为**。
