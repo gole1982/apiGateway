@@ -65,7 +65,7 @@ jobs:
         run: CGO_ENABLED=0 go build -o bin/diaglog-linux ./cmd/diaglog
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gateway-binaries
           path: bin/
@@ -139,7 +139,7 @@ jobs:
 
       - name: Upload coverage log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-log
           path: cover.txt
