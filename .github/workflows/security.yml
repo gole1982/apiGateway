@@ -38,7 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true   # TODO: 存量漏洞处理完后改为阻断
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v5
         with:
@@ -64,7 +64,7 @@ jobs:
       # CodeQL 分析需要写 results；私有仓库还需 actions: read。
       security-events: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
