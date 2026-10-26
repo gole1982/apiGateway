@@ -11,6 +11,9 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"strings"
+
+	"gateway/internal/models"
 )
 
 // migrateCatalogState 建 rapi_catalog_state 表。幂等。
@@ -75,4 +78,116 @@ func (db *DB) GetRecoverConfirmations() (int, error) {
 		return 2, nil
 	}
 	return n, nil
+}
+
+// LocalRAPIIDByNaturalKey 按 (platform.base_url, rapi.model) 回查本地 rapi.id。
+//
+// 管理模式下 store.A() 返回中心侧 id，本地 SQLite 的自增序列是另一套；
+// 健康态只能写本地表，直接用中心 id 会改错行或改不到。自然键在中心/本地一致，
+// 因此统一用它在本地镜像里定位。
+func (db *DB) LocalRAPIIDByNaturalKey(platformBaseURL, model string) (int64, bool, error) {
+	want := models.NormalizeBaseURL(platformBaseURL)
+	model = strings.TrimSpace(model)
+	if want == "" || model == "" {
+		return 0, false, nil
+	}
+
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	rows, err := db.conn.Query(`
+		SELECT r.id, p.base_url
+		FROM rapi r JOIN platform p ON p.id = r.platform_id
+		WHERE r.model = ?`, model)
+	if err != nil {
+		return 0, false, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			id   int64
+			base string
+		)
+		if err := rows.Scan(&id, &base); err != nil {
+			return 0, false, err
+		}
+		if models.NormalizeBaseURL(base) == want {
+			return id, true, nil
+		}
+	}
+	return 0, false, rows.Err()
+}
+
+// LocalPlatformHasRAPIs 报告本地镜像里该平台是否已有端点记录。
+// 管理模式/代理模式首次启动时，中心定义要等首轮 sync 才会落到本地；
+// 目录同步在此之前探测会写下一批 probe 记录，却因本地无 rapi 可写而
+// 无法应用判定，之后又因"已探测过"不再重试。调用方应先确认就绪。
+func (db *DB) LocalPlatformHasRAPIs(platformBaseURL string) (bool, error) {
+	want := models.NormalizeBaseURL(platformBaseURL)
+	if want == "" {
+		return false, nil
+	}
+
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	rows, err := db.conn.Query(`
+		SELECT p.base_url FROM platform p
+		WHERE EXISTS (SELECT 1 FROM rapi r WHERE r.platform_id = p.id)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var base string
+		if err := rows.Scan(&base); err != nil {
+			return false, err
+		}
+		if models.NormalizeBaseURL(base) == want {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+// LocalUnavailableRAPIModels 返回本地镜像中该平台"启用但不可用"的模型集合
+// （小写、去空白）。目录同步据此判断是否还需要恢复轮次，以及哪些 manual
+// 模型需要用真实调用重探。platformBaseURL 为空时返回空集合。
+func (db *DB) LocalUnavailableRAPIModels(platformBaseURL string) (map[string]struct{}, error) {
+	want := models.NormalizeBaseURL(platformBaseURL)
+	out := make(map[string]struct{})
+	if want == "" {
+		return out, nil
+	}
+
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	rows, err := db.conn.Query(`
+		SELECT r.model, p.base_url
+		FROM rapi r JOIN platform p ON p.id = r.platform_id
+		WHERE r.enabled = 1 AND r.available = 0`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			model string
+			base  string
+		)
+		if err := rows.Scan(&model, &base); err != nil {
+			return nil, err
+		}
+		if models.NormalizeBaseURL(base) != want {
+			continue
+		}
+		if m := strings.ToLower(strings.TrimSpace(model)); m != "" {
+			out[m] = struct{}{}
+		}
+	}
+	return out, rows.Err()
 }

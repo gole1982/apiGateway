@@ -5,7 +5,8 @@
 // 若该 Key 权限偏低，得到的目录是残缺的；发现向导会据此把"当前可用但 keys[0] 没权限"
 // 的模型判为已下线并硬删（dashboard.html 的 importToRemove → DELETE ?sync=true）。
 //
-// 本文件在启动后异步执行一轮（最低优先级，不阻塞 ready）：
+// 本文件在启动后异步执行一轮（最低优先级，不阻塞 ready），之后周期性重跑
+// 仍有不可用端点的平台 —— 恢复要求连续 N 次确认，只跑一轮永远无法完成：
 //  1. 对每个启用平台的每把启用 Key，拉取上游 /v1/models 目录
 //  2. 对每个 rapi，根据各 Key 的探测状态判定失效/恢复/保持
 //  3. 失效 = available=0 + unavailable_reason（**绝不删行**）
@@ -58,14 +59,16 @@ type keyProbeState struct {
 	Enabled bool     // 凭据是否启用
 	Dead    bool     // 凭据级失败（401/402/403 非 capability）—— 已知服务不了任何模型
 	Failed  bool     // 网络级失败（超时/DNS/5xx）—— 状态未知
-	Catalog []string // 探测到的上游目录（空 = 上游不发布目录）
+	Catalog []string // 探测到的上游目录（空 = 上游不发布目录，不能据此判定缺席）
 }
 
 // judgeRAPI 纯函数：根据各 Key 的探测状态，判定 rapi 应该失效/恢复/保持。
+// modelNames 同时包含 Model 与 Alias：两者不是简单的大小写关系，上游目录可能
+// 只出现其中一种（见 probe_models.go 的 probeHasModel）。
 //
 // 只输出有意义的动作：pool 非空就是恢复候选（是否真正恢复由冷却计数决定），
 // pool 空且 unknown 空就是失效，pool 空但 unknown 非空就是保持。
-func judgeRAPI(model string, keys []keyProbeState) (judgmentAction, string) {
+func judgeRAPI(modelNames []string, keys []keyProbeState) (judgmentAction, string) {
 	pool, unknown := 0, 0
 	for _, k := range keys {
 		if !k.Enabled {
@@ -74,11 +77,13 @@ func judgeRAPI(model string, keys []keyProbeState) (judgmentAction, string) {
 		if k.Dead {
 			continue // 已知死，不进 pool 也不进 unknown
 		}
-		if k.Failed {
+		// 空目录 ≠ 所有模型都缺席：上游 200 + 空 data 很常见（聚合站），
+		// 这种 Key 对任何模型的存废都提供不了信息，只能算未知。
+		if k.Failed || !catalogInformative(k.Catalog) {
 			unknown++
 			continue
 		}
-		if catalogHasModel(k.Catalog, model) {
+		if catalogHasAnyModel(k.Catalog, modelNames) {
 			pool++
 		}
 	}
@@ -87,10 +92,31 @@ func judgeRAPI(model string, keys []keyProbeState) (judgmentAction, string) {
 	case pool > 0:
 		return judgmentRecover, ""
 	case unknown > 0:
-		return judgmentHold, "有 Key 尚未探测成功，等待下一轮"
+		return judgmentHold, "有 Key 目录为空或尚未探测成功，等待下一轮"
 	default:
 		return judgmentInvalidate, "所有 Key 的目录均不含此模型"
 	}
+}
+
+// catalogInformative 报告目录是否包含至少一个非空模型名。
+// 空目录只能证明"上游没给目录"，不能证明"所有模型都缺席"。
+func catalogInformative(catalog []string) bool {
+	for _, m := range catalog {
+		if strings.TrimSpace(m) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// catalogHasAnyModel 判断目录是否命中任一标识（Model / Alias）。
+func catalogHasAnyModel(catalog, modelNames []string) bool {
+	for _, name := range modelNames {
+		if catalogHasModel(catalog, name) {
+			return true
+		}
+	}
+	return false
 }
 
 // catalogHasModel 大小写不敏感判断目录里是否出现该模型。
@@ -173,9 +199,17 @@ func probeChatCompletion(ctx context.Context, baseURL, model, token string, clie
 // catalogSyncActive 保证同一时刻只有一轮目录同步。
 var catalogSyncActive sync.Mutex
 
-// runCatalogSync 启动后异步执行一轮目录同步。
-// 跳过已被探测过的平台（手工或上次自动）—— 每个平台只自动探测一次，
-// 之后由用户手工触发（与 probe_models.go 的 POST 端点同一入口）。
+// catalogSyncTarget 是一轮目录同步要处理的平台。
+type catalogSyncTarget struct {
+	platform    models.Platform
+	recovering  bool                // true = 已探测过，本轮只为恢复不可用端点
+	unavailable map[string]struct{} // 本地镜像里启用但不可用的模型（小写）
+}
+
+// runCatalogSync 执行一轮目录同步。
+//
+// 目标平台 = 从未探测过的平台 ∪ 本地仍有不可用端点的平台。
+// 后者让"连续 N 次确认才恢复"的冷却真正可达成；健康平台不会被反复探测。
 func runCatalogSync(ctx context.Context) {
 	if !catalogSyncActive.TryLock() {
 		return
@@ -188,16 +222,41 @@ func runCatalogSync(ctx context.Context) {
 		return
 	}
 
-	// 只处理启用且从未探测过的平台。
-	var targets []models.Platform
+	var targets []catalogSyncTarget
 	for _, p := range platforms {
 		if !p.Enabled {
 			continue
 		}
-		if platformProbed(p.ID) {
+		// 管理模式/代理模式首次启动时本地镜像可能还没同步下来：此时探测会
+		// 写下"已探测"记录，却无法应用判定（本地没有对应 rapi 行），
+		// 之后平台又因已探测被跳过。未就绪就留给下一轮。
+		ready, err := db.Get().LocalPlatformHasRAPIs(p.BaseURL)
+		if err != nil {
+			logger.DefaultConsole().Warn("catalog", "[CATALOG] read local mirror failed",
+				"platform", p.Name, "error", err.Error())
 			continue
 		}
-		targets = append(targets, p)
+		if !ready {
+			continue
+		}
+		probed := platformProbed(p.ID)
+		var unavailable map[string]struct{}
+		if probed {
+			unavailable, err = db.Get().LocalUnavailableRAPIModels(p.BaseURL)
+			if err != nil {
+				logger.DefaultConsole().Warn("catalog", "[CATALOG] read local health failed",
+					"platform", p.Name, "error", err.Error())
+				continue
+			}
+		}
+		if !catalogSyncNeeded(probed, len(unavailable)) {
+			continue
+		}
+		targets = append(targets, catalogSyncTarget{
+			platform:    p,
+			recovering:  probed,
+			unavailable: unavailable,
+		})
 	}
 	if len(targets) == 0 {
 		return
@@ -209,21 +268,47 @@ func runCatalogSync(ctx context.Context) {
 	// 平台间并发，平台内 Key 顺序执行（避免打爆上游）。
 	sem := make(chan struct{}, catalogSyncConcurrency)
 	var wg sync.WaitGroup
-	for _, p := range targets {
+	for _, t := range targets {
 		wg.Add(1)
-		go func(plat models.Platform) {
+		go func(t catalogSyncTarget) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			if err := syncPlatformCatalog(ctx, plat); err != nil {
+			if err := syncPlatformCatalog(ctx, t.platform, t.recovering, t.unavailable); err != nil {
 				logger.DefaultConsole().Warn("catalog", "[CATALOG] platform sync failed",
-					"platform", plat.Name, "error", err.Error())
+					"platform", t.platform.Name, "error", err.Error())
 			}
-		}(p)
+		}(t)
 	}
 	wg.Wait()
 
 	logger.DefaultConsole().Info("catalog", "[CATALOG] sync done", "platforms", len(targets))
+}
+
+// catalogSyncNeeded 决定某平台本轮是否要探测：从未探测过，或仍有待恢复端点。
+func catalogSyncNeeded(probed bool, unavailableCount int) bool {
+	return !probed || unavailableCount > 0
+}
+
+// catalogSyncInterval 是恢复轮次的周期。只针对仍有不可用端点的平台重探，
+// 健康平台会被 catalogSyncNeeded 跳过，因此不会持续打上游。
+const catalogSyncInterval = 30 * time.Minute
+
+// startCatalogSyncLoop 启动时立即跑一轮，之后按 catalogSyncInterval 重跑。
+// stopCh 关闭后退出。
+func startCatalogSyncLoop(stopCh <-chan struct{}) {
+	runCatalogSync(context.Background())
+
+	ticker := time.NewTicker(catalogSyncInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stopCh:
+			return
+		case <-ticker.C:
+			runCatalogSync(context.Background())
+		}
+	}
 }
 
 // catalogSyncConcurrency 是平台间并发上限。
@@ -251,7 +336,9 @@ func platformProbed(platformID int64) bool {
 }
 
 // syncPlatformCatalog 探测单个平台的全部 Key，判定并应用失效/恢复。
-func syncPlatformCatalog(ctx context.Context, plat models.Platform) error {
+// recovering=true 时只重探当前不可用的 manual 模型——真实 API 调用有成本，
+// 健康模型不需要每轮都打一遍。
+func syncPlatformCatalog(ctx context.Context, plat models.Platform, recovering bool, unavailable map[string]struct{}) error {
 	keys, err := store.A().GetPlatformKeys(plat.ID)
 	if err != nil {
 		return fmt.Errorf("get keys: %w", err)
@@ -301,17 +388,38 @@ func syncPlatformCatalog(ctx context.Context, plat models.Platform) error {
 			continue // 用户禁用的不自动失效
 		}
 
+		isManual := strings.TrimSpace(r.Source) == "manual"
+		if isManual && !manualNeedsProbe(recovering, r.Model, unavailable) {
+			// 恢复轮次只重探当前不可用的 manual 模型：真实调用有成本。
+			continue
+		}
+
+		// 健康态只能写本地 SQLite；store.A() 在管理模式下返回中心侧 id，
+		// 与本地自增序列无关，必须按自然键回查本地 id（见 AGENTS.md）。
+		localID, ok, err := db.Get().LocalRAPIIDByNaturalKey(plat.BaseURL, r.Model)
+		if err != nil {
+			logger.DefaultConsole().Error("catalog", "[CATALOG] resolve local rapi failed",
+				"platform", plat.Name, "rapi", r.Model, "error", err.Error())
+			continue
+		}
+		if !ok {
+			logger.DefaultConsole().Warn("catalog", "[CATALOG] local rapi mirror missing, skip judgment",
+				"platform", plat.Name, "rapi", r.Model)
+			continue
+		}
+
 		var action judgmentAction
 		var reason string
-		if strings.TrimSpace(r.Source) == "manual" {
+		if isManual {
 			// manual 模型：用真实 API 调用探测，不走目录判定。
 			pool, dead, unknown := probeManualRAPI(ctx, plat, r, keys)
 			action, reason = judgeManualRAPI(pool, dead, unknown)
 		} else {
-			action, reason = judgeRAPI(r.Model, states)
+			// Model 与 Alias 任一命中即算在场（两者不是简单大小写关系）。
+			action, reason = judgeRAPI([]string{r.Model, r.Alias}, states)
 		}
 
-		if err := applyJudgment(r.ID, action, reason, confirmations); err != nil {
+		if err := applyJudgment(localID, action, reason, confirmations); err != nil {
 			logger.DefaultConsole().Error("catalog", "[CATALOG] apply judgment failed",
 				"rapi", r.Model, "error", err.Error())
 		}
@@ -332,6 +440,17 @@ func judgeManualRAPI(pool, dead, unknown int) (judgmentAction, string) {
 	}
 }
 
+// manualNeedsProbe 决定 manual 模型本轮是否要用真实调用探测。
+// 首轮（平台从未探测过）全部探测；恢复轮只探测当前不可用的模型，
+// 避免健康模型每 30 分钟被真实调用计费一次。
+func manualNeedsProbe(recovering bool, model string, unavailable map[string]struct{}) bool {
+	if !recovering {
+		return true
+	}
+	_, need := unavailable[strings.ToLower(strings.TrimSpace(model))]
+	return need
+}
+
 // applyJudgment 把判定结果写到 rapi.available，含恢复冷却。
 //
 // 失效立即执行（响应快）；恢复要连续 confirmations 次确认在场才真正恢复（防抖）。
@@ -350,11 +469,11 @@ func applyJudgment(rapiID int64, action judgmentAction, reason string, confirmat
 		if err != nil {
 			streak = 0
 		}
-		streak++
+		streak, ready := nextRecoverStreak(streak, confirmations)
 		if err := db.Get().SetRecoverStreak(rapiID, streak); err != nil {
 			return fmt.Errorf("bump streak: %w", err)
 		}
-		if streak < confirmations {
+		if !ready {
 			// 冷却未满：保持现状（不恢复也不失效），等下一轮。
 			return nil
 		}
@@ -369,4 +488,14 @@ func applyJudgment(rapiID int64, action judgmentAction, reason string, confirmat
 		return db.Get().SetRecoverStreak(rapiID, 0)
 	}
 	return nil
+}
+
+// nextRecoverStreak 推进恢复冷却计数，返回新 streak 与是否达到恢复阈值。
+// 抽成纯函数锁定"连续 N 次确认"的语义。
+func nextRecoverStreak(streak, confirmations int) (int, bool) {
+	if confirmations < 1 {
+		confirmations = 1
+	}
+	streak++
+	return streak, streak >= confirmations
 }

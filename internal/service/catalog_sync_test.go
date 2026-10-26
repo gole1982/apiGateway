@@ -11,6 +11,8 @@ func TestJudgeRAPI(t *testing.T) {
 	otherModel := keyProbeState{Enabled: true, Catalog: []string{"claude-sonnet"}}
 	dead := keyProbeState{Enabled: true, Dead: true, Catalog: []string{"gpt-4o"}}
 	failed := keyProbeState{Enabled: true, Failed: true}
+	empty := keyProbeState{Enabled: true}
+	blank := keyProbeState{Enabled: true, Catalog: []string{"", "   "}}
 	disabled := keyProbeState{Enabled: false, Catalog: []string{"gpt-4o"}}
 
 	cases := []struct {
@@ -27,7 +29,7 @@ func TestJudgeRAPI(t *testing.T) {
 		{
 			"pool 空 + 有未知 → 保持",
 			[]keyProbeState{otherModel, failed},
-			judgmentHold, "有 Key 尚未探测成功",
+			judgmentHold, "有 Key 目录为空或尚未探测成功",
 		},
 		{
 			"pool 空 + 无未知 → 失效",
@@ -42,7 +44,7 @@ func TestJudgeRAPI(t *testing.T) {
 		{
 			"dead Key 不算未知：dead + failed → 保持",
 			[]keyProbeState{dead, failed},
-			judgmentHold, "有 Key 尚未探测成功",
+			judgmentHold, "有 Key 目录为空或尚未探测成功",
 		},
 		{
 			"禁用 Key 被忽略：只剩禁用 → 失效",
@@ -55,9 +57,20 @@ func TestJudgeRAPI(t *testing.T) {
 			judgmentRecover, "",
 		},
 		{
-			"空目录不算命中",
-			[]keyProbeState{{Enabled: true, Catalog: []string{}}},
-			judgmentInvalidate, "所有 Key 的目录均不含此模型",
+			// 回归：空目录不能证明模型缺席（聚合站常见 200 + 空 data）。
+			"空目录 → 未知，不能判定失效",
+			[]keyProbeState{empty},
+			judgmentHold, "目录为空",
+		},
+		{
+			"全空白目录 → 未知",
+			[]keyProbeState{blank},
+			judgmentHold, "目录为空",
+		},
+		{
+			"空目录 + 有目录但不含 → 保持",
+			[]keyProbeState{empty, otherModel},
+			judgmentHold, "目录为空",
 		},
 		{
 			"无 Key → 失效（pool 和 unknown 都空）",
@@ -68,7 +81,7 @@ func TestJudgeRAPI(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, why := judgeRAPI(model, c.keys)
+			got, why := judgeRAPI([]string{model}, c.keys)
 			if got != c.want {
 				t.Errorf("judgeRAPI() = %v, want %v", got, c.want)
 			}
@@ -76,6 +89,20 @@ func TestJudgeRAPI(t *testing.T) {
 				t.Errorf("reason = %q, want 含 %q", why, c.wantWhy)
 			}
 		})
+	}
+}
+
+// TestJudgeRAPIMatchesAlias 回归：上游目录可能只返回 alias 形式，
+// 而 Model 与 Alias 不是简单的大小写关系（实测 zai-org/GLM-5.3-Flash
+// vs z.ai/glm-5.3-flash）。任一命中都必须算在场。
+func TestJudgeRAPIMatchesAlias(t *testing.T) {
+	keys := []keyProbeState{{Enabled: true, Catalog: []string{"z.ai/glm-5.3-flash"}}}
+
+	if got, _ := judgeRAPI([]string{"zai-org/GLM-5.3-Flash", "z.ai/glm-5.3-flash"}, keys); got != judgmentRecover {
+		t.Errorf("alias 命中应恢复, got %v", got)
+	}
+	if got, _ := judgeRAPI([]string{"zai-org/GLM-5.3-Flash", ""}, keys); got != judgmentInvalidate {
+		t.Errorf("alias 不匹配时应失效, got %v", got)
 	}
 }
 
@@ -131,6 +158,76 @@ func TestCatalogHasModel(t *testing.T) {
 	for _, c := range cases {
 		if got := catalogHasModel(c.catalog, c.model); got != c.want {
 			t.Errorf("catalogHasModel(%v, %q) = %v, want %v", c.catalog, c.model, got, c.want)
+		}
+	}
+}
+
+func TestCatalogHasAnyModel(t *testing.T) {
+	catalog := []string{"alias-name"}
+	if !catalogHasAnyModel(catalog, []string{"model-name", "ALIAS-NAME"}) {
+		t.Error("alias 命中应返回 true")
+	}
+	if catalogHasAnyModel(catalog, []string{"", "other"}) {
+		t.Error("未命中应返回 false")
+	}
+}
+
+// TestManualNeedsProbe 恢复轮只重探不可用的 manual 模型，控制真实调用成本。
+func TestManualNeedsProbe(t *testing.T) {
+	unavailable := map[string]struct{}{"model-down": {}}
+
+	if !manualNeedsProbe(false, "model-healthy", nil) {
+		t.Error("首轮应探测全部 manual 模型")
+	}
+	if !manualNeedsProbe(true, "Model-Down", unavailable) {
+		t.Error("恢复轮应探测不可用模型（大小写不敏感）")
+	}
+	if manualNeedsProbe(true, "model-healthy", unavailable) {
+		t.Error("恢复轮不应重探健康模型")
+	}
+	if manualNeedsProbe(true, "model-healthy", nil) {
+		t.Error("空的不可用集合不应触发探测")
+	}
+}
+
+// TestNextRecoverStreak 锁定"连续 N 次确认才恢复"的语义。
+// 单轮目录同步 streak 只能到 1，这正是需要周期重跑的原因。
+func TestNextRecoverStreak(t *testing.T) {
+	cases := []struct {
+		streak, confirmations int
+		wantStreak            int
+		wantReady             bool
+	}{
+		{0, 2, 1, false},
+		{1, 2, 2, true},
+		{0, 1, 1, true},
+		{0, 0, 1, true}, // 非法配置按 1 处理
+	}
+	for _, c := range cases {
+		streak, ready := nextRecoverStreak(c.streak, c.confirmations)
+		if streak != c.wantStreak || ready != c.wantReady {
+			t.Errorf("nextRecoverStreak(%d,%d) = (%d,%v), want (%d,%v)",
+				c.streak, c.confirmations, streak, ready, c.wantStreak, c.wantReady)
+		}
+	}
+}
+
+// TestCatalogSyncNeeded 锁定恢复轮次的目标选择：
+// 已探测过但仍有不可用端点的平台必须再次进入同步，否则恢复永远不可达。
+func TestCatalogSyncNeeded(t *testing.T) {
+	cases := []struct {
+		probed      bool
+		unavailable int
+		want        bool
+	}{
+		{false, 0, true}, // 从未探测 → 首轮
+		{true, 0, false}, // 已探测且健康 → 跳过
+		{true, 1, true},  // 已探测但有不可用端点 → 恢复轮
+		{true, 99, true}, // 多个待恢复
+	}
+	for _, c := range cases {
+		if got := catalogSyncNeeded(c.probed, c.unavailable); got != c.want {
+			t.Errorf("catalogSyncNeeded(%v,%d) = %v, want %v", c.probed, c.unavailable, got, c.want)
 		}
 	}
 }

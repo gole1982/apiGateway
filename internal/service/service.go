@@ -453,12 +453,11 @@ func (s *Service) Run() error {
 			logger.DefaultConsole().Info("service", "[STARTUP] retry done",
 				"probed", rep.Probed, "recovered", len(rep.Recovered), "failed", len(rep.Failed))
 		}()
-
-		// 启动后异步执行一轮目录同步（最低优先级，不阻塞 ready）。
-		// 只处理从未探测过的平台；已探测过（手工或上次自动）的跳过，由用户手工触发。
-		// 详见 catalog_sync.go。
-		go runCatalogSync(context.Background())
 	}
+
+	// 目录同步独立于启动健康重试：启动即跑一轮，之后周期重跑仍有不可用端点的平台。
+	// 恢复要求连续 N 次确认，单轮无法完成，详见 catalog_sync.go。
+	go startCatalogSyncLoop(s.stopCh)
 
 	logger.DefaultConsole().Info("service", "Gateway service started successfully")
 
