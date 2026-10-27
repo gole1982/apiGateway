@@ -443,6 +443,9 @@ func (s *Service) Run() error {
 	}
 	startSyncLoop(s.stopCh, syncCfg)
 
+	// 版本更新检查：后台定时拉 GitHub 最新 tag，面板右上角提示。
+	go startUpdateChecker(context.Background())
+
 	// Startup health recovery: probe every RAPI persisted as unavailable and
 	// restore the ones that respond. Runs async so it never blocks serving.
 	if cfg.RetryOnStartup {
@@ -2208,6 +2211,27 @@ func createWebHandler() http.Handler {
 		}
 		data, _ := json.Marshal(trends)
 		w.Write(data)
+	})
+
+	// 版本更新检查 & 一键更新（面板右上角 GitHub 图标改造）。
+	mux.HandleFunc("/api/update/check", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		info := getUpdateInfo()
+		json.NewEncoder(w).Encode(info)
+	})
+	mux.HandleFunc("/api/update/apply", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+			return
+		}
+		// 异步执行——update.sh 会重建容器，当前进程会被杀掉，
+		// HTTP 响应大概率发不出去。前端靠轮询 /api/update/check 判断结果。
+		go applyUpdate()
+		json.NewEncoder(w).Encode(map[string]any{
+			"accepted": true,
+			"message":  "更新已触发，容器将被重建。请等待约 30 秒后刷新页面。",
+		})
 	})
 
 	// 状态接口 - 用于Dashboard显示

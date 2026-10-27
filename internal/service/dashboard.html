@@ -140,6 +140,25 @@
             transition: all 0.2s ease;
         }
         .topbar-icon:hover { background: rgba(255,255,255,0.09); }
+        /* 更新提示弹窗 */
+        @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.5;transform:scale(1.2)} }
+        .update-panel-overlay {
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.3); z-index: 9998;
+            display: flex; align-items: flex-start; justify-content: flex-end;
+            padding: 60px 20px 20px 20px;
+        }
+        .update-panel {
+            background: var(--bg-card); border: 1px solid var(--border);
+            border-radius: 12px; width: 420px; max-width: 90vw;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.3); z-index: 9999;
+            padding: 16px;
+        }
+        .update-panel-header {
+            display: flex; align-items: center; gap: 8px;
+            margin-bottom: 8px; padding-bottom: 8px;
+            border-bottom: 1px solid var(--border);
+        }
         .unread-dot {
             position: absolute;
             top: -5px;
@@ -1581,10 +1600,53 @@
                     </div>
                 </div>
                 <button class="btn btn-primary btn-sm" @click="openAddWizard">＋ 新增</button>
-                <a class="topbar-icon" href="https://github.com/gole1982/apiGateway" target="_blank" rel="noopener noreferrer" title="GitHub 项目主页"
-                   style="display:inline-flex;align-items:center;justify-content:center;text-decoration:none;color:inherit;">
-                    <svg style="width:16px;height:16px;" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
-                </a>
+                <!-- GitHub 图标 + 版本更新提示：有新版本时显示红色 badge -->
+                <div style="position:relative;display:inline-flex;">
+                    <button class="topbar-icon" @click="toggleUpdatePanel" :title="updateInfo.update_available ? '有新版本可用！' : 'GitHub 项目主页'" :style="{ color: updateInfo.update_available ? 'var(--color-primary)' : 'inherit' }">
+                        <svg style="width:16px;height:16px;" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
+                    </button>
+                    <span v-if="updateInfo.update_available" style="position:absolute;top:-2px;right:-2px;width:8px;height:8px;border-radius:50%;background:#e5484d;border:1.5px solid var(--bg-card);animation:pulse 1.5s ease-in-out infinite;"></span>
+                </div>
+                <!-- 更新弹窗 -->
+                <div v-if="updatePanelOpen" class="update-panel-overlay" @click.self="updatePanelOpen = false">
+                    <div class="update-panel">
+                        <div class="update-panel-header">
+                            <span v-if="updateInfo.updating" style="color:var(--color-primary);">⏳ 正在更新...</span>
+                            <span v-else-if="updateInfo.update_available" style="color:var(--color-primary);font-weight:600;">🚀 发现新版本</span>
+                            <span v-else style="color:var(--color-success);">✓ 已是最新版本</span>
+                            <button class="btn btn-sm" @click="updatePanelOpen = false" style="margin-left:auto;padding:2px 8px;">✕</button>
+                        </div>
+                        <div v-if="updateInfo.update_error" style="margin:8px 0;padding:8px 12px;border-radius:8px;background:rgba(229,72,77,0.08);border:1px solid rgba(229,72,77,0.3);color:var(--color-danger);font-size:0.82rem;white-space:pre-wrap;">{{ updateInfo.update_error }}</div>
+                        <div style="padding:8px 0;">
+                            <div style="display:flex;gap:16px;margin-bottom:12px;">
+                                <div><span class="u-muted-sm">当前版本</span><div style="font-family:var(--font-mono);font-weight:600;">v{{ updateInfo.current_version }}</div></div>
+                                <div v-if="updateInfo.latest_version"><span class="u-muted-sm">最新版本</span><div style="font-family:var(--font-mono);font-weight:600;color:var(--color-primary);">v{{ updateInfo.latest_version }}</div></div>
+                            </div>
+                            <div v-if="updateInfo.checked_at" class="u-muted-sm" style="margin-bottom:8px;">上次检查：{{ formatUpdateTime(updateInfo.checked_at) }}</div>
+                            <!-- 更新日志（commits） -->
+                            <div v-if="updateInfo.commits && updateInfo.commits.length > 0" style="margin-bottom:12px;">
+                                <div class="u-muted-sm u-mb3">更新内容（{{ updateInfo.commits.length }} 条提交）</div>
+                                <div style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;">
+                                    <div v-for="c in updateInfo.commits" :key="c.sha" style="display:flex;gap:8px;padding:6px 10px;border-bottom:1px solid var(--border);font-size:0.8rem;">
+                                        <span style="font-family:var(--font-mono);color:var(--color-primary);flex-shrink:0;">{{ c.sha }}</span>
+                                        <span>{{ c.message }}</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- Release 说明 -->
+                            <div v-if="updateInfo.release_notes" style="margin-bottom:12px;">
+                                <div class="u-muted-sm u-mb3">Release 说明</div>
+                                <div style="max-height:150px;overflow-y:auto;padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:0.8rem;white-space:pre-wrap;color:var(--text-secondary);">{{ updateInfo.release_notes }}</div>
+                            </div>
+                        </div>
+                        <div style="display:flex;gap:8px;justify-content:flex-end;padding-top:8px;border-top:1px solid var(--border);">
+                            <a v-if="updateInfo.release_url" :href="updateInfo.release_url" target="_blank" rel="noopener" class="btn btn-sm" style="text-decoration:none;">GitHub Release</a>
+                            <button v-if="updateInfo.update_available && !updateInfo.updating" class="btn btn-primary btn-sm" @click="confirmApplyUpdate">⬆ 更新到 v{{ updateInfo.latest_version }}</button>
+                            <button v-if="updateInfo.updating" class="btn btn-sm" disabled>更新中...</button>
+                            <button class="btn btn-sm" @click="checkUpdate(true)">↻ 检查更新</button>
+                        </div>
+                    </div>
+                </div>
                 <button class="topbar-icon" @click="refreshData" title="刷新数据">
                     <svg style="width:16px;height:16px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
                 </button>
@@ -5059,6 +5121,32 @@
 
                 // ============ FIXED TOP BAR: UNREAD / SEARCH / KEYS / ADD WIZARD ============
                 const appVersion = ref('dev');
+                // 版本更新检查
+                const updateInfo = reactive({ current_version: '', latest_version: '', update_available: false, release_notes: '', release_url: '', checked_at: '', commits: [], updating: false, update_error: '' });
+                const updatePanelOpen = ref(false);
+                const updatePolling = ref(false); // 更新后轮询标志
+                const checkUpdate = async (force) => {
+                    try {
+                        const r = await fetch('/api/update/check');
+                        if (r.ok) {
+                            const d = await r.json();
+                            Object.assign(updateInfo, d);
+                            if (d.updating) updatePolling.value = true;
+                        }
+                    } catch (e) {}
+                };
+                const toggleUpdatePanel = () => { updatePanelOpen.value = !updatePanelOpen.value; if (updatePanelOpen.value) checkUpdate(false); };
+                const formatUpdateTime = (t) => { try { return new Date(t).toLocaleString('zh-CN'); } catch(e) { return t; } };
+                const confirmApplyUpdate = async () => {
+                    if (!confirm(`确定更新到 v${updateInfo.latest_version}？\n\n容器将被重建，过程中服务会短暂不可用（约 30 秒）。`)) return;
+                    updateInfo.updating = true;
+                    updatePolling.value = true;
+                    try {
+                        await fetch('/api/update/apply', { method: 'POST' });
+                    } catch(e) { /* 容器重建会断开连接，这是正常的 */ }
+                    // 开始轮询——容器重建后页面会自动重连
+                    updatePanelOpen.value = false;
+                };
                 const unread = reactive({ items: [], counts: {}, total: 0 });
                 const totalUnread = computed(() => unread.total);
                 const unreadItems = computed(() => unread.items);
@@ -6965,11 +7053,13 @@
                     loadUnread();
                     setupSSE();
                     fetchSyncCenter();
+                    checkUpdate(false);
 
                     // 顶栏弹层（未读/中心同步）点击页面任意处关闭；容器自身已 @click.stop。
                     document.addEventListener('click', () => {
                         unreadPanelOpen.value = false;
                         syncPanelOpen.value = false;
+                        updatePanelOpen.value = false;
                     });
 
                     setInterval(fetchSyncCenter, 30000);
@@ -6977,6 +7067,17 @@
                     setInterval(loadInsights, 30000);
                     setInterval(loadAnalytics, 30000);
                     setInterval(loadMetrics, 30000);
+                    // 版本检查：正常 5 分钟一次。
+                    // 更新中时改为 3 秒轮询——容器重建期间 fetch 会失败，
+                    // 重建成功后 fetch 恢复 → 页面刷新即为新版本。
+                    setInterval(() => {
+                        if (updatePolling.value) {
+                            checkUpdate(false).then(() => {
+                                if (!updateInfo.updating) updatePolling.value = false;
+                            });
+                        }
+                    }, 3000);
+                    setInterval(() => { if (!updatePolling.value) checkUpdate(false); }, 300000);
                     // 客户端用量与仪表盘同频（30s）。两个页面都用 setInterval 而
                     // 非 SSE 推送：它们是低频查询型数据，30s 延迟可接受，
                     // 不值得为它维持一条长连接。
@@ -7038,8 +7139,9 @@
                     computeModelName, rapiDisplayName, lapisForRapi,
                     rapiPlatformFilter, openPlatformModelsTab,
 
-                    // Fixed top bar: unread / search / keys / add wizard
+                    // Fixed top bar: unread / search / keys / add wizard / update
                     appVersion, unread, totalUnread, unreadItems, unreadCounts, unreadPanelOpen, unreadGrouped, markMenuRead, markAllRead, markItemRead, openUnreadItem, unreadDotColor, unreadTitleColor, unreadTime, unreadRelTime, unreadFullTime,
+                    updateInfo, updatePanelOpen, toggleUpdatePanel, checkUpdate, confirmApplyUpdate, formatUpdateTime,
                     globalSearchQuery, globalSearchCandidates, showSearchResults, searchSelection, onGlobalSearchInput, onSearchBlur, moveSearchSelection, chooseSearchResult, clearGlobalSearch, searchMenuLabel, searchMenuStyle,
                     keysList, keysSearchQuery, filteredKeys, sortedKeys, keyPlatformFilter, loadKeys, keyHealthLabel, keyCooldownTitle, keyCooldownRemaining, probeKeyFlat, discoverKeyModels, toggleKeyFlat, deleteKeyFlat, keyModal, openKeyModal, closeKeyModal, saveKeyModal, openKeysTab, jumpToPlatform,
                     addWizard, openAddWizard, closeAddWizard, checkPlatDomain, testWizardPlatform, testWizardKey, testWizardModel, discoverWizardModels, submitAddWizard, doWizardSave, wizardHasNew, wizardKeyOptions, wizardModelOptions,
