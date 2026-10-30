@@ -53,7 +53,8 @@ type probeKeyReport struct {
 	UnderGranted []string `json:"under_granted"`
 	Agreed       []string `json:"agreed"`
 	// ManualOnly 是 source=manual 的端点：它们本就不出现在 /v1/models 里，
-	// 目录探测对它们不适用，必须按需求方澄清用真实 API 调用探测。
+	// 也没有"失效/有效"两态（只有启用/禁用），因此**不参与任何判定**——
+	// 既不用目录判，也不用真实调用探（需求方已明确否决）。
 	ManualOnly []string `json:"manual_only"`
 }
 
@@ -130,7 +131,7 @@ func diffKeyAuthorization(keyID int64, catalog []string, rapis []models.RAPIWith
 // catalogEligibleRAPIs 过滤出"能用目录判定"的端点。
 // source=manual 的模型是用户手工录入的，**不进 /v1/models** —— 拿目录去判定
 // 必然得出"过度授权"的假结论（实测 LLM7 的 default、灵码的 Ling-* 就是这样）。
-// 它们必须按需求方澄清用真实 API 调用探测，所以单独归类。
+// 它们只有启用/禁用两态，不参与判定，所以单独归类、不进偏差计算。
 func catalogEligibleRAPIs(rapis []models.RAPIWithPlatform) []models.RAPIWithPlatform {
 	out := make([]models.RAPIWithPlatform, 0, len(rapis))
 	for _, r := range rapis {
@@ -142,7 +143,7 @@ func catalogEligibleRAPIs(rapis []models.RAPIWithPlatform) []models.RAPIWithPlat
 	return out
 }
 
-// manualOnlyRAPIs 返回 source=manual 的端点（模型名列表），供报告标注"待真实调用探测"。
+// manualOnlyRAPIs 返回 source=manual 的端点（模型名列表），供报告标注"不参与判定"。
 func manualOnlyModels(rapis []models.RAPIWithPlatform) []string {
 	out := make([]string, 0)
 	for _, r := range rapis {

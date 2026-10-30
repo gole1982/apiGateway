@@ -11,6 +11,7 @@
 //  2. 对每个 rapi，根据各 Key 的探测状态判定失效/恢复/保持
 //  3. 失效 = available=0 + unavailable_reason（**绝不删行**）
 //  4. 恢复 = 连续 N 次探测确认在场 → available=1（N 默认 2，用户可调）
+//  5. 状态真正翻转时发通知（一个平台一轮一条，见 notifyCatalogChanges）
 //
 // 判定规则（与 probe_models.go 的 diffKeyAuthorization 同一套口径）：
 //
@@ -20,6 +21,14 @@
 //	失效条件 = pool 空 ∧ unknown 空
 //	恢复条件 = pool 非空 ∧ 连续 N 次确认
 //
+// pool/unknown 只统计**服务该模型的 Key**（rapi.key_ids 白名单，空=全部）：
+// 模型只绑了 Key A 时，Key B 目录里有它并不代表 A 还能服务，把 B 计入 pool
+// 会让这种端点永远失效不掉。
+//
+// **source=manual 的模型整类不参与**：用户手工录入的模型只有"启用/禁用"两态，
+// 没有"失效/有效"。它们本来就不进 /v1/models，目录判定必然误伤；真实调用探测
+// 会烧钱且已被明确否决。所以既不探测也不写 available。
+//
 // 与 probe_models.go 的分工：那个是**手动触发、只读诊断**（不改配置）；
 // 这个是**启动触发、会写 available**。两者共用 key_model_probe 表和同一套判定口径。
 package service
@@ -27,7 +36,6 @@ package service
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -35,6 +43,7 @@ import (
 	"gateway/internal/db"
 	"gateway/internal/logger"
 	"gateway/internal/models"
+	"gateway/internal/notify"
 	"gateway/internal/store"
 )
 
@@ -56,6 +65,7 @@ const (
 
 // keyProbeState 是一把 Key 在某一轮探测中的状态。
 type keyProbeState struct {
+	ID      int64    // 平台 Key 的 id（判定它是否服务某模型用，见 judgeRAPI）
 	Enabled bool     // 凭据是否启用
 	Dead    bool     // 凭据级失败（401/402/403 非 capability）—— 已知服务不了任何模型
 	Failed  bool     // 网络级失败（超时/DNS/5xx）—— 状态未知
@@ -66,13 +76,20 @@ type keyProbeState struct {
 // modelNames 同时包含 Model 与 Alias：两者不是简单的大小写关系，上游目录可能
 // 只出现其中一种（见 probe_models.go 的 probeHasModel）。
 //
+// serves 报告某把 Key 是否服务该模型（rapi.key_ids 白名单；nil = 全部服务）。
+// 必须按绑定关系过滤：模型只绑 Key A 时，Key B 目录里有它不代表 A 还能服务，
+// 把 B 算进 pool 会让这种端点永远失效不掉（网关只会拿 A 去请求）。
+//
 // 只输出有意义的动作：pool 非空就是恢复候选（是否真正恢复由冷却计数决定），
 // pool 空且 unknown 空就是失效，pool 空但 unknown 非空就是保持。
-func judgeRAPI(modelNames []string, keys []keyProbeState) (judgmentAction, string) {
+func judgeRAPI(modelNames []string, keys []keyProbeState, serves func(keyID int64) bool) (judgmentAction, string) {
 	pool, unknown := 0, 0
 	for _, k := range keys {
 		if !k.Enabled {
 			continue
+		}
+		if serves != nil && !serves(k.ID) {
+			continue // 该 Key 不服务此模型：它的目录对这个模型没有发言权
 		}
 		if k.Dead {
 			continue // 已知死，不进 pool 也不进 unknown
@@ -135,76 +152,11 @@ func catalogHasModel(catalog []string, model string) bool {
 }
 
 // ---------------------------------------------------------------------------
-// manual 模型的真实调用探测
-// ---------------------------------------------------------------------------
-
-// probeManualRAPI 用真实 API 调用探测 source=manual 的 rapi。
-//
-// 为什么不能用目录判定：manual 模型是用户手工录入的，**不进 /v1/models**——
-// 目录里永远查不到它们，用目录判定必然得出 over-grant 的假结论。
-//
-// 探测方式：对每把启用的 Key 各发一个 max_tokens=1 的 chat completion，
-// 任一 Key 返回 200 即视为可用。401/402/403 视为凭据级失败（dead），
-// 其余错误（超时/5xx/404）视为网络级失败（状态未知）。
-//
-// 返回 (pool, dead, unknown)：三个计数，与目录判定的 keyProbeState 语义对齐，
-// 可以直接喂给 judgeRAPI。
-func probeManualRAPI(ctx context.Context, plat models.Platform, rapi models.RAPIWithPlatform, keys []models.PlatformKey) (pool, dead, unknown int) {
-	client := &http.Client{Timeout: 15 * time.Second}
-	for _, k := range keys {
-		if !k.Enabled {
-			continue
-		}
-		if k.FailureType == 2 {
-			dead++
-			continue
-		}
-		status := probeChatCompletion(ctx, plat.BaseURL, rapi.Model, k.Token, client)
-		if status == 200 {
-			pool++
-		} else if status == 401 || status == 402 || status == 403 {
-			dead++ // 凭据级失败
-		} else {
-			unknown++ // 网络级失败 → 状态未知
-		}
-	}
-	return pool, dead, unknown
-}
-
-// probeChatCompletion 发一个 max_tokens=1 的 chat completion 探测请求。
-// 返回 HTTP 状态码；网络错误返回 0。
-func probeChatCompletion(ctx context.Context, baseURL, model, token string, client *http.Client) int {
-	url := strings.TrimSuffix(baseURL, "/") + "/chat/completions"
-	body := fmt.Sprintf(`{"model":%q,"max_tokens":1,"messages":[{"role":"user","content":"hi"}]}`, model)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(body))
-	if err != nil {
-		return 0
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return 0
-	}
-	defer resp.Body.Close()
-	return resp.StatusCode
-}
-
-// ---------------------------------------------------------------------------
 // 探测调度
 // ---------------------------------------------------------------------------
 
 // catalogSyncActive 保证同一时刻只有一轮目录同步。
 var catalogSyncActive sync.Mutex
-
-// catalogSyncTarget 是一轮目录同步要处理的平台。
-type catalogSyncTarget struct {
-	platform    models.Platform
-	recovering  bool                // true = 已探测过，本轮只为恢复不可用端点
-	unavailable map[string]struct{} // 本地镜像里启用但不可用的模型（小写）
-}
 
 // runCatalogSync 执行一轮目录同步。
 //
@@ -222,7 +174,7 @@ func runCatalogSync(ctx context.Context) {
 		return
 	}
 
-	var targets []catalogSyncTarget
+	var targets []models.Platform
 	for _, p := range platforms {
 		if !p.Enabled {
 			continue
@@ -240,23 +192,20 @@ func runCatalogSync(ctx context.Context) {
 			continue
 		}
 		probed := platformProbed(p.ID)
-		var unavailable map[string]struct{}
+		unavailableCount := 0
 		if probed {
-			unavailable, err = db.Get().LocalUnavailableRAPIModels(p.BaseURL)
+			unavailable, err := db.Get().LocalUnavailableRAPIModels(p.BaseURL)
 			if err != nil {
 				logger.DefaultConsole().Warn("catalog", "[CATALOG] read local health failed",
 					"platform", p.Name, "error", err.Error())
 				continue
 			}
+			unavailableCount = len(unavailable)
 		}
-		if !catalogSyncNeeded(probed, len(unavailable)) {
+		if !catalogSyncNeeded(probed, unavailableCount) {
 			continue
 		}
-		targets = append(targets, catalogSyncTarget{
-			platform:    p,
-			recovering:  probed,
-			unavailable: unavailable,
-		})
+		targets = append(targets, p)
 	}
 	if len(targets) == 0 {
 		return
@@ -270,13 +219,13 @@ func runCatalogSync(ctx context.Context) {
 	var wg sync.WaitGroup
 	for _, t := range targets {
 		wg.Add(1)
-		go func(t catalogSyncTarget) {
+		go func(p models.Platform) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			if err := syncPlatformCatalog(ctx, t.platform, t.recovering, t.unavailable); err != nil {
+			if err := syncPlatformCatalog(ctx, p); err != nil {
 				logger.DefaultConsole().Warn("catalog", "[CATALOG] platform sync failed",
-					"platform", t.platform.Name, "error", err.Error())
+					"platform", p.Name, "error", err.Error())
 			}
 		}(t)
 	}
@@ -336,9 +285,9 @@ func platformProbed(platformID int64) bool {
 }
 
 // syncPlatformCatalog 探测单个平台的全部 Key，判定并应用失效/恢复。
-// recovering=true 时只重探当前不可用的 manual 模型——真实 API 调用有成本，
-// 健康模型不需要每轮都打一遍。
-func syncPlatformCatalog(ctx context.Context, plat models.Platform, recovering bool, unavailable map[string]struct{}) error {
+// 只处理 source=auto_discover 的模型；source=manual 的模型完全没有"失效/有效"
+// 两态（只有启用/禁用），既不探测也不写 available，见下方循环里的说明。
+func syncPlatformCatalog(ctx context.Context, plat models.Platform) error {
 	keys, err := store.A().GetPlatformKeys(plat.ID)
 	if err != nil {
 		return fmt.Errorf("get keys: %w", err)
@@ -352,7 +301,7 @@ func syncPlatformCatalog(ctx context.Context, plat models.Platform, recovering b
 	states := make([]keyProbeState, 0, len(keys))
 	for i := range keys {
 		k := &keys[i]
-		st := keyProbeState{Enabled: k.Enabled}
+		st := keyProbeState{ID: k.ID, Enabled: k.Enabled}
 		if !k.Enabled {
 			states = append(states, st)
 			continue
@@ -381,17 +330,18 @@ func syncPlatformCatalog(ctx context.Context, plat models.Platform, recovering b
 	}
 
 	// 2. 逐 rapi 判定并应用。
-	//    source=manual 的模型用真实调用探测（不进目录），其余用目录判定。
+	//    只处理 source=auto_discover：source=manual 是用户手工录入的模型，
+	//    既不进上游 /v1/models，也没有"失效/有效"两态（只有启用/禁用）。
+	//    对它做任何 available 判定都是错的 —— 目录里必然查不到它，
+	//    真实调用探测会烧钱且被需求方明确否决。整类跳过，available 保持原值。
 	confirmations, _ := db.Get().GetRecoverConfirmations()
+	changes := make([]catalogChange, 0)
 	for _, r := range rapis {
 		if !r.Enabled {
 			continue // 用户禁用的不自动失效
 		}
-
-		isManual := strings.TrimSpace(r.Source) == "manual"
-		if isManual && !manualNeedsProbe(recovering, r.Model, unavailable) {
-			// 恢复轮次只重探当前不可用的 manual 模型：真实调用有成本。
-			continue
+		if strings.TrimSpace(r.Source) == "manual" {
+			continue // 自定义模型没有失效态，只有启用/禁用
 		}
 
 		// 健康态只能写本地 SQLite；store.A() 在管理模式下返回中心侧 id，
@@ -408,61 +358,145 @@ func syncPlatformCatalog(ctx context.Context, plat models.Platform, recovering b
 			continue
 		}
 
-		var action judgmentAction
-		var reason string
-		if isManual {
-			// manual 模型：用真实 API 调用探测，不走目录判定。
-			pool, dead, unknown := probeManualRAPI(ctx, plat, r, keys)
-			action, reason = judgeManualRAPI(pool, dead, unknown)
-		} else {
-			// Model 与 Alias 任一命中即算在场（两者不是简单大小写关系）。
-			action, reason = judgeRAPI([]string{r.Model, r.Alias}, states)
-		}
+		// Model 与 Alias 任一命中即算在场（两者不是简单大小写关系）。
+		// 只让"服务该模型的 Key"参与判定（key_ids 白名单，空=全部）。
+		keyIDs := r.KeyIDs
+		action, reason := judgeRAPI([]string{r.Model, r.Alias}, states, func(keyID int64) bool {
+			return keyServesModelNow(keyID, keyIDs)
+		})
 
-		if err := applyJudgment(localID, action, reason, confirmations); err != nil {
+		result, err := applyJudgment(localID, action, reason, confirmations)
+		if err != nil {
 			logger.DefaultConsole().Error("catalog", "[CATALOG] apply judgment failed",
 				"rapi", r.Model, "error", err.Error())
+			continue
+		}
+		switch result {
+		case judgmentInvalidated:
+			changes = append(changes, catalogChange{Model: r.Model, Action: judgmentInvalidate})
+			// 冻结内存态：请求持有的 rapis 快照可能仍是旧行，只改 DB 挡不住它。
+			if proxyGateway != nil {
+				proxyGateway.InvalidateRAPI(localID)
+			}
+		case judgmentRecovered:
+			changes = append(changes, catalogChange{Model: r.Model, Action: judgmentRecover})
+			// 清掉 Invalidated 冻结态，否则 PickAvailable 仍会跳过它（DB 已 available=1）。
+			if proxyGateway != nil {
+				proxyGateway.RevalidateRAPI(localID)
+			}
 		}
 	}
+	notifyCatalogChanges(plat, changes)
 	return nil
 }
 
-// judgeManualRAPI 是 manual 模型的判定入口，签名与 judgeRAPI 对齐（同一套动作），
-// 只是输入是三个计数而不是 keyProbeState 切片。
-func judgeManualRAPI(pool, dead, unknown int) (judgmentAction, string) {
-	switch {
-	case pool > 0:
-		return judgmentRecover, ""
-	case unknown > 0:
-		return judgmentHold, "manual 模型有 Key 探测未确认，等待下一轮"
-	default:
-		return judgmentInvalidate, "manual 模型所有 Key 均无法调用"
+// catalogChange 是本轮真正发生的状态翻转（已失效 → 再判失效不算，避免每轮刷通知）。
+type catalogChange struct {
+	Model  string
+	Action judgmentAction // 只取 judgmentInvalidate / judgmentRecover
+}
+
+// judgmentResult 是 applyJudgment 的实际效果，用于决定要不要发通知。
+type judgmentResult int
+
+const (
+	judgmentNoChange judgmentResult = iota
+	judgmentInvalidated
+	judgmentRecovered
+)
+
+// catalogNotifyDetailRunes 是通知详情里模型名的截断长度（通知是给人看的，
+// 不该被几百个模型名撑爆）。
+const catalogNotifyDetailRunes = 200
+
+// notifyCatalogChanges 把本轮的状态翻转汇总成通知：一个平台一轮一条。
+// 逐模型发通知在目录抖动时会瞬间刷屏（实测一次下架几十个模型），
+// 汇总后既保留"哪些模型"的细节，又只占一条未读。
+//
+// entityID 传 0 而不是 plat.ID：面板对 menu=models 的未读条目按 entity_id
+// 当 rapi.id 回查并预填搜索框，传平台 id 会误命中同号的无关模型。
+// 汇总通知本就没有"单一模型"可定位，落到模型页即可。
+func notifyCatalogChanges(plat models.Platform, changes []catalogChange) {
+	if len(changes) == 0 {
+		return
+	}
+	invalidated, recovered := splitCatalogChanges(changes)
+
+	if len(invalidated) > 0 {
+		logger.DefaultConsole().Warn("catalog", "[CATALOG] models auto-invalidated",
+			"platform", plat.Name, "count", len(invalidated), "models", strings.Join(invalidated, ","))
+		if notifySvc != nil {
+			// 这里只有 auto_discover 模型（manual 整类不参与）。逐模型的准确
+			// 原因（如"所有 Key 的目录均不含此模型"）落在 rapi.unavailable_reason。
+			notifySvc.PublishEvent("error", notify.MenuModels, "failure",
+				fmt.Sprintf("%s：%d 个模型已自动失效", plat.Name, len(invalidated)),
+				"已自动标记为不可用："+joinModelNames(invalidated, catalogNotifyDetailRunes),
+				0)
+		}
+	}
+	if len(recovered) > 0 {
+		logger.DefaultConsole().Info("catalog", "[CATALOG] models recovered",
+			"platform", plat.Name, "count", len(recovered), "models", strings.Join(recovered, ","))
+		if notifySvc != nil {
+			notifySvc.PublishEvent("info", notify.MenuModels, "update",
+				fmt.Sprintf("%s：%d 个模型已恢复", plat.Name, len(recovered)),
+				"已恢复可用："+joinModelNames(recovered, catalogNotifyDetailRunes),
+				0)
+		}
 	}
 }
 
-// manualNeedsProbe 决定 manual 模型本轮是否要用真实调用探测。
-// 首轮（平台从未探测过）全部探测；恢复轮只探测当前不可用的模型，
-// 避免健康模型每 30 分钟被真实调用计费一次。
-func manualNeedsProbe(recovering bool, model string, unavailable map[string]struct{}) bool {
-	if !recovering {
-		return true
+// splitCatalogChanges 把变更按动作分成两组（保持原顺序，便于人读）。
+func splitCatalogChanges(changes []catalogChange) (invalidated, recovered []string) {
+	for _, c := range changes {
+		switch c.Action {
+		case judgmentInvalidate:
+			invalidated = append(invalidated, c.Model)
+		case judgmentRecover:
+			recovered = append(recovered, c.Model)
+		}
 	}
-	_, need := unavailable[strings.ToLower(strings.TrimSpace(model))]
-	return need
+	return invalidated, recovered
 }
 
-// applyJudgment 把判定结果写到 rapi.available，含恢复冷却。
+// joinModelNames 用顿号连接模型名，超过 maxRunes 个字符截断加省略号。
+func joinModelNames(names []string, maxRunes int) string {
+	s := strings.Join(names, "、")
+	if maxRunes <= 0 {
+		return s
+	}
+	r := []rune(s)
+	if len(r) <= maxRunes {
+		return s
+	}
+	return string(r[:maxRunes]) + "…"
+}
+
+// applyJudgment 把判定结果写到 rapi.available，含恢复冷却，并回报本次是否
+// 真的翻转了状态（只有翻转才该发通知）。
 //
 // 失效立即执行（响应快）；恢复要连续 confirmations 次确认在场才真正恢复（防抖）。
 // streak 存在 rapi_catalog_state 表，跨重启保留。
-func applyJudgment(rapiID int64, action judgmentAction, reason string, confirmations int) error {
+func applyJudgment(rapiID int64, action judgmentAction, reason string, confirmations int) (judgmentResult, error) {
 	switch action {
 	case judgmentInvalidate:
 		// 失效：立即执行，清零 streak。
 		if err := db.Get().SetRecoverStreak(rapiID, 0); err != nil {
-			return fmt.Errorf("reset streak: %w", err)
+			return judgmentNoChange, fmt.Errorf("reset streak: %w", err)
 		}
-		return db.Get().SetRAPIUnavailableWithReason(rapiID, false, reason)
+		// 先读旧值再写：恢复轮每 30 分钟重跑一次，已失效的模型会被再判一次
+		// 失效，不区分就会同一批模型反复发通知。
+		wasAvailable, err := db.Get().LocalRAPIAvailable(rapiID)
+		if err != nil {
+			return judgmentNoChange, fmt.Errorf("read availability: %w", err)
+		}
+		if err := db.Get().SetRAPIUnavailableWithReason(rapiID, false, reason); err != nil {
+			return judgmentNoChange, err
+		}
+		if wasAvailable {
+			return judgmentInvalidated, nil
+		}
+		return judgmentNoChange, nil
 
 	case judgmentRecover:
 		streak, err := db.Get().GetRecoverStreak(rapiID)
@@ -471,23 +505,33 @@ func applyJudgment(rapiID int64, action judgmentAction, reason string, confirmat
 		}
 		streak, ready := nextRecoverStreak(streak, confirmations)
 		if err := db.Get().SetRecoverStreak(rapiID, streak); err != nil {
-			return fmt.Errorf("bump streak: %w", err)
+			return judgmentNoChange, fmt.Errorf("bump streak: %w", err)
 		}
 		if !ready {
 			// 冷却未满：保持现状（不恢复也不失效），等下一轮。
-			return nil
+			return judgmentNoChange, nil
 		}
 		// 冷却已满：恢复，清零 streak。
 		if err := db.Get().SetRecoverStreak(rapiID, 0); err != nil {
-			return fmt.Errorf("reset streak: %w", err)
+			return judgmentNoChange, fmt.Errorf("reset streak: %w", err)
 		}
-		return db.Get().SetRAPIUnavailableWithReason(rapiID, true, "")
+		wasAvailable, err := db.Get().LocalRAPIAvailable(rapiID)
+		if err != nil {
+			return judgmentNoChange, fmt.Errorf("read availability: %w", err)
+		}
+		if err := db.Get().SetRAPIUnavailableWithReason(rapiID, true, ""); err != nil {
+			return judgmentNoChange, err
+		}
+		if !wasAvailable {
+			return judgmentRecovered, nil
+		}
+		return judgmentNoChange, nil
 
 	case judgmentHold:
 		// 保持：不动 available，但清零 streak（本轮没确认在场）。
-		return db.Get().SetRecoverStreak(rapiID, 0)
+		return judgmentNoChange, db.Get().SetRecoverStreak(rapiID, 0)
 	}
-	return nil
+	return judgmentNoChange, nil
 }
 
 // nextRecoverStreak 推进恢复冷却计数，返回新 streak 与是否达到恢复阈值。

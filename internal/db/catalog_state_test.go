@@ -85,6 +85,9 @@ func TestLocalUnavailableRAPIModels(t *testing.T) {
 	insertTestRAPI(t, db, p1.ID, "Model-Down", true, false)
 	insertTestRAPI(t, db, p1.ID, "model-disabled", false, false)
 	insertTestRAPI(t, db, p2.ID, "model-other-platform", true, false)
+	// 自定义模型没有"失效"态，目录同步永远恢复不了它；若把它算进"待恢复"，
+	// 该平台会每 30 分钟无意义地重探一次上游。
+	insertTestRAPISource(t, db, p1.ID, "manual-down", true, false, "manual")
 
 	got, err := db.LocalUnavailableRAPIModels("https://api.one.test/")
 	if err != nil {
@@ -99,6 +102,9 @@ func TestLocalUnavailableRAPIModels(t *testing.T) {
 	if _, ok := got["model-other-platform"]; ok {
 		t.Error("其他平台的不可用模型不应混入")
 	}
+	if _, ok := got["manual-down"]; ok {
+		t.Error("自定义模型没有失效态，不应进入待恢复集合")
+	}
 
 	empty, err := db.LocalUnavailableRAPIModels("https://unknown.test")
 	if err != nil || len(empty) != 0 {
@@ -106,12 +112,75 @@ func TestLocalUnavailableRAPIModels(t *testing.T) {
 	}
 }
 
+// TestMigrateManualRAPIAvailable 自定义模型没有失效态：历史遗留的 available=0
+// 必须复位，且绝不能碰 auto_discover 行（那些是真失效，要等目录同步恢复）。
+func TestMigrateManualRAPIAvailable(t *testing.T) {
+	db := setupTestDB(t)
+
+	p := &models.Platform{Name: "p1", BaseURL: "https://api.repair.test", Enabled: true, Available: true}
+	if err := db.CreatePlatform(p); err != nil {
+		t.Fatalf("CreatePlatform: %v", err)
+	}
+	manualID := insertTestRAPISource(t, db, p.ID, "manual-dead", true, false, "manual")
+	autoID := insertTestRAPISource(t, db, p.ID, "auto-dead", true, false, "auto_discover")
+
+	db.migrateManualRAPIAvailable()
+
+	if got, err := db.LocalRAPIAvailable(manualID); err != nil || !got {
+		t.Errorf("manual 行应被复位为 available=1: got=%v err=%v", got, err)
+	}
+	if got, err := db.LocalRAPIAvailable(autoID); err != nil || got {
+		t.Errorf("auto_discover 行不应被改动: got=%v err=%v", got, err)
+	}
+
+	// 幂等：再跑一次不应报错，也不改变结果。
+	db.migrateManualRAPIAvailable()
+	if got, err := db.LocalRAPIAvailable(autoID); err != nil || got {
+		t.Errorf("二次执行不应影响 auto 行: got=%v err=%v", got, err)
+	}
+}
+
+// TestLocalRAPIAvailable 锁定"状态翻转才通知"的前提：读到的必须是写入前的旧值。
+func TestLocalRAPIAvailable(t *testing.T) {
+	db := setupTestDB(t)
+
+	p := &models.Platform{Name: "p1", BaseURL: "https://api.state.test", Enabled: true, Available: true}
+	if err := db.CreatePlatform(p); err != nil {
+		t.Fatalf("CreatePlatform: %v", err)
+	}
+	id := insertTestRAPI(t, db, p.ID, "model-a", true, true)
+
+	got, err := db.LocalRAPIAvailable(id)
+	if err != nil || !got {
+		t.Fatalf("初始应为 available=true: got=%v err=%v", got, err)
+	}
+
+	if err := db.SetRAPIUnavailableWithReason(id, false, "目录中不存在"); err != nil {
+		t.Fatalf("SetRAPIUnavailableWithReason: %v", err)
+	}
+	got, err = db.LocalRAPIAvailable(id)
+	if err != nil || got {
+		t.Fatalf("写入后应为 available=false: got=%v err=%v", got, err)
+	}
+
+	if _, err := db.LocalRAPIAvailable(id + 9999); err == nil {
+		t.Error("不存在的 rapi 应返回错误，否则翻转判定会把缺失行当成 true→false")
+	}
+}
+
 func insertTestRAPI(t *testing.T, db *DB, platformID int64, model string, enabled, available bool) int64 {
 	t.Helper()
+	return insertTestRAPISource(t, db, platformID, model, enabled, available, "auto_discover")
+}
+
+// insertTestRAPISource 显式指定 source：目录同步只判 auto_discover，
+// manual 行必须能被单独造出来验证"不参与判定"。
+func insertTestRAPISource(t *testing.T, db *DB, platformID int64, model string, enabled, available bool, source string) int64 {
+	t.Helper()
 	res, err := db.conn.Exec(`
-		INSERT INTO rapi (alias, model, platform_id, enabled, available)
-		VALUES (?, ?, ?, ?, ?)`,
-		model, model, platformID, b2iTest(enabled), b2iTest(available))
+		INSERT INTO rapi (alias, model, platform_id, enabled, available, source)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		model, model, platformID, b2iTest(enabled), b2iTest(available), source)
 	if err != nil {
 		t.Fatalf("insert rapi %q: %v", model, err)
 	}

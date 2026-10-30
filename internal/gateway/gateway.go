@@ -1138,6 +1138,16 @@ func (g *ProxyGateway) handleAllKeysUnavailable(rapi models.RAPIWithPlatform, re
 		g.log.RecordError(requestID, fmt.Sprintf("rapi=%s [%s] %s", rapi.Alias, rapi.PlatformName, reason), "UPSTREAM_RESPONSE")
 	}
 
+	// 自定义模型（source=manual）只有"启用/禁用"两态，没有"失效/有效"：
+	// 全部 Key 死掉时只给会话冷却，绝不持久化 available=false。否则面板会把它
+	// 显示成"失效"，且 GetEnabledRAPIsForLAPI 会把整行摘掉 —— 那等于系统替用户
+	// 禁用了自定义模型，与状态模型矛盾。
+	if hardDead && strings.TrimSpace(rapi.Source) == "manual" {
+		reqLog.Info("gateway", "[KEY-FAIL] manual model not persisted unavailable",
+			"rapi", rapi.Alias, "reason", reason)
+		hardDead = false
+	}
+
 	// Fire the RAPI-level entity event. Hard-dead pools (all keys disabled /
 	// permanently failed / expired) persist available=false and invalidate the
 	// RAPI — once persisted, GetEnabledRAPIsForLAPI filters it out, and the

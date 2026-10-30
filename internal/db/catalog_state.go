@@ -11,6 +11,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"gateway/internal/models"
@@ -27,6 +28,30 @@ func (db *DB) migrateCatalogState() {
 			recover_streak  INTEGER NOT NULL DEFAULT 0,
 			last_judged_at  DATETIME
 		)`)
+}
+
+// migrateManualRAPIAvailable 修历史数据：source=manual 的模型没有"失效"态。
+//
+// 口径来自需求方：自定义模型只有"禁用/启用"两态，没有"失效/有效"。旧版目录同步
+// 拿 /v1/models 去判它们（必然缺席 → 批量写成 available=0），旧版运行时也会在
+// "全部 Key 不可用"时把任意模型持久化为不可用。这些行在面板上显示"失效"，且被
+// GetEnabledRAPIsForLAPI 过滤掉，属于纯噪声。
+//
+// 幂等：新代码不再给 manual 行写 available=0，首次修完之后每次启动都是空操作。
+func (db *DB) migrateManualRAPIAvailable() {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	res, err := db.conn.Exec(`
+		UPDATE rapi SET available = 1, unavailable_reason = '', updated_at = CURRENT_TIMESTAMP
+		WHERE source = 'manual' AND available = 0`)
+	if err != nil {
+		slog.Warn("[DB] repair manual RAPI availability failed", "component", "db", "error", err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		slog.Info("[DB] manual RAPI availability repaired", "component", "db", "rows", n)
+	}
 }
 
 // GetRecoverStreak 读某 rapi 的恢复连续确认次数。
@@ -119,6 +144,22 @@ func (db *DB) LocalRAPIIDByNaturalKey(platformBaseURL, model string) (int64, boo
 	return 0, false, rows.Err()
 }
 
+// LocalRAPIAvailable 读本地镜像里某个 rapi 的 available 标志。
+//
+// 只用于判定"这次写入是否真的改变了状态"：目录同步每 30 分钟跑一轮恢复，
+// 已失效的模型每轮都会被再判一次失效，若不加区分就会反复发通知。
+// 它不是路由决策的输入（路由看的是 GetEnabledRAPIsForLAPI 取出的整行）。
+func (db *DB) LocalRAPIAvailable(id int64) (bool, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	var available int
+	if err := db.conn.QueryRow(`SELECT available FROM rapi WHERE id = ?`, id).Scan(&available); err != nil {
+		return false, err
+	}
+	return available != 0, nil
+}
+
 // LocalPlatformHasRAPIs 报告本地镜像里该平台是否已有端点记录。
 // 管理模式/代理模式首次启动时，中心定义要等首轮 sync 才会落到本地；
 // 目录同步在此之前探测会写下一批 probe 记录，却因本地无 rapi 可写而
@@ -152,9 +193,12 @@ func (db *DB) LocalPlatformHasRAPIs(platformBaseURL string) (bool, error) {
 	return false, rows.Err()
 }
 
-// LocalUnavailableRAPIModels 返回本地镜像中该平台"启用但不可用"的模型集合
-// （小写、去空白）。目录同步据此判断是否还需要恢复轮次，以及哪些 manual
-// 模型需要用真实调用重探。platformBaseURL 为空时返回空集合。
+// LocalUnavailableRAPIModels 返回本地镜像中该平台"启用但不可用"的**可判定**
+// 模型集合（小写、去空白）。目录同步据此判断是否还需要恢复轮次。
+//
+// source=manual 的模型被排除：它们没有失效/有效两态，目录同步永远不会去恢复
+// 它们。若把它们算进来，一个 manual 行只要 available=0，该平台就会被永久
+// 判为"有待恢复端点"，每 30 分钟无意义地重探一次上游。
 func (db *DB) LocalUnavailableRAPIModels(platformBaseURL string) (map[string]struct{}, error) {
 	want := models.NormalizeBaseURL(platformBaseURL)
 	out := make(map[string]struct{})
@@ -168,7 +212,7 @@ func (db *DB) LocalUnavailableRAPIModels(platformBaseURL string) (map[string]str
 	rows, err := db.conn.Query(`
 		SELECT r.model, p.base_url
 		FROM rapi r JOIN platform p ON p.id = r.platform_id
-		WHERE r.enabled = 1 AND r.available = 0`)
+		WHERE r.enabled = 1 AND r.available = 0 AND r.source != 'manual'`)
 	if err != nil {
 		return nil, err
 	}

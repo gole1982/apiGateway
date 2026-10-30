@@ -113,9 +113,13 @@ CGO_ENABLED=0 go build -o /tmp/gateway ./cmd/gateway
 - **上游目录可能含重复模型名**（实测 unorouter / TokenRouter 均有）。写探测表时
   必须去重 + `INSERT OR IGNORE`，否则一个重复项撞 PRIMARY KEY 会回滚整个事务，
   让该平台整轮探测白跑。
-- **`source='manual'` 的模型不进 `/v1/models`**。用目录判定它们必然得出 over-grant
-  的假结论（实测 LLM7 `default`、AIHUBMIX `gpt-5.5-free`、灵码 `Ling-*`）。
-  手工模型必须改用真实 API 调用探测。
+- **`source='manual'` 的模型不参与任何可用性判定**。它们不进 `/v1/models`，
+  用目录判定必然得出 over-grant 的假结论（实测 LLM7 `default`、AIHUBMIX
+  `gpt-5.5-free`、灵码 `Ling-*`）。**也没有"失效/有效"两态，只有启用/禁用**——
+  真实调用探测会烧钱，已被需求方明确否决。因此：目录同步整类跳过、运行时
+  `handleAllKeysUnavailable` 不持久化 `available=false`（只做冷却）、
+  `LocalUnavailableRAPIModels` 排除它们（否则平台会被永久判为"待恢复"，
+  每 30 分钟白打一次上游）。`db.Init` 有一次性修复把历史 `available=0` 复位。
 - **`docker cp` 只拷主 DB 文件会读到陈旧状态**：必须同时拷 `gateway.db`、
   `gateway.db-wal`、`gateway.db-shm` 三个文件，否则读到的是上次 checkpoint 的旧数据。
 - **`modernc.org/sqlite` 的 DATETIME 列以字符串返回**，不能直接 `Scan` 进
@@ -126,3 +130,13 @@ CGO_ENABLED=0 go build -o /tmp/gateway ./cmd/gateway
 - **诊断表不进 store 接缝**：`key_model_probe` 是纯本地诊断数据，刻意不走
   `store.A()`——否则会触发 sync 脏标记、进 bundle 契约、需要中心 schema 迁移。
   它只写 `db.Get()`，与 `endpoint_credential` 完全解耦，因此**写它绝不改变网关行为**。
+- **目录同步只在状态翻转时发通知**：`applyJudgment` 先读 `rapi.available` 旧值再写，
+  只有 true→false / false→true 才进 `catalogChange`。恢复轮每 30 分钟重跑，
+  不区分就会把同一批已失效模型反复通知一遍。通知按平台汇总成一条
+  （`notifyCatalogChanges`），逐模型发会在上游一次下架几十个模型时刷屏。
+- **判定只采信"服务该模型的 Key"**（`rapi.key_ids` 白名单，空=全部）：
+  模型只绑 Key A 时，Key B 目录里有它不代表 A 还能服务；不过滤会让这类端点
+  **永远失效不掉**（网关只会拿 A 去请求）。
+- **写 available 必须同步内存态**：失效后调 `proxyGateway.InvalidateRAPI(localID)`
+  （请求持有的 rapis 快照可能是旧行，只改 DB 挡不住它），恢复后调 `RevalidateRAPI`
+  （否则实体停在 Invalidated，DB 已是 available=1 也照样被 `PickAvailable` 跳过）。
