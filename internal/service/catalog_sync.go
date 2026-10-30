@@ -340,8 +340,8 @@ func syncPlatformCatalog(ctx context.Context, plat models.Platform) error {
 		if !r.Enabled {
 			continue // 用户禁用的不自动失效
 		}
-		if strings.TrimSpace(r.Source) == "manual" {
-			continue // 自定义模型没有失效态，只有启用/禁用
+		if !models.IsAutoDiscovered(r.Source) {
+			continue // 自定义模型（含 source 为空的存量行）没有失效态，只有启用/禁用
 		}
 
 		// 健康态只能写本地 SQLite；store.A() 在管理模式下返回中心侧 id，

@@ -43,6 +43,19 @@ func TokenHash(token string) string {
 	return hex.EncodeToString(sum[:])[:16]
 }
 
+// IsAutoDiscovered 报告该端点是否由发现向导自动录入（source=auto_discover）。
+//
+// **只有它允许被自动失效/恢复**。其余来源（manual、空串、将来新增的其它来源）
+// 一律按"用户手工维护"对待：既不进上游目录判定，也不会被运行时判成不可用。
+//
+// 为什么用白名单而不是 `== "manual"`：source 的既有契约是"默认 manual"
+// （见 /api/platforms/discover 的 Source 说明与 db.CreateRAPI 的归一化），
+// 历史数据里确实存在 source 为空串的行（中心同步写入时未归一化）。按黑名单写，
+// 这些行会被当成自动发现，进而被目录判定摘掉 —— 违背"手工模型永不自动摘除"。
+func IsAutoDiscovered(source string) bool {
+	return strings.TrimSpace(source) == "auto_discover"
+}
+
 // Credential 是全局唯一的 API 凭据（自然键 TokenHash）。
 // PlatformID 是"归属平台"（管理分组/默认绑定范围，非身份）；label 为显示标签。
 // 跨平台同 token 只存一行；运行时的 key 池即本表行的投影（id 语义不变）。

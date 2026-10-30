@@ -1142,7 +1142,7 @@ func (g *ProxyGateway) handleAllKeysUnavailable(rapi models.RAPIWithPlatform, re
 	// 全部 Key 死掉时只给会话冷却，绝不持久化 available=false。否则面板会把它
 	// 显示成"失效"，且 GetEnabledRAPIsForLAPI 会把整行摘掉 —— 那等于系统替用户
 	// 禁用了自定义模型，与状态模型矛盾。
-	if hardDead && strings.TrimSpace(rapi.Source) == "manual" {
+	if hardDead && !models.IsAutoDiscovered(rapi.Source) {
 		reqLog.Info("gateway", "[KEY-FAIL] manual model not persisted unavailable",
 			"rapi", rapi.Alias, "reason", reason)
 		hardDead = false

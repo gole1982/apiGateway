@@ -30,27 +30,30 @@ func (db *DB) migrateCatalogState() {
 		)`)
 }
 
-// migrateManualRAPIAvailable 修历史数据：source=manual 的模型没有"失效"态。
+// migrateNonAutoDiscoveredRAPIAvailable 修历史数据：非自动发现的模型没有"失效"态。
 //
 // 口径来自需求方：自定义模型只有"禁用/启用"两态，没有"失效/有效"。旧版目录同步
 // 拿 /v1/models 去判它们（必然缺席 → 批量写成 available=0），旧版运行时也会在
 // "全部 Key 不可用"时把任意模型持久化为不可用。这些行在面板上显示"失效"，且被
 // GetEnabledRAPIsForLAPI 过滤掉，属于纯噪声。
 //
-// 幂等：新代码不再给 manual 行写 available=0，首次修完之后每次启动都是空操作。
-func (db *DB) migrateManualRAPIAvailable() {
+// 判定用白名单（source <> 'auto_discover' 全部复位），与 models.IsAutoDiscovered
+// 同口径：source 为空串的存量行按 manual 处理。
+//
+// 幂等：新代码不再给这些行写 available=0，首次修完之后每次启动都是空操作。
+func (db *DB) migrateNonAutoDiscoveredRAPIAvailable() {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
 	res, err := db.conn.Exec(`
 		UPDATE rapi SET available = 1, unavailable_reason = '', updated_at = CURRENT_TIMESTAMP
-		WHERE source = 'manual' AND available = 0`)
+		WHERE source <> 'auto_discover' AND available = 0`)
 	if err != nil {
-		slog.Warn("[DB] repair manual RAPI availability failed", "component", "db", "error", err)
+		slog.Warn("[DB] repair non-discovered RAPI availability failed", "component", "db", "error", err)
 		return
 	}
 	if n, _ := res.RowsAffected(); n > 0 {
-		slog.Info("[DB] manual RAPI availability repaired", "component", "db", "rows", n)
+		slog.Info("[DB] non-discovered RAPI availability repaired", "component", "db", "rows", n)
 	}
 }
 
@@ -196,9 +199,9 @@ func (db *DB) LocalPlatformHasRAPIs(platformBaseURL string) (bool, error) {
 // LocalUnavailableRAPIModels 返回本地镜像中该平台"启用但不可用"的**可判定**
 // 模型集合（小写、去空白）。目录同步据此判断是否还需要恢复轮次。
 //
-// source=manual 的模型被排除：它们没有失效/有效两态，目录同步永远不会去恢复
-// 它们。若把它们算进来，一个 manual 行只要 available=0，该平台就会被永久
-// 判为"有待恢复端点"，每 30 分钟无意义地重探一次上游。
+// 只统计 source=auto_discover：其余来源（manual、空串等）没有失效/有效两态，
+// 目录同步永远不会去恢复它们。若把它们算进来，一个这样的行只要 available=0，
+// 该平台就会被永久判为"有待恢复端点"，每 30 分钟无意义地重探一次上游。
 func (db *DB) LocalUnavailableRAPIModels(platformBaseURL string) (map[string]struct{}, error) {
 	want := models.NormalizeBaseURL(platformBaseURL)
 	out := make(map[string]struct{})
@@ -212,7 +215,7 @@ func (db *DB) LocalUnavailableRAPIModels(platformBaseURL string) (map[string]str
 	rows, err := db.conn.Query(`
 		SELECT r.model, p.base_url
 		FROM rapi r JOIN platform p ON p.id = r.platform_id
-		WHERE r.enabled = 1 AND r.available = 0 AND r.source != 'manual'`)
+		WHERE r.enabled = 1 AND r.available = 0 AND r.source = 'auto_discover'`)
 	if err != nil {
 		return nil, err
 	}

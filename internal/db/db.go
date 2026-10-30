@@ -345,7 +345,7 @@ func initAtPath(dbPath string) error {
 	instance.migrateCatalogState()
 
 	// Data repair: 自定义模型没有"失效"态，历史遗留的 available=0 一律复位。
-	instance.migrateManualRAPIAvailable()
+	instance.migrateNonAutoDiscoveredRAPIAvailable()
 
 	// Cleanup: remove orphan RAPIs whose platform no longer exists
 	instance.cleanupOrphanedRAPIs()

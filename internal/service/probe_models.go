@@ -129,13 +129,13 @@ func diffKeyAuthorization(keyID int64, catalog []string, rapis []models.RAPIWith
 }
 
 // catalogEligibleRAPIs 过滤出"能用目录判定"的端点。
-// source=manual 的模型是用户手工录入的，**不进 /v1/models** —— 拿目录去判定
-// 必然得出"过度授权"的假结论（实测 LLM7 的 default、灵码的 Ling-* 就是这样）。
+// 只有 source=auto_discover 的模型进上游 /v1/models，其余（manual、空串等）
+// 拿目录去判定必然得出"过度授权"的假结论（实测 LLM7 的 default、灵码的 Ling-*）。
 // 它们只有启用/禁用两态，不参与判定，所以单独归类、不进偏差计算。
 func catalogEligibleRAPIs(rapis []models.RAPIWithPlatform) []models.RAPIWithPlatform {
 	out := make([]models.RAPIWithPlatform, 0, len(rapis))
 	for _, r := range rapis {
-		if strings.TrimSpace(r.Source) == "manual" {
+		if !models.IsAutoDiscovered(r.Source) {
 			continue
 		}
 		out = append(out, r)
@@ -143,11 +143,11 @@ func catalogEligibleRAPIs(rapis []models.RAPIWithPlatform) []models.RAPIWithPlat
 	return out
 }
 
-// manualOnlyRAPIs 返回 source=manual 的端点（模型名列表），供报告标注"不参与判定"。
+// manualOnlyRAPIs 返回非自动发现的端点（模型名列表），供报告标注"不参与判定"。
 func manualOnlyModels(rapis []models.RAPIWithPlatform) []string {
 	out := make([]string, 0)
 	for _, r := range rapis {
-		if strings.TrimSpace(r.Source) == "manual" {
+		if !models.IsAutoDiscovered(r.Source) {
 			out = append(out, r.Model)
 		}
 	}

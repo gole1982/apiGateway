@@ -88,6 +88,9 @@ func TestLocalUnavailableRAPIModels(t *testing.T) {
 	// 自定义模型没有"失效"态，目录同步永远恢复不了它；若把它算进"待恢复"，
 	// 该平台会每 30 分钟无意义地重探一次上游。
 	insertTestRAPISource(t, db, p1.ID, "manual-down", true, false, "manual")
+	// 存量数据的 source 可能是空串（中心同步写入时未归一化）。契约是"默认
+	// manual"，所以它同样不可被自动判定 —— 黑名单写法会把它误判成自动发现。
+	insertTestRAPISource(t, db, p1.ID, "empty-source-down", true, false, "")
 
 	got, err := db.LocalUnavailableRAPIModels("https://api.one.test/")
 	if err != nil {
@@ -105,6 +108,9 @@ func TestLocalUnavailableRAPIModels(t *testing.T) {
 	if _, ok := got["manual-down"]; ok {
 		t.Error("自定义模型没有失效态，不应进入待恢复集合")
 	}
+	if _, ok := got["empty-source-down"]; ok {
+		t.Error("source 为空串的存量行按 manual 处理，不应进入待恢复集合")
+	}
 
 	empty, err := db.LocalUnavailableRAPIModels("https://unknown.test")
 	if err != nil || len(empty) != 0 {
@@ -112,9 +118,9 @@ func TestLocalUnavailableRAPIModels(t *testing.T) {
 	}
 }
 
-// TestMigrateManualRAPIAvailable 自定义模型没有失效态：历史遗留的 available=0
-// 必须复位，且绝不能碰 auto_discover 行（那些是真失效，要等目录同步恢复）。
-func TestMigrateManualRAPIAvailable(t *testing.T) {
+// TestMigrateNonAutoDiscoveredRAPIAvailable 自定义模型没有失效态：历史遗留的
+// available=0 必须复位，且绝不能碰 auto_discover 行（那些是真失效，等目录同步恢复）。
+func TestMigrateNonAutoDiscoveredRAPIAvailable(t *testing.T) {
 	db := setupTestDB(t)
 
 	p := &models.Platform{Name: "p1", BaseURL: "https://api.repair.test", Enabled: true, Available: true}
@@ -122,19 +128,23 @@ func TestMigrateManualRAPIAvailable(t *testing.T) {
 		t.Fatalf("CreatePlatform: %v", err)
 	}
 	manualID := insertTestRAPISource(t, db, p.ID, "manual-dead", true, false, "manual")
+	emptyID := insertTestRAPISource(t, db, p.ID, "empty-dead", true, false, "")
 	autoID := insertTestRAPISource(t, db, p.ID, "auto-dead", true, false, "auto_discover")
 
-	db.migrateManualRAPIAvailable()
+	db.migrateNonAutoDiscoveredRAPIAvailable()
 
 	if got, err := db.LocalRAPIAvailable(manualID); err != nil || !got {
 		t.Errorf("manual 行应被复位为 available=1: got=%v err=%v", got, err)
+	}
+	if got, err := db.LocalRAPIAvailable(emptyID); err != nil || !got {
+		t.Errorf("空 source 行按 manual 处理，应被复位: got=%v err=%v", got, err)
 	}
 	if got, err := db.LocalRAPIAvailable(autoID); err != nil || got {
 		t.Errorf("auto_discover 行不应被改动: got=%v err=%v", got, err)
 	}
 
 	// 幂等：再跑一次不应报错，也不改变结果。
-	db.migrateManualRAPIAvailable()
+	db.migrateNonAutoDiscoveredRAPIAvailable()
 	if got, err := db.LocalRAPIAvailable(autoID); err != nil || got {
 		t.Errorf("二次执行不应影响 auto 行: got=%v err=%v", got, err)
 	}
