@@ -37,3 +37,6 @@ nul
 # 本地密钥（APIGATEWAY_KEY 主密钥，绝不提交）
 .env
 .env.local
+
+# 本机 TLS 解密根证书（Cloudflare WARP 环境专用，勿提交）
+certs/
