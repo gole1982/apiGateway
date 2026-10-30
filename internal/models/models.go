@@ -146,7 +146,7 @@ type Platform struct {
 	FormatEndpoints string `json:"format_endpoints,omitempty"`
 	// LoginAccount is the account used to log into the provider console.
 	// Returned to the UI on read (non-secret).
-	LoginAccount string `json:"login_account,omitempty"`
+	LoginAccount   string    `json:"login_account,omitempty"`
 	LastTokenFetch time.Time `json:"last_token_fetch"`
 	Enabled        bool      `json:"enabled"`
 	Available      bool      `json:"available"`

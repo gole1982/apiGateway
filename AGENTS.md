@@ -34,10 +34,12 @@ CGO_ENABLED=0 go build -o /tmp/gateway ./cmd/gateway
   已在 `internal/gateway/gateway.go` 三处内联 `#nosec` 并写明理由。**不要在配置里整条
   禁用 SSRF/XSS 规则**，那会同时放过未来代码的真问题。
 - `Lint` job 的存量（`continue-on-error`，非阻断）：gofmt×2 + unparam×2 + unused×1。
-- `gofmt` 全量会报 5 个文件：`internal/gateway/gateway_test.go`、`internal/service/metrics_test.go`、
-  `internal/models/models.go`、`internal/service/insights.go`、`internal/crypto/crypto_test.go`
+- `gofmt` 全量会报 4 个文件：`internal/gateway/gateway_test.go`、`internal/service/metrics_test.go`、
+  `internal/service/insights.go`、`internal/crypto/crypto_test.go`
   —— 这些**本来就未格式化**（Go 1.25 gofmt 对结构体字段对齐更严），非改动引入，不要顺手改。
   它们不在 lint job 的存量清单里（该 job 的 gofmt 只扫它自己启用的路径）。
+  `internal/models/models.go` 已修好（2026-10-30，`LoginAccount` 字段对齐）——它曾在清单里，
+  但 `gofmt (changed files)` 只扫本次改动，一改这个文件就会红，顺手修掉是必要的。
 - 仓库是**浅克隆**（`git rev-parse --is-shallow-repository`）。`master` 落后 `origin/master`；**不要擅自推送或开 PR**。
 - git user 已配置（gole1982）。提交信息末尾加 `Co-authored-by: openhands <openhands@all-hands.dev>`。
 
