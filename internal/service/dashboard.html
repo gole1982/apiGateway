@@ -140,6 +140,34 @@
             transition: all 0.2s ease;
         }
         .topbar-icon:hover { background: rgba(255,255,255,0.09); }
+        /* 顶栏被动状态：代理端口 + 连通指示（原侧栏底部块迁移而来） */
+        .topbar-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            height: 38px;
+            padding: 0 12px;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 10px;
+            font-family: var(--font-mono);
+            font-size: 0.78rem;
+            color: var(--text-secondary);
+            white-space: nowrap;
+        }
+        .topbar-status-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--color-success);
+            box-shadow: 0 0 8px rgba(16,185,129,0.7);
+            flex-shrink: 0;
+        }
+        .topbar-status.offline .topbar-status-dot {
+            background: var(--color-danger);
+            box-shadow: 0 0 8px rgba(244,63,94,0.7);
+        }
+        .topbar-status-port { color: var(--text-primary); }
         /* 更新提示弹窗 */
         @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.5;transform:scale(1.2)} }
         .update-panel-overlay {
@@ -253,7 +281,6 @@
             padding: 14px 16px;
             display: flex;
             flex-direction: column;
-            justify-content: space-between;
             backdrop-filter: blur(20px);
             -webkit-backdrop-filter: blur(20px);
             z-index: 100;
@@ -342,44 +369,6 @@
         .nav-sub button { padding: 6px 12px; font-size: 0.82rem; font-weight: 500; gap: 9px; }
         .nav-sub button svg { width: 16px; height: 16px; }
 
-        .sidebar-footer {
-            margin-top: 12px;
-            padding-top: 12px;
-            border-top: 1px solid rgba(255, 255, 255, 0.05);
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-        }
-        .gateway-status {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            background: rgba(0, 0, 0, 0.25);
-            padding: 10px 14px;
-            border-radius: 8px;
-            border: 1px solid rgba(255, 255, 255, 0.03);
-        }
-        .status-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: var(--color-success);
-            box-shadow: 0 0 10px var(--color-success);
-            animation: breathe 2s infinite ease-in-out;
-        }
-        .status-dot.offline {
-            background: var(--color-danger);
-            box-shadow: 0 0 10px var(--color-danger);
-        }
-        .gateway-info {
-            font-size: 0.82rem;
-            color: var(--text-secondary);
-        }
-
-        @keyframes breathe {
-            0%, 100% { opacity: 1; transform: scale(1); }
-            50% { opacity: 0.4; transform: scale(0.9); }
-        }
         @keyframes spin {
             from { transform: rotate(0deg); }
             to   { transform: rotate(360deg); }
@@ -1521,9 +1510,13 @@
                 </div>
             </div>
             <div class="topbar-actions">
+                <div class="topbar-status" :class="{ offline: !gatewayLive }" :title="'代理端口 ' + (stats.proxy_port || '13579') + (gatewayLive ? '（网关运行中）' : '（网关已离线）')">
+                    <span class="topbar-status-dot"></span>
+                    <span class="topbar-status-port">:{{ stats.proxy_port || '13579' }}</span>
+                </div>
                 <div class="unread-wrap" @click.stop>
                     <button class="topbar-icon" @click="unreadPanelOpen = !unreadPanelOpen" title="未读信息">
-                        🔔
+                        <svg style="width:16px;height:16px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
                         <span v-if="totalUnread > 0" class="unread-dot">{{ totalUnread > 99 ? '99+' : totalUnread }}</span>
                     </button>
                     <div v-if="unreadPanelOpen" class="unread-panel">
@@ -1560,7 +1553,7 @@
                 </div>
                 <div class="unread-wrap" v-if="syncCenter.enabled" @click.stop>
                     <button class="topbar-icon" @click="toggleSyncPanel" title="中心（Supabase）同步状态">
-                        <span :style="{ color: syncDotColor, fontSize: '15px' }">☁</span>
+                        <svg style="width:16px;height:16px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" :style="{ color: syncDotColor }"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>
                         <span v-if="!syncCenter.connected || !syncCenter.in_sync" class="unread-dot" style="background:#e5484d;"></span>
                     </button>
                     <div v-if="syncPanelOpen" class="unread-panel" style="width:320px;">
@@ -1603,8 +1596,8 @@
                 <button class="btn btn-primary btn-sm" @click="openAddWizard">＋ 新增</button>
                 <!-- GitHub 图标 + 版本更新提示：有新版本时显示红色 badge -->
                 <div style="position:relative;display:inline-flex;">
-                    <button class="topbar-icon" @click="toggleUpdatePanel" :title="updateInfo.update_available ? '有新版本可用！' : 'GitHub 项目主页'" :style="{ color: updateInfo.update_available ? 'var(--color-primary)' : 'inherit' }">
-                        <svg style="width:16px;height:16px;" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
+                    <button class="topbar-icon" @click="toggleUpdatePanel" :title="updateInfo.update_available ? '有新版本可用！' : '版本更新'" :style="{ color: updateInfo.update_available ? 'var(--color-primary)' : 'inherit' }">
+                        <svg style="width:16px;height:16px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                     </button>
                     <span v-if="updateInfo.update_available" style="position:absolute;top:-2px;right:-2px;width:8px;height:8px;border-radius:50%;background:#e5484d;border:1.5px solid var(--bg-card);animation:pulse 1.5s ease-in-out infinite;"></span>
                 </div>
@@ -1729,16 +1722,6 @@
                 </ul>
             </div>
             
-            <div class="sidebar-footer">
-                <div class="gateway-status">
-                    <div class="status-dot" :class="{ offline: !gatewayLive }"></div>
-                    <span class="gateway-info" style="font-weight:600;">{{ gatewayLive ? '网关运行中' : '网关已离线' }}</span>
-                </div>
-                <div class="gateway-info">
-                    代理端口: <span style="font-family:var(--font-mono); color:var(--color-primary)">{{ stats.proxy_port || '13579' }}</span><br>
-                    控制台端口: <span class="u-mono">{{ stats.web_port || '24680' }}</span>
-                </div>
-            </div>
         </aside>
 
         <!-- MAIN PANEL -->
