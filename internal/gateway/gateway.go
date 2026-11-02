@@ -523,18 +523,26 @@ func (g *ProxyGateway) loadKeyModelBlocks(ttl time.Duration) {
 
 // blockKeyForModel records a key×model capability block in memory and persists
 // it with a fresh TTL. The pair is skipped for this model until it expires.
-func (g *ProxyGateway) blockKeyForModel(keyID, rapiID int64, reason string) {
+//
+// Returns true when this call created a NEW block (the pair was not already
+// blocked and unexpired); false when it merely refreshed an existing one.
+// Callers use the return to fire notifications only on a real state change
+// (the binding turning blocked), never on a repeat request.
+func (g *ProxyGateway) blockKeyForModel(keyID, rapiID int64, reason string) bool {
 	exp := time.Now().Add(g.capabilityBlockT)
 	g.blockMu.Lock()
 	if g.blocks[keyID] == nil {
 		g.blocks[keyID] = make(map[int64]keyModelBlock)
 	}
+	prev, existed := g.blocks[keyID][rapiID]
+	newlyBlocked := !existed || time.Now().After(prev.expiresAt)
 	g.blocks[keyID][rapiID] = keyModelBlock{reason: reason, expiresAt: exp}
 	g.blockMu.Unlock()
 	if err := g.db.BlockKeyForModel(keyID, rapiID, reason, exp); err != nil {
 		logger.DefaultConsole().Warn("gateway", "[BLOCK] persist key×model block failed",
 			"key_id", keyID, "rapi_id", rapiID, "error", err.Error())
 	}
+	return newlyBlocked
 }
 
 // UnblockKeyForModel removes a key×model capability block (a request/probe
@@ -1013,13 +1021,13 @@ func (g *ProxyGateway) tryKeyForRAPI(
 			if resp.StatusCode == 403 && entity.IsCapabilityMismatch(string(errBody)) {
 				keyLog.Warn("gateway", "[KEY-BLOCK] capability mismatch, blocking key×model",
 					"status", resp.StatusCode, "reason", reason)
-				g.blockKeyForModel(key.ID, rapi.ID, reason)
-				if g.notifyService != nil {
+				// 通知只在"绑定首次成块"这一状态改变时发，不是每次按请求判定发。
+				// 这是 Key×模型 绑定的状态改变，归 Key 域；模型自身 available 未变，
+				// 不往模型域塞，否则铃铛会出现"模型失效"而模型其实是生效的。
+				if g.blockKeyForModel(key.ID, rapi.ID, reason) && g.notifyService != nil {
 					g.notifyService.PublishEvent("error", notify.MenuKeys, "failure",
 						fmt.Sprintf("Key #%d 无权访问模型 %s，已加入能力黑名单", key.KeyIndex, rapi.Alias),
 						reason, key.ID)
-					g.notifyService.RecordUnread(notify.MenuModels, "failure",
-						fmt.Sprintf("模型 %s 对 Key #%d 失效", rapi.Alias, key.KeyIndex), reason, rapi.ID)
 				}
 				if g.log != nil {
 					g.log.RecordError(requestID, reason+"（该 Key 无权访问此模型，已加入能力黑名单）", "UPSTREAM_RESPONSE")
@@ -1053,13 +1061,12 @@ func (g *ProxyGateway) tryKeyForRAPI(
 				entity.IsCapabilityMismatch(string(errBody)) {
 				keyLog.Warn("gateway", "[KEY-BLOCK] capability mismatch, blocking key×model",
 					"status", resp.StatusCode, "reason", reason)
-				g.blockKeyForModel(key.ID, rapi.ID, reason)
-				if g.notifyService != nil {
+				// 同 ScopePlatform 分支：只在"绑定首次成块"这一状态改变时发通知，
+				// 且归 Key 域（模型自身状态未变，不往模型域塞）。
+				if g.blockKeyForModel(key.ID, rapi.ID, reason) && g.notifyService != nil {
 					g.notifyService.PublishEvent("error", notify.MenuKeys, "failure",
 						fmt.Sprintf("Key #%d 无权访问模型 %s，已加入能力黑名单", key.KeyIndex, rapi.Alias),
 						reason, key.ID)
-					g.notifyService.RecordUnread(notify.MenuModels, "failure",
-						fmt.Sprintf("模型 %s 对 Key #%d 失效", rapi.Alias, key.KeyIndex), reason, rapi.ID)
 				}
 				if g.log != nil {
 					g.log.RecordError(requestID, reason+"（该 Key 无权访问此模型，已加入能力黑名单）", "UPSTREAM_RESPONSE")
