@@ -2330,6 +2330,12 @@ func (db *DB) migrateDropWebpageColumns() {
 }
 
 func (db *DB) migrateAddPlatformKeyFailureColumns() {
+	// platform_keys 是自然键迁移前的旧表，v2 终态库里已被 DROP。表不存在时
+	// pragma_table_info 返回 0 行，会被下面的 `count == 0` 误判成“列缺失”，
+	// 进而对不存在的表执行 ALTER 并刷 ERROR 日志。先判表是否存在。
+	if !tableExists(db.conn, "platform_keys") {
+		return
+	}
 	var count int
 	row := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('platform_keys') WHERE name='failure_type'`)
 	if row.Scan(&count) == nil && count == 0 {
@@ -2344,6 +2350,9 @@ func (db *DB) migrateAddPlatformKeyFailureColumns() {
 // Idempotent: a no-op on fresh installs (CREATE TABLE already has the columns)
 // and on already-migrated databases.
 func (db *DB) migrateAddPlatformKeyExpiryColumns() {
+	if !tableExists(db.conn, "platform_keys") {
+		return
+	}
 	addIfMissing := func(col, ddl string) {
 		var count int
 		row := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('platform_keys') WHERE name=?`, col)
