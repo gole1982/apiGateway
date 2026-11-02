@@ -1799,19 +1799,23 @@
                     </div>
                     <table style="width:100%;font-size:0.82rem;border-collapse:collapse;">
                         <thead>
-                            <tr style="color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-size:0.72rem;">
-                                <th style="text-align:left;padding:4px 8px;">定义表</th>
-                                <th style="text-align:right;padding:4px 8px;">中心</th>
-                                <th style="text-align:right;padding:4px 8px;">本地</th>
-                                <th style="text-align:right;padding:4px 8px;">启动以来变化</th>
+                            <tr style="color:var(--text-muted);letter-spacing:0.5px;font-size:0.72rem;">
+                                <th style="text-align:left;padding:4px 10px;white-space:nowrap;"></th>
+                                <th v-for="t in syncTables" :key="'sth-'+t" style="text-align:right;padding:4px 10px;white-space:nowrap;">{{ tableNameLabel(t) }}</th>
                             </tr>
                         </thead>
                         <tbody>
-                            <tr v-for="t in ['platform','credential','endpoint_credential','rapi','lapi','lapi_rapi_order']" :key="t" style="border-top:1px solid rgba(255,255,255,0.05);">
-                                <td style="padding:5px 8px;">{{ tableNameLabel(t) }}</td>
-                                <td style="text-align:right;padding:5px 8px;font-family:var(--font-mono);">{{ syncCenter.connected ? ((syncCenter.tables ?? {})[t] ?? '—') : '—' }}</td>
-                                <td style="text-align:right;padding:5px 8px;font-family:var(--font-mono);">{{ (syncCenter.local_tables ?? {})[t] ?? '—' }}</td>
-                                <td style="text-align:right;padding:5px 8px;font-family:var(--font-mono);" v-html="tableDelta((syncCenter.local_tables ?? {})[t], (syncCenter.startup_tables ?? {})[t])"></td>
+                            <tr style="border-top:1px solid rgba(255,255,255,0.05);">
+                                <td style="padding:5px 10px;color:var(--text-secondary);white-space:nowrap;">中心</td>
+                                <td v-for="t in syncTables" :key="'stc-'+t" style="text-align:right;padding:5px 10px;font-family:var(--font-mono);">{{ syncCenter.connected ? ((syncCenter.tables ?? {})[t] ?? '—') : '—' }}</td>
+                            </tr>
+                            <tr style="border-top:1px solid rgba(255,255,255,0.05);">
+                                <td style="padding:5px 10px;color:var(--text-secondary);white-space:nowrap;">本地</td>
+                                <td v-for="t in syncTables" :key="'stl-'+t" style="text-align:right;padding:5px 10px;font-family:var(--font-mono);">{{ (syncCenter.local_tables ?? {})[t] ?? '—' }}</td>
+                            </tr>
+                            <tr style="border-top:1px solid rgba(255,255,255,0.05);">
+                                <td style="padding:5px 10px;color:var(--text-secondary);white-space:nowrap;">启动以来变化</td>
+                                <td v-for="t in syncTables" :key="'std-'+t" style="text-align:right;padding:5px 10px;font-family:var(--font-mono);" v-html="tableDelta((syncCenter.local_tables ?? {})[t], (syncCenter.startup_tables ?? {})[t])"></td>
                             </tr>
                         </tbody>
                     </table>
@@ -2895,17 +2899,19 @@
 
                     <table style="width:100%;font-size:0.84rem;border-collapse:collapse;">
                         <thead>
-                            <tr style="color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-size:0.72rem;">
-                                <th style="text-align:left;padding:4px 8px;">定义表</th>
-                                <th style="text-align:right;padding:4px 8px;">中心</th>
-                                <th style="text-align:right;padding:4px 8px;">本地</th>
+                            <tr style="color:var(--text-muted);letter-spacing:0.5px;font-size:0.72rem;">
+                                <th style="text-align:left;padding:4px 10px;white-space:nowrap;"></th>
+                                <th v-for="t in syncTables" :key="'sbh-'+t" style="text-align:right;padding:4px 10px;white-space:nowrap;">{{ tableNameLabel(t) }}</th>
                             </tr>
                         </thead>
                         <tbody>
-                            <tr v-for="t in ['platform','credential','endpoint_credential','rapi','lapi','lapi_rapi_order']" :key="t" style="border-top:1px solid rgba(255,255,255,0.05);">
-                                <td style="padding:5px 8px;">{{ tableNameLabel(t) }}</td>
-                                <td style="text-align:right;padding:5px 8px;font-family:var(--font-mono);">{{ (sbConfig.tables ?? {})[t] ?? '—' }}</td>
-                                <td style="text-align:right;padding:5px 8px;font-family:var(--font-mono);">{{ (sbConfig.local_tables ?? {})[t] ?? '—' }}</td>
+                            <tr style="border-top:1px solid rgba(255,255,255,0.05);">
+                                <td style="padding:5px 10px;color:var(--text-secondary);white-space:nowrap;">中心</td>
+                                <td v-for="t in syncTables" :key="'sbc-'+t" style="text-align:right;padding:5px 10px;font-family:var(--font-mono);">{{ (sbConfig.tables ?? {})[t] ?? '—' }}</td>
+                            </tr>
+                            <tr style="border-top:1px solid rgba(255,255,255,0.05);">
+                                <td style="padding:5px 10px;color:var(--text-secondary);white-space:nowrap;">本地</td>
+                                <td v-for="t in syncTables" :key="'sbl-'+t" style="text-align:right;padding:5px 10px;font-family:var(--font-mono);">{{ (sbConfig.local_tables ?? {})[t] ?? '—' }}</td>
                             </tr>
                         </tbody>
                     </table>
@@ -3820,6 +3826,8 @@
                     platform: '平台', credential: '密钥', endpoint_credential: '绑定',
                     rapi: '上游模型', lapi: '客户端模型', lapi_rapi_order: '路由链'
                 }[t] || t);
+                // 中心/本地比较表的定义表顺序（仪表盘 + 中心配置共用）。
+                const syncTables = ['platform', 'credential', 'endpoint_credential', 'rapi', 'lapi', 'lapi_rapi_order'];
                 // 角色 → 可读标签 / 颜色（仪表盘中心连接信息卡 + 中心配置页共用）。
                 const roleLabel = (r) => ({
                     management: '管理端（可写）', proxy: '代理端（只读）', offline: '未连接'
@@ -6893,7 +6901,7 @@
                     clientErrorRate, fmtCompact, fmtClientSeen, isLoopbackIP,
                     attentionLabel, attentionByKind, attentionColor, jumpToAttention, openLogById,
                     // Supabase 配置 + 角色 + confirm sb 提醒
-                    sbRole, sbConfig, sbConfigForm, sbRoleLabel, tableNameLabel,
+                    sbRole, sbConfig, sbConfigForm, sbRoleLabel, tableNameLabel, syncTables,
                     roleLabel, roleColor, tableDelta,
                     fetchSBConfig, saveSBConfig, sbNote,
                     // 系统/中心日志
