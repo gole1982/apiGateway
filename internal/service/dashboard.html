@@ -1617,7 +1617,6 @@
                         <div v-else style="padding:16px 14px;color:#e5484d;">✕ 中心离线：{{ syncCenter.error }}</div>
                     </div>
                 </div>
-                <button class="btn btn-primary btn-sm" @click="startAddChain">＋ 新增</button>
                 <!-- GitHub 图标 + 版本更新提示：有新版本时显示红色 badge -->
                 <div style="position:relative;display:inline-flex;">
                     <button class="topbar-icon" @click="toggleUpdatePanel" :title="updateInfo.update_available ? '有新版本可用！' : '版本更新'" :style="{ color: updateInfo.update_available ? 'var(--color-primary)' : 'inherit' }">
@@ -1770,6 +1769,11 @@
             <!-- TABS CONTENT -->
             <!-- 1. DASHBOARD OVERVIEW（单屏指标矩阵：今日/本月 × 4 维度 × 10 指标 TOP3 + 待处理 + 近期错误） -->
             <div v-if="activeTab === 'dashboard'" class="tab-pane">
+
+                <!-- 页首操作：新增向导（链式：平台 → 密钥 → 模型）。原在顶栏，按方案 §5.1 移到此处。 -->
+                <div style="display:flex;align-items:center;justify-content:flex-end;margin-bottom:12px;">
+                    <button class="btn btn-primary btn-sm" @click="startAddChain" title="从零配置：平台 → 密钥 → 模型">＋ 新增</button>
+                </div>
 
                 <!-- 上层：中心连接信息（本地角色 / 连接状态 / 是否同步 / 各表中心·本地·启动以来变化） -->
                 <div class="glass-card" style="padding:14px 16px;margin-bottom:14px;">
