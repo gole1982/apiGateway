@@ -19,8 +19,8 @@ import (
 //   1. 规范表名恰好是 v2 的 6 张，不多不少，没有旧名；
 //   2. 本地计数器的键集合与规范表名一致（只比键，不执行，无需 DB）；
 //   3. bundle 取数把每张表映射到正确的数组；
-//   4. dashboard.html 的两处 v-for、标签映射、推送 toast 用同一套表名，
-//      且全文不再出现 platform_keys。
+//   4. dashboard.html 的两张比较表经同一个 syncTables 常量渲染、标签映射、
+//      推送 toast 用同一套表名，且全文不再出现 platform_keys。
 
 var wantDefinitionTables = []string{
 	"platform", "credential", "endpoint_credential",
@@ -96,10 +96,18 @@ func TestDashboardUsesV2TableNames(t *testing.T) {
 	}
 	src := string(raw)
 
-	// 两处 v-for（sync 卡 + sb-config 卡）必须列出全部 6 张 v2 表。
-	vfor := "'platform','credential','endpoint_credential','rapi','lapi','lapi_rapi_order'"
-	if n := strings.Count(src, vfor); n != 2 {
-		t.Errorf("v-for table array found %d times, want 2 (sync card + sb-config card)", n)
+	// 规范表名集中在唯一一份常量 syncTables 里（仪表盘 sync 卡 + 中心配置 sb-config
+	// 卡共用）。取代旧版"两处内联数组"——共享常量更彻底地防漂移：全库只有这一份。
+	canon := "['platform', 'credential', 'endpoint_credential', 'rapi', 'lapi', 'lapi_rapi_order']"
+	if n := strings.Count(src, canon); n != 1 {
+		t.Errorf("canonical v2 table array found %d times, want exactly 1 (shared syncTables constant)", n)
+	}
+	if !strings.Contains(src, "const syncTables = "+canon+";") {
+		t.Error("syncTables constant missing or drifted from the v2 table list")
+	}
+	// 两张卡都必须经该常量渲染，不各自内联。
+	if n := strings.Count(src, `v-for="t in syncTables"`); n < 2 {
+		t.Errorf("tables rendered via syncTables %d times, want >= 2 (sync card + sb-config card)", n)
 	}
 	// 标签映射。
 	for _, pair := range [][2]string{
