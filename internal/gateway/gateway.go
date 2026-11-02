@@ -976,11 +976,12 @@ func (g *ProxyGateway) tryKeyForRAPI(
 			// skips it.
 			reason := fmt.Sprintf("[认证失败] upstream 401: %s", string(errBody))
 			keyLog.Error("gateway", "[KEY-FAIL] 401 unauthorized, marking permanent failure", "status", resp.StatusCode)
-			g.scheduler.MarkKeyPlatformFailure(key.ID, reason)
+			_, keyChanged := g.scheduler.MarkKeyPlatformFailure(key.ID, reason)
 			if g.log != nil {
 				g.log.RecordError(requestID, reason, "UPSTREAM_RESPONSE")
 			}
-			if g.notifyService != nil {
+			// 通知只由 Key 状态改变触发（首次进入该失败态），不按每次请求发。
+			if keyChanged && g.notifyService != nil {
 				g.notifyService.PublishEvent(
 					"error", notify.MenuKeys, "failure",
 					fmt.Sprintf("Key #%d 认证失败（401），已标记永久失效", key.KeyIndex),
@@ -1001,8 +1002,8 @@ func (g *ProxyGateway) tryKeyForRAPI(
 				// 白打一次该 key，充值后冷却到期自动回归。
 				keyLog.Warn("gateway", "[KEY-RECOVER] billing error treated as temporary",
 					"status", resp.StatusCode, "reason", reason)
-				recoverAt := g.scheduler.MarkKeyBillingFailure(key.ID, reason)
-				if g.notifyService != nil {
+				recoverAt, keyChanged := g.scheduler.MarkKeyBillingFailure(key.ID, reason)
+				if keyChanged && g.notifyService != nil {
 					g.notifyService.PublishEvent("error", notify.MenuKeys, "cooling",
 						fmt.Sprintf("Key #%d 计费错误冷却（%s）", key.KeyIndex, rapi.PlatformName),
 						reason, key.ID)
@@ -1036,11 +1037,11 @@ func (g *ProxyGateway) tryKeyForRAPI(
 			}
 			keyLog.Error("gateway", "[KEY-FAIL] platform-level failure, marking permanent",
 				"status", resp.StatusCode)
-			g.scheduler.MarkKeyPlatformFailure(key.ID, reason)
+			_, keyChanged := g.scheduler.MarkKeyPlatformFailure(key.ID, reason)
 			if g.log != nil {
 				g.log.RecordError(requestID, reason, "UPSTREAM_RESPONSE")
 			}
-			if g.notifyService != nil {
+			if keyChanged && g.notifyService != nil {
 				g.notifyService.PublishEvent(
 					"error", notify.MenuKeys, "failure",
 					fmt.Sprintf("Key #%d 平台受限（%d），已标记永久失效", key.KeyIndex, resp.StatusCode),
@@ -1074,9 +1075,10 @@ func (g *ProxyGateway) tryKeyForRAPI(
 				continue
 			}
 			retryAt := scheduler.RetryAt(resp.Header, time.Time{})
-			recoverAt := g.scheduler.MarkKeyTemporaryFailure(key.ID, retryAt, reason)
+			recoverAt, keyChanged := g.scheduler.MarkKeyTemporaryFailure(key.ID, retryAt, reason)
 			// 429/5xx 冷却通知（限流类最有价值；capability/计费已在上文单独通知）。
-			if g.notifyService != nil && (resp.StatusCode == 429 || resp.StatusCode >= 500) {
+			// 只在 Key 状态确实改变（进入冷却）时发。
+			if keyChanged && g.notifyService != nil && (resp.StatusCode == 429 || resp.StatusCode >= 500) {
 				g.notifyService.PublishEvent("error", notify.MenuKeys, "cooling",
 					fmt.Sprintf("Key #%d 冷却（%s，%d）", key.KeyIndex, rapi.PlatformName, resp.StatusCode),
 					reason, key.ID)

@@ -123,26 +123,41 @@ func (k *Key) OnSuccess() {
 
 // OnSessionFailure applies a transient cooldown without persisting — used for
 // network errors, where failure_type is left untouched (matches legacy).
-func (k *Key) OnSessionFailure(reason string, retryAt time.Time, isTimeout bool) {
+// Returns true when the key actually changed state (a live key entering
+// Cooling); a repeat while already Cooling is not a state change.
+func (k *Key) OnSessionFailure(reason string, retryAt time.Time, isTimeout bool) bool {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	k.machine.Fire(EventSessionFailure, SessionFailurePayload{Reason: reason, RetryAt: retryAt, IsTimeout: isTimeout})
+	return k.fireSessionFailure(SessionFailurePayload{Reason: reason, RetryAt: retryAt, IsTimeout: isTimeout})
 }
 
 // OnTemporaryFailure applies a transient cooldown AND persists failure_type=1
-// — used for HTTP session failures (429/5xx/400/404/413/422).
-func (k *Key) OnTemporaryFailure(reason string, retryAt time.Time, isTimeout bool) {
+// — used for HTTP session failures (429/5xx/400/404/413/422). Returns whether
+// the state changed (see OnSessionFailure).
+func (k *Key) OnTemporaryFailure(reason string, retryAt time.Time, isTimeout bool) bool {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	k.machine.Fire(EventSessionFailure, SessionFailurePayload{Reason: reason, RetryAt: retryAt, IsTimeout: isTimeout, PersistTemporary: true})
+	return k.fireSessionFailure(SessionFailurePayload{Reason: reason, RetryAt: retryAt, IsTimeout: isTimeout, PersistTemporary: true})
+}
+
+// fireSessionFailure fires the session-failure event and reports whether the
+// state actually changed (Healthy → Cooling). A self-transition while already
+// Cooling matches the machine but leaves the state identical, so it reports
+// false. Caller holds k.mu.
+func (k *Key) fireSessionFailure(p SessionFailurePayload) bool {
+	before := k.machine.State()
+	after, _ := k.machine.Fire(EventSessionFailure, p)
+	return before != after
 }
 
 // OnPlatformFailure applies a long cooldown AND persists failure_type=2 —
-// used for 401/402/403/409/423/451.
-func (k *Key) OnPlatformFailure(reason string) {
+// used for 401/402/403/409/423/451. Returns whether the state changed.
+func (k *Key) OnPlatformFailure(reason string) bool {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	k.machine.Fire(EventPlatformFailure, SessionFailurePayload{Reason: reason})
+	before := k.machine.State()
+	after, _ := k.machine.Fire(EventPlatformFailure, SessionFailurePayload{Reason: reason})
+	return before != after
 }
 
 // OnBillingFailure applies a recoverable-billing-error cooldown AND persists
@@ -150,11 +165,11 @@ func (k *Key) OnPlatformFailure(reason string) {
 // minutes) rather than DefaultCooldown, so an out-of-credit key does not burn a
 // failed upstream attempt on every request; it auto-recovers once the account
 // is topped up and the cooldown elapses. Used for 402/403 whose body matches
-// IsRecoverableBillingError.
-func (k *Key) OnBillingFailure(reason string) {
+// IsRecoverableBillingError. Returns whether the state changed.
+func (k *Key) OnBillingFailure(reason string) bool {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	k.machine.Fire(EventSessionFailure, SessionFailurePayload{Reason: reason, IsBilling: true, PersistTemporary: true})
+	return k.fireSessionFailure(SessionFailurePayload{Reason: reason, IsBilling: true, PersistTemporary: true})
 }
 
 // Advance fires the timer (cooldown expiry) if due, recovering to Healthy.

@@ -364,6 +364,24 @@ func TestKeySessionFailurePersistsTemporary(t *testing.T) {
 	}
 }
 
+// TestKeyFailureReportsStateChange 锁住"通知只由状态改变触发"的判据：
+// 首次进入某失败态返回 true；已在同一失败态时重复标记返回 false（非状态改变）。
+func TestKeyFailureReportsStateChange(t *testing.T) {
+	k := NewKey(1, testConfig(), &fakeStore{})
+	if changed := k.OnTemporaryFailure("429", time.Time{}, false); !changed {
+		t.Error("healthy→cooling should report changed=true")
+	}
+	if changed := k.OnTemporaryFailure("429", time.Time{}, false); changed {
+		t.Error("repeat cooling while already cooling should report changed=false")
+	}
+	if changed := k.OnPlatformFailure("403"); !changed {
+		t.Error("cooling→platform-failed should report changed=true")
+	}
+	if changed := k.OnPlatformFailure("403"); changed {
+		t.Error("repeat platform failure while already failed should report changed=false")
+	}
+}
+
 func TestKeyNetworkErrorDoesNotPersist(t *testing.T) {
 	store := &fakeStore{}
 	k := NewKey(1, testConfig(), store)

@@ -501,50 +501,54 @@ func (m *Manager) evictCursorsLocked(now time.Time) {
 // MarkKeyFailure puts a PlatformKey into session cooldown WITHOUT persisting
 // failure_type — used for network errors (timeout / connection failures),
 // matching the legacy behavior where only HTTP error responses wrote the DB.
-func (m *Manager) MarkKeyFailure(keyID int64, retryAt time.Time, reason string, isTimeout ...bool) time.Time {
+func (m *Manager) MarkKeyFailure(keyID int64, retryAt time.Time, reason string, isTimeout ...bool) (time.Time, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	ke := m.keyEntityLocked(keyID)
-	ke.OnSessionFailure(reason, retryAt, len(isTimeout) > 0 && isTimeout[0])
+	changed := ke.OnSessionFailure(reason, retryAt, len(isTimeout) > 0 && isTimeout[0])
 	m.cond.Broadcast()
-	return ke.Snapshot().RecoverAt
+	return ke.Snapshot().RecoverAt, changed
 }
 
 // MarkKeyTemporaryFailure puts a PlatformKey into session cooldown AND persists
 // failure_type=1 — used for HTTP session failures (429/5xx/400/404/413/422).
-func (m *Manager) MarkKeyTemporaryFailure(keyID int64, retryAt time.Time, reason string, isTimeout ...bool) time.Time {
+// Returns the cooldown expiry and whether the key actually changed state (a
+// live key entering cooling); callers notify only when changed is true.
+func (m *Manager) MarkKeyTemporaryFailure(keyID int64, retryAt time.Time, reason string, isTimeout ...bool) (time.Time, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	ke := m.keyEntityLocked(keyID)
-	ke.OnTemporaryFailure(reason, retryAt, len(isTimeout) > 0 && isTimeout[0])
+	changed := ke.OnTemporaryFailure(reason, retryAt, len(isTimeout) > 0 && isTimeout[0])
 	m.cond.Broadcast()
-	return ke.Snapshot().RecoverAt
+	return ke.Snapshot().RecoverAt, changed
 }
 
 // MarkKeyBillingFailure applies the long billing cooldown (failure_type=1) for
 // a recoverable billing/quota error (欠费/积分不足). The key stays out of the
 // pool for BillingCooldown instead of DefaultCooldown, so an out-of-credit key
 // does not burn a failed upstream attempt on every request; it auto-recovers
-// once the account is topped up.
-func (m *Manager) MarkKeyBillingFailure(keyID int64, reason string) time.Time {
+// once the account is topped up. Returns the cooldown expiry and whether the
+// key changed state.
+func (m *Manager) MarkKeyBillingFailure(keyID int64, reason string) (time.Time, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	ke := m.keyEntityLocked(keyID)
-	ke.OnBillingFailure(reason)
+	changed := ke.OnBillingFailure(reason)
 	m.cond.Broadcast()
-	return ke.Snapshot().RecoverAt
+	return ke.Snapshot().RecoverAt, changed
 }
 
 // MarkKeyPlatformFailure puts a PlatformKey into a long cooldown AND persists
 // failure_type=2 — used when the upstream returns a quota/billing/auth error
-// (401/402/403/409/423/451) for this key specifically.
-func (m *Manager) MarkKeyPlatformFailure(keyID int64, reason string) time.Time {
+// (401/402/403/409/423/451) for this key specifically. Returns the cooldown
+// expiry and whether the key changed state (callers notify only on change).
+func (m *Manager) MarkKeyPlatformFailure(keyID int64, reason string) (time.Time, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	ke := m.keyEntityLocked(keyID)
-	ke.OnPlatformFailure(reason)
+	changed := ke.OnPlatformFailure(reason)
 	m.cond.Broadcast()
-	return ke.Snapshot().RecoverAt
+	return ke.Snapshot().RecoverAt, changed
 }
 
 // RemoveKey drops a deleted key's in-memory entity so it stops participating
