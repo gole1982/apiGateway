@@ -168,6 +168,30 @@
             box-shadow: 0 0 8px rgba(244,63,94,0.7);
         }
         .topbar-status-port { color: var(--text-primary); }
+        /* 刷新菜单（顶栏刷新按钮的下拉：中心侧 / 端侧 / 比较） */
+        .refresh-panel {
+            position: absolute;
+            top: calc(100% + 10px);
+            right: 0;
+            width: 264px;
+            padding: 6px;
+            background: var(--bg-solid);
+            border: 1px solid var(--border-glow);
+            border-radius: 14px;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.7);
+            z-index: 600;
+        }
+        .refresh-item {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            padding: 9px 12px;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+        .refresh-item:hover { background: rgba(56, 189, 248, 0.08); }
+        .refresh-item-title { font-size: 0.86rem; color: #fff; font-weight: 500; }
+        .refresh-item-sub { font-size: 0.72rem; color: var(--text-muted); }
         /* 更新提示弹窗 */
         @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.5;transform:scale(1.2)} }
         .update-panel-overlay {
@@ -1593,7 +1617,7 @@
                         <div v-else style="padding:16px 14px;color:#e5484d;">✕ 中心离线：{{ syncCenter.error }}</div>
                     </div>
                 </div>
-                <button class="btn btn-primary btn-sm" @click="openAddWizard">＋ 新增</button>
+                <button class="btn btn-primary btn-sm" @click="startAddChain">＋ 新增</button>
                 <!-- GitHub 图标 + 版本更新提示：有新版本时显示红色 badge -->
                 <div style="position:relative;display:inline-flex;">
                     <button class="topbar-icon" @click="toggleUpdatePanel" :title="updateInfo.update_available ? '有新版本可用！' : '版本更新'" :style="{ color: updateInfo.update_available ? 'var(--color-primary)' : 'inherit' }">
@@ -1641,9 +1665,25 @@
                         </div>
                     </div>
                 </div>
-                <button class="topbar-icon" @click="refreshData" title="刷新数据">
-                    <svg style="width:16px;height:16px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
-                </button>
+                <div class="unread-wrap" @click.stop>
+                    <button class="topbar-icon" @click="refreshMenuOpen = !refreshMenuOpen" title="刷新">
+                        <svg style="width:16px;height:16px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                    </button>
+                    <div v-if="refreshMenuOpen" class="refresh-panel">
+                        <div class="refresh-item" @click="doRefreshCenter">
+                            <span class="refresh-item-title">中心侧刷新</span>
+                            <span class="refresh-item-sub">从中心拉取最新定义（合并到本地）</span>
+                        </div>
+                        <div class="refresh-item" @click="doRefreshEdge">
+                            <span class="refresh-item-title">端侧刷新</span>
+                            <span class="refresh-item-sub">重新读取端侧（本地）数据</span>
+                        </div>
+                        <div class="refresh-item" @click="doRefreshCompare">
+                            <span class="refresh-item-title">中心侧与端侧比较</span>
+                            <span class="refresh-item-sub">查看两侧差异（跳转中心配置）</span>
+                        </div>
+                    </div>
+                </div>
             </div>
         </header>
 
@@ -2293,7 +2333,7 @@
                         <option value="">全部平台</option>
                         <option v-for="p in platforms" :key="'rf-'+p.id" :value="String(p.id)">{{ p.name }}</option>
                     </select>
-                    <span class="u-muted-md">模型可从平台详情页"发现模型"导入，或经顶栏"新增"向导添加</span>
+                    <button class="btn btn-primary" @click="openRapiModal(null)">+ 新增模型</button>
                 </div>
 
                 <div class="table-responsive">
@@ -3111,7 +3151,8 @@
                         <button class="btn btn-secondary" @click="closePlatformModal">取消</button>
                         <button v-if="platformModal.item && (!platformModal.item.enabled || !platformModal.item.available)"
                                 class="btn btn-danger" @click="deletePlatform(platformModal.item)">删除</button>
-                        <button class="btn btn-primary" @click="savePlatform">保存配置</button>
+                        <button v-if="!addChain.active" class="btn btn-primary" @click="savePlatform">保存配置</button>
+                        <button v-else class="btn btn-primary" @click="chainNextPlatform">保存并下一步 ›</button>
                     </div>
                 </div>
             </div>
@@ -3168,7 +3209,8 @@
                     <div class="modal-footer">
                         <button class="btn btn-secondary" @click="closeKeyModal">取消</button>
                         <button v-if="keyModal.item" class="btn btn-danger" @click="deleteKeyFlat(keyModal.item)">删除</button>
-                        <button class="btn btn-primary" @click="saveKeyModal">保存配置</button>
+                        <button v-if="!addChain.active" class="btn btn-primary" @click="saveKeyModal">保存配置</button>
+                        <button v-else class="btn btn-primary" @click="chainNextKey">保存并下一步 ›</button>
                     </div>
                 </div>
             </div>
@@ -3267,7 +3309,8 @@
                         <button class="btn btn-secondary" @click="closeRapiModal">取消</button>
                         <button v-if="rapiModal.item && (!rapiModal.item.enabled || !rapiModal.item.available)"
                                 class="btn btn-danger" @click="deleteRapi(rapiModal.item)">删除</button>
-                        <button class="btn btn-primary" @click="saveRapi">保存配置</button>
+                        <button v-if="!addChain.active" class="btn btn-primary" @click="saveRapi">保存配置</button>
+                        <button v-else class="btn btn-primary" @click="chainNextRapi">保存并完成 ›</button>
                     </div>
                 </div>
             </div>
@@ -3666,181 +3709,6 @@
 
             <!-- 6. (removed) API PLAYGROUND MODAL — promoted to a dedicated sidebar tab -->
 
-            <!-- 7. ADD WIZARD MODAL (顶栏 ＋新增：平台 → 密钥 → 模型 → 测试 → 保存) -->
-            <div v-if="addWizard.show" class="modal-overlay" @click.self="closeAddWizard">
-                <div class="modal-container" style="max-width:680px;">
-                    <div class="modal-header">
-                        <h3>＋ 新增资源向导</h3>
-                        <button class="btn btn-secondary btn-sm" @click="closeAddWizard">✕</button>
-                    </div>
-                    <div class="modal-body">
-                        <!-- 第 1 步：平台 -->
-                        <div style="font-weight:700;font-size:0.9rem;margin-bottom:10px;color:var(--color-primary);">① 选择平台</div>
-                        <div style="display:flex;gap:14px;margin-bottom:10px;">
-                            <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:0.85rem;">
-                                <input type="radio" value="existing" v-model="addWizard.platMode"> 已有平台
-                            </label>
-                            <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:0.85rem;">
-                                <input type="radio" value="new" v-model="addWizard.platMode" @change="checkPlatDomain"> 新建平台
-                            </label>
-                        </div>
-                        <template v-if="addWizard.platMode === 'existing'">
-                            <div class="form-group">
-                                <select class="form-control" v-model="addWizard.platId">
-                                    <option v-if="platforms.length === 0" value="">（暂无平台，请选择"新建平台"）</option>
-                                    <option v-for="p in platforms" :key="'wz-p-'+p.id" :value="String(p.id)">{{ p.name }}</option>
-                                </select>
-                            </div>
-                        </template>
-                        <template v-else>
-                            <div class="form-control-row" style="grid-template-columns:1fr 1fr;">
-                                <div class="form-group">
-                                    <label>平台名称</label>
-                                    <input type="text" class="form-control" placeholder="例如 OpenAI / 智谱" v-model="addWizard.platForm.name">
-                                </div>
-                                <div class="form-group">
-                                    <label>Base URL</label>
-                                    <input type="text" class="form-control" placeholder="https://api.example.com" v-model="addWizard.platForm.base_url" @blur="checkPlatDomain">
-                                </div>
-                            </div>
-                            <div class="form-group">
-                                <label>备注</label>
-                                <input type="text" class="form-control" placeholder="可选" v-model="addWizard.platForm.notes" maxlength="500">
-                            </div>
-                            <div v-if="addWizard.platDomainWarn"
-                                 style="font-size:0.78rem;color:var(--color-warning);padding:6px 10px;border-radius:6px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.25);margin-bottom:10px;">
-                                ⚠ {{ addWizard.platDomainWarn }}
-                            </div>
-                        </template>
-                        <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
-                            <button class="btn btn-secondary btn-sm" :disabled="addWizard.platTest.running" @click="testWizardPlatform">测试平台连通</button>
-                            <span v-if="addWizard.platTest.status" :style="{ fontSize:'0.76rem', color: addWizard.platTest.ok ? 'var(--color-success)' : 'var(--color-danger)' }">{{ addWizard.platTest.msg }}</span>
-                        </div>
-
-                        <!-- 第 2 步：密钥 -->
-                        <div style="font-weight:700;font-size:0.9rem;margin:18px 0 10px;color:var(--color-primary);">② 选择密钥</div>
-                        <div style="display:flex;gap:14px;margin-bottom:10px;">
-                            <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:0.85rem;">
-                                <input type="radio" value="existing" v-model="addWizard.keyMode"> 已有密钥
-                            </label>
-                            <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:0.85rem;">
-                                <input type="radio" value="new" v-model="addWizard.keyMode"> 新建密钥
-                            </label>
-                        </div>
-                        <template v-if="addWizard.keyMode === 'existing'">
-                            <div class="form-group">
-                                <select class="form-control" v-model="addWizard.keyId">
-                                    <option v-if="wizardKeyOptions.length > 0 || addWizard.platMode !== 'existing'" value="">（不使用密钥）</option>
-                                    <option v-if="addWizard.platMode === 'existing' && wizardKeyOptions.length === 0" value="">（该平台暂无密钥，请选择"新建密钥"）</option>
-                                    <option v-for="k in wizardKeyOptions" :key="'wz-k-'+k.id" :value="String(k.id)">#{{ k.key_index }} {{ k.label || maskToken(k.token) }}</option>
-                                </select>
-                            </div>
-                        </template>
-                        <template v-else>
-                            <div class="form-group">
-                                <label>密钥 Token</label>
-                                <input type="text" class="form-control u-mono" placeholder="sk-..." v-model="addWizard.keyForm.token">
-                            </div>
-                            <div class="form-control-row" style="grid-template-columns:1fr 1fr;">
-                                <div class="form-group">
-                                    <label>备注标签</label>
-                                    <input type="text" class="form-control" placeholder="例如 主力号" v-model="addWizard.keyForm.label">
-                                </div>
-                                <div class="form-group">
-                                    <label class="checkbox-container" style="margin-top:26px;">
-                                        <input type="checkbox" v-model="addWizard.keyForm.is_free"> 免费 Key
-                                    </label>
-                                </div>
-                            </div>
-                        </template>
-                        <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
-                            <button class="btn btn-secondary btn-sm" :disabled="addWizard.keyTest.running" @click="testWizardKey">测试密钥可用</button>
-                            <span v-if="addWizard.keyTest.status" :style="{ fontSize:'0.76rem', color: addWizard.keyTest.ok ? 'var(--color-success)' : 'var(--color-danger)' }">{{ addWizard.keyTest.msg }}</span>
-                        </div>
-
-                        <!-- 第 3 步：模型 -->
-                        <div style="font-weight:700;font-size:0.9rem;margin:18px 0 10px;color:var(--color-primary);">③ 选择模型</div>
-                        <div style="display:flex;gap:14px;margin-bottom:10px;">
-                            <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:0.85rem;">
-                                <input type="radio" value="existing" v-model="addWizard.modelMode"> 已有模型
-                            </label>
-                            <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:0.85rem;">
-                                <input type="radio" value="new" v-model="addWizard.modelMode"> 新建模型
-                            </label>
-                        </div>
-                        <template v-if="addWizard.modelMode === 'existing'">
-                            <div class="form-group">
-                                <select class="form-control" v-model="addWizard.modelId">
-                                    <option v-if="addWizard.platMode === 'existing' && wizardModelOptions.length === 0" value="">（该平台暂无模型，请选择"新建模型"或用平台详情页的"发现模型"）</option>
-                                    <option v-for="m in wizardModelOptions" :key="'wz-m-'+m.id" :value="String(m.id)">{{ rapiDisplayName(m) }}</option>
-                                </select>
-                            </div>
-                        </template>
-                        <template v-else>
-                            <div class="form-group">
-                                <label>上游原始模型名 (平台真实调用的 model 字符串)</label>
-                                <input type="text" class="form-control" placeholder="例如 gpt-4o" v-model="addWizard.modelForm.model">
-                            </div>
-                            <div class="form-group">
-                                <label>模型备注</label>
-                                <input type="text" class="form-control" placeholder="可选；4 项命名全空时作为模型名称" v-model="addWizard.modelForm.notes" maxlength="500">
-                            </div>
-                            <div class="form-control-row" style="grid-template-columns:1fr 1fr 1fr 1fr;">
-                                <div class="form-group">
-                                    <label>厂商</label>
-                                    <input type="text" class="form-control" placeholder="openai" v-model="addWizard.modelForm.vendor" autocomplete="off">
-                                </div>
-                                <div class="form-group">
-                                    <label>系列</label>
-                                    <input type="text" class="form-control" placeholder="gpt" v-model="addWizard.modelForm.series" autocomplete="off">
-                                </div>
-                                <div class="form-group">
-                                    <label>版本</label>
-                                    <input type="text" class="form-control" placeholder="5.6" v-model="addWizard.modelForm.version" autocomplete="off">
-                                </div>
-                                <div class="form-group">
-                                    <label>后缀</label>
-                                    <input type="text" class="form-control" placeholder="luna xhigh" v-model="addWizard.modelForm.suffix" autocomplete="off">
-                                </div>
-                            </div>
-                            <div style="padding:6px 12px;border-radius:8px;background:rgba(56,189,248,0.06);border:1px dashed rgba(56,189,248,0.25);font-size:0.8rem;margin-bottom:8px;">
-                                模型名称：
-                                <span style="font-family:var(--font-mono);font-weight:700;color:var(--color-primary);">{{ computeModelName(addWizard.modelForm.vendor, addWizard.modelForm.series, addWizard.modelForm.version, addWizard.modelForm.suffix, addWizard.modelForm.notes, addWizard.modelForm.model) || '（待填写）' }}</span>
-                            </div>
-                        </template>
-                        <div style="display:flex;align-items:center;gap:10px;">
-                            <button class="btn btn-secondary btn-sm" :disabled="addWizard.modelTest.running" @click="testWizardModel">测试模型可用</button>
-                            <span v-if="addWizard.modelTest.status" :style="{ fontSize:'0.76rem', color: addWizard.modelTest.ok ? 'var(--color-success)' : 'var(--color-danger)' }">{{ addWizard.modelTest.msg }}</span>
-                            <button class="btn btn-secondary btn-sm" :disabled="addWizard.discover.running" @click="discoverWizardModels" title="用第①步地址 + 第②步密钥直接拉取上游模型列表（免入库），点选填入上方表单">发现模型</button>
-                            <span v-if="addWizard.discover.running" style="font-size:0.76rem;">拉取中…</span>
-                            <span v-if="addWizard.discover.error" style="font-size:0.76rem;color:var(--color-danger);">{{ addWizard.discover.error }}</span>
-                        </div>
-                        <div v-if="addWizard.discover.models.length" style="display:flex;flex-wrap:wrap;gap:6px;margin:8px 0;">
-                            <button v-for="m in addWizard.discover.models" :key="'wz-d-'+m" class="btn btn-secondary btn-sm"
-                                    @click="addWizard.modelMode = 'new'; addWizard.modelForm.model = m" :title="'填入：' + m">{{ m }}</button>
-                        </div>
-
-                        <!-- 确认清单 -->
-                        <div v-if="addWizard.confirmMode"
-                             style="margin-top:18px;padding:12px 16px;border-radius:10px;background:rgba(16,185,129,0.06);border:1px solid rgba(16,185,129,0.25);">
-                            <div style="font-weight:700;font-size:0.86rem;margin-bottom:8px;">测试通过，确认新增以下内容：</div>
-                            <div v-for="(it, i) in addWizard.confirmItems" :key="'wzc-'+i" style="font-size:0.84rem;color:var(--text-secondary);padding:3px 0;">
-                                ✓ {{ it }}
-                            </div>
-                            <div v-if="!wizardHasNew" style="font-size:0.8rem;color:var(--text-muted);">未选择任何新内容（仅复用已有配置）。</div>
-                        </div>
-                    </div>
-                    <div class="modal-footer">
-                        <button class="btn btn-secondary" @click="closeAddWizard">取消</button>
-                        <button v-if="!addWizard.confirmMode" class="btn btn-primary" :disabled="addWizard.busy" @click="submitAddWizard">
-                            {{ addWizard.busy ? '整体测试中…' : '整体测试并继续' }}
-                        </button>
-                        <button v-else class="btn btn-primary" :disabled="addWizard.busy" @click="submitAddWizard">
-                            {{ addWizard.busy ? '保存中…' : '确认保存' }}
-                        </button>
-                    </div>
-                </div>
-            </div>
 
         </main>
         </div><!-- /content-row -->
@@ -4888,7 +4756,10 @@
                     form: { platform_id: '', token: '', label: '', is_free: false, expires_at: '' }
                 });
 
-                const openKeyModal = (k) => {
+                // 新增向导（链式）状态：平台 → 密钥 → 模型
+                const addChain = reactive({ active: false, platformId: 0, keyId: 0 });
+
+                const openKeyModal = (k, presetPlatformId = 0) => {
                     keyModal.item = k || null;
                     if (k) {
                         keyModal.platformName = k.platform_name || ('平台-' + k.platform_id);
@@ -4900,16 +4771,16 @@
                             expires_at: k.expires_at ? String(k.expires_at).slice(0, 10) : ''
                         };
                     } else {
-                        // Pre-select the filtered platform (if any) for a smoother flow.
+                        // Pre-select: 链式预设平台 > 当前过滤平台 > 首个平台
                         keyModal.platformName = '';
                         keyModal.form = {
-                            platform_id: keyPlatformFilter.value || String(platforms.value[0]?.id || ''),
+                            platform_id: String(presetPlatformId || keyPlatformFilter.value || platforms.value[0]?.id || ''),
                             token: '', label: '', is_free: false, expires_at: ''
                         };
                     }
                     keyModal.show = true;
                 };
-                const closeKeyModal = () => { keyModal.show = false; };
+                const closeKeyModal = () => { keyModal.show = false; addChain.active = false; };
 
                 const saveKeyModal = async () => {
                     const f = keyModal.form;
@@ -4934,11 +4805,13 @@
                             body: JSON.stringify(body)
                         });
                         if (r.ok) {
+                            const saved = await r.json().catch(() => ({}));
                             showToast('成功', keyModal.item
                                 ? `Key #${keyModal.item.key_index} 属性已更新`
                                 : 'Key 已添加，已自动探测并恢复受影响的模型。', 'success');
                             closeKeyModal();
                             refreshData();
+                            return saved;
                         } else {
                             const err = await r.json().catch(() => ({}));
                             showToast('保存失败', err.error || `服务器返回 ${r.status}`, 'error');
@@ -5103,7 +4976,7 @@
                     } catch (e) {}
                 };
 
-                // ============ FIXED TOP BAR: UNREAD / SEARCH / KEYS / ADD WIZARD ============
+                // ============ FIXED TOP BAR: UNREAD / SEARCH / KEYS / ADD CHAIN ============
                 const appVersion = ref('dev');
                 // 版本更新检查
                 const updateInfo = reactive({ current_version: '', latest_version: '', update_available: false, release_notes: '', release_url: '', checked_at: '', commits: [], updating: false, update_error: '' });
@@ -5383,212 +5256,7 @@
                     refreshData();
                 };
 
-                // ---- Unified add wizard (single modal, three sections) ----
-                const addWizard = reactive({
-                    show: false, busy: false, confirmMode: false, confirmItems: [],
-                    platMode: 'existing', platId: '', platForm: { name: '', base_url: '', token: '', notes: '' }, platDomainWarn: '', platTest: { running: false, status: 0, ok: false, msg: '' },
-                    keyMode: 'existing', keyId: '', keyForm: { token: '', label: '', is_free: false }, keyTest: { running: false, status: 0, ok: false, msg: '' },
-                    modelMode: 'existing', modelId: '', modelForm: { model: '', vendor: '', series: '', version: '', suffix: '', notes: '' }, modelTest: { running: false, status: 0, ok: false, msg: '' }, discover: { running: false, models: [], error: '' }
-                });
-                const openAddWizard = () => {
-                    Object.assign(addWizard, {
-                        show: true, busy: false, confirmMode: false, confirmItems: [],
-                        platMode: 'existing', platId: platforms.value[0] ? String(platforms.value[0].id) : '', platForm: { name: '', base_url: '', token: '', notes: '' }, platDomainWarn: '', platTest: { running: false, status: 0, ok: false, msg: '' },
-                        keyMode: 'existing', keyId: '', keyForm: { token: '', label: '', is_free: false }, keyTest: { running: false, status: 0, ok: false, msg: '' },
-                        modelMode: 'existing', modelId: '', modelForm: { model: '', vendor: '', series: '', version: '', suffix: '', notes: '' }, modelTest: { running: false, status: 0, ok: false, msg: '' }, discover: { running: false, models: [], error: '' }
-                    });
-                };
-                const closeAddWizard = () => { addWizard.show = false; addWizard.confirmMode = false; };
-                const wizardPlatformContext = () => {
-                    if (addWizard.platMode === 'existing') {
-                        const p = platforms.value.find(x => String(x.id) === String(addWizard.platId));
-                        if (!p) return null;
-                        const firstKey = (p._keys && p._keys[0]) ? p._keys[0] : null;
-                        return { id: p.id, name: p.name, base_url: p.base_url, token: (firstKey && firstKey.token) || p.token };
-                    }
-                    // 新平台没有平台级 token（v2 起认证只在密钥上）：连通测试用
-                    // 第②步的密钥 token（已有选之，新建用之）。
-                    return { id: 0, name: addWizard.platForm.name || addWizard.platForm.base_url, base_url: addWizard.platForm.base_url, token: wizardKeyToken() };
-                };
-                const wizardKeyOptions = computed(() => keysList.value.filter(k => addWizard.platMode === 'existing' && String(k.platform_id) === String(addWizard.platId)));
-                const wizardModelOptions = computed(() => rapis.value.filter(r => addWizard.platMode === 'existing' && String(r.platform_id) === String(addWizard.platId)));
-                const wizardKeyToken = () => {
-                    if (addWizard.keyMode === 'existing') {
-                        const k = keysList.value.find(x => String(x.id) === String(addWizard.keyId));
-                        return k ? k.token : '';
-                    }
-                    return addWizard.keyForm.token;
-                };
-                const checkPlatDomain = () => {
-                    addWizard.platDomainWarn = '';
-                    if (addWizard.platMode !== 'new' || !addWizard.platForm.base_url) return;
-                    try {
-                        const host = new URL(addWizard.platForm.base_url).host;
-                        for (const p of platforms.value) {
-                            try {
-                                if (new URL(p.base_url).host === host && p.base_url !== addWizard.platForm.base_url.trim()) {
-                                    addWizard.platDomainWarn = `已存在同域名的平台「${p.name}」，但 URL 不完全一致，请确认是否新增`;
-                                    break;
-                                }
-                            } catch (e) {}
-                        }
-                    } catch (e) {}
-                };
-                const runWizardTest = async (baseURL, token, model) => {
-                    try {
-                        const r = await fetch('/api/upstream/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ base_url: baseURL, token, model }) });
-                        return await r.json().catch(() => ({ status: r.status, ok: false }));
-                    } catch (e) { return { status: 0, ok: false, msg: String(e) }; }
-                };
-                const testWizardPlatform = async () => {
-                    const ctx = wizardPlatformContext();
-                    if (!ctx || !ctx.base_url || !ctx.token) { showToast('提示', '请先填写平台 base_url，并在第②步填写密钥 token', 'warning'); return; }
-                    addWizard.platTest.running = true;
-                    const d = await runWizardTest(ctx.base_url, ctx.token, '');
-                    addWizard.platTest = { running: false, status: d.status || 0, ok: !!d.ok, msg: d.ok ? '连接正常' : (d.error || String(d.body || d.msg || '').slice(0, 200)) };
-                    if (d.ok) showToast('测试成功', '平台连接正常', 'success'); else showToast('测试失败', `状态 ${d.status || '—'}`, 'error');
-                };
-                const testWizardKey = async () => {
-                    const ctx = wizardPlatformContext();
-                    const token = wizardKeyToken();
-                    if (!ctx || !ctx.base_url || !token) { showToast('提示', '请先填写密钥 token', 'warning'); return; }
-                    addWizard.keyTest.running = true;
-                    const d = await runWizardTest(ctx.base_url, token, '');
-                    addWizard.keyTest = { running: false, status: d.status || 0, ok: !!d.ok, msg: d.ok ? '密钥可用' : (d.error || String(d.body || d.msg || '').slice(0, 200)) };
-                    if (d.ok) showToast('测试成功', '密钥可用', 'success'); else showToast('测试失败', `状态 ${d.status || '—'}`, 'error');
-                };
-                const testWizardModel = async () => {
-                    const ctx = wizardPlatformContext();
-                    const token = wizardKeyToken();
-                    const model = addWizard.modelMode === 'existing' ? (rapis.value.find(x => String(x.id) === String(addWizard.modelId)) || {}).model : addWizard.modelForm.model;
-                    if (!ctx || !ctx.base_url || !token) { showToast('提示', '请先选择平台与密钥', 'warning'); return; }
-                    if (!model) { showToast('提示', '请先填写模型名称', 'warning'); return; }
-                    addWizard.modelTest.running = true;
-                    const d = await runWizardTest(ctx.base_url, token, model);
-                    addWizard.modelTest = { running: false, status: d.status || 0, ok: !!d.ok, msg: d.ok ? '模型可用' : (d.error || String(d.body || d.msg || '').slice(0, 200)) };
-                    if (d.ok) showToast('测试成功', '模型可用', 'success'); else showToast('测试失败', `状态 ${d.status || '—'}`, 'error');
-                };
-                // 向导内免入库发现模型：已有平台按 id，未入库的新平台按 base_url+token
-                // （后端 /api/platforms/fetch-models 双入口）。结果点选填入上方表单。
-                const discoverWizardModels = async () => {
-                    let body;
-                    if (addWizard.platMode === 'existing') {
-                        if (!addWizard.platId) { showToast('提示', '请先选择平台', 'warning'); return; }
-                        body = { id: Number(addWizard.platId) };
-                    } else {
-                        const base_url = (addWizard.platForm.base_url || '').trim();
-                        const token = wizardKeyToken();
-                        if (!base_url || !token) { showToast('提示', '请先在第①步填地址、第②步填密钥 token', 'warning'); return; }
-                        body = { base_url, token };
-                    }
-                    addWizard.discover = { running: true, models: [], error: '' };
-                    try {
-                        const r = await fetch('/api/platforms/fetch-models', { method: 'POST',
-                            headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-                        const d = await r.json().catch(() => ({}));
-                        if (r.ok) {
-                            addWizard.discover = { running: false, models: d.models || [], error: '' };
-                            if (!d.models || !d.models.length) showToast('提示', '上游返回空列表，可手动填写', 'warning');
-                        } else {
-                            addWizard.discover = { running: false, models: [], error: d.error || ('状态 ' + r.status) };
-                        }
-                    } catch (e) {
-                        addWizard.discover = { running: false, models: [], error: String(e) };
-                    }
-                };
-                const wizardHasNew = computed(() => addWizard.platMode === 'new' || addWizard.keyMode === 'new' || addWizard.modelMode === 'new');
-                const buildConfirmItems = () => {
-                    const items = [];
-                    const platName = addWizard.platMode === 'new' ? (addWizard.platForm.name || addWizard.platForm.base_url) : ((platforms.value.find(x => String(x.id) === String(addWizard.platId)) || {}).name || '所选平台');
-                    if (addWizard.platMode === 'new') items.push('新平台：' + (addWizard.platForm.name || addWizard.platForm.base_url));
-                    if (addWizard.keyMode === 'new') items.push(`${platName}-新key：` + (addWizard.keyForm.label || maskToken(addWizard.keyForm.token) || '未命名'));
-                    if (addWizard.modelMode === 'new') {
-                        const m = addWizard.modelForm;
-                        const name = computeModelName(m.vendor, m.series, m.version, m.suffix, m.notes, m.model) || '未命名';
-                        items.push(`${platName}-新模型：` + name);
-                    }
-                    return items;
-                };
-                const runWizardOverallTest = async () => {
-                    addWizard.busy = true;
-                    const ctx = wizardPlatformContext();
-                    const token = wizardKeyToken();
-                    let ok = false, status = 0, msg = '';
-                    try {
-                        let model = '';
-                        if (addWizard.modelMode === 'existing' && addWizard.modelId) model = (rapis.value.find(x => String(x.id) === String(addWizard.modelId)) || {}).model || '';
-                        if (addWizard.modelMode === 'new') model = addWizard.modelForm.model;
-                        if (!ctx || !ctx.base_url || !token) { msg = '请先选择/填写平台与密钥'; }
-                        else {
-                            const d = await runWizardTest(ctx.base_url, token, model || '');
-                            ok = !!d.ok; status = d.status || 0; msg = d.ok ? '测试通过' : (d.error || String(d.body || '').slice(0, 200));
-                        }
-                    } catch (e) { msg = String(e); }
-                    addWizard.busy = false;
-                    if (!ok) showToast('测试未通过', msg || `状态 ${status}`, 'error');
-                    return ok;
-                };
-                const submitAddWizard = async () => {
-                    if (addWizard.confirmMode) { await doWizardSave(); return; }
-                    const ok = await runWizardOverallTest();
-                    if (!ok) return;
-                    if (wizardHasNew.value) {
-                        addWizard.confirmItems = buildConfirmItems();
-                        addWizard.confirmMode = true;
-                    } else {
-                        showToast('测试通过', '所选平台/密钥/模型均可用', 'success');
-                    }
-                };
-                const doWizardSave = async () => {
-                    addWizard.busy = true;
-                    let platId = 0, keyId = 0;
-                    try {
-                        // 1) platform
-                        if (addWizard.platMode === 'new') {
-                            const r = await fetch('/api/platforms', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(addWizard.platForm) });
-                            if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || '平台创建失败'); }
-                            const p = await r.json();
-                            platId = p.id;
-                        } else {
-                            platId = Number(addWizard.platId);
-                        }
-                        // 2) key
-                        if (addWizard.keyMode === 'new') {
-                            const r = await fetch(`/api/platforms/${platId}/keys`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(addWizard.keyForm) });
-                            if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || '密钥创建失败'); }
-                            const k = await r.json();
-                            keyId = k.id;
-                        } else {
-                            keyId = Number(addWizard.keyId) || 0;
-                        }
-                        // 3) model
-                        let boundPoolName = '';
-                        if (addWizard.modelMode === 'new') {
-                            const modelName = (addWizard.modelForm.model || '').trim();
-                            // 同平台同名模型已存在：不建重复端点（后端会 409），
-                            // 有 Key 则直接并入其 Key 池。
-                            const dup = rapis.value.find(r => String(r.platform_id) === String(platId) && r.model === modelName);
-                            if (dup && keyId) {
-                                const st = await bindKeyToModelPool(dup.id, keyId);
-                                if (st !== 'joined' && st !== 'already') throw new Error(st.slice(6) || '加入 Key 池失败');
-                                boundPoolName = dup.alias || dup.model;
-                            } else {
-                                const body = { ...addWizard.modelForm, platform_id: platId };
-                                if (keyId) body.key_ids = String(keyId);
-                                const r = await fetch('/api/rapis', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-                                if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || '模型创建失败'); }
-                            }
-                        }
-                        if (boundPoolName) showToast('已加入 Key 池', `模型「${boundPoolName}」已存在，新 Key 已加入其 Key 池`, 'success');
-                        else showToast('已添加', '新增内容已保存，旧内容已复用', 'success');
-                        addWizard.show = false;
-                        addWizard.confirmMode = false;
-                        refreshData();
-                    } catch (e) {
-                        showToast('保存失败', e.message || '未知错误', 'error');
-                    }
-                    addWizard.busy = false;
-                };
+                // ---- 新增向导（链式）：平台 → 密钥 → 模型，＋新增 启动，各弹窗「下一步」串联 ----
 
                 const refreshData = () => {
                     loadStats();
@@ -5617,6 +5285,23 @@
                         fetchSyncCenter();
                         loadPullMode();
                     }
+                };
+
+                // 顶栏「刷新」下拉：3 项（中心侧拉取 / 端侧重读 / 两侧比较）
+                const refreshMenuOpen = ref(false);
+                const doRefreshCenter = () => {
+                    refreshMenuOpen.value = false;
+                    manualPull();
+                };
+                const doRefreshEdge = () => {
+                    refreshMenuOpen.value = false;
+                    refreshData();
+                    showToast('已刷新', '端侧（本地）数据已重新读取', 'success');
+                };
+                const doRefreshCompare = () => {
+                    refreshMenuOpen.value = false;
+                    setTab('sbconfig');
+                    showToast('中心侧与端侧比较', '已打开「中心配置」查看两侧差异');
                 };
 
                 const togglePlatform = async (plat) => {
@@ -5730,6 +5415,7 @@
 
                 const closePlatformModal = () => {
                     platformModal.show = false;
+                    addChain.active = false;
                 };
 
                 // Format seconds-since-push into a human-readable string
@@ -5813,9 +5499,11 @@
                             showToast('错误', err.error || '保存平台配置失败', 'error');
                             return;
                         }
+                        const saved = await r.json().catch(() => ({}));
                         showToast('成功', '平台配置已成功保存', 'success');
                         refreshData();
                         closePlatformModal();
+                        return saved;
                     } catch (e) {
                         showToast('错误', '网络异常，请重试', 'error');
                     }
@@ -6144,7 +5832,7 @@
                 };
 
                 // RAPI CRUD
-                const openRapiModal = (item) => {
+                const openRapiModal = (item, presetPlatformId = 0) => {
                     rapiModal.item = item;
                     if (item) {
                         rapiModal.form = { ...item };
@@ -6155,14 +5843,43 @@
                         // key_ids is a CSV string on the model; expose as a number array.
                         rapiModal.keyIDs = (item.key_ids || '').split(',').map(s => s.trim()).filter(Boolean).map(Number);
                     } else {
-                        rapiModal.form = { platform_id: platforms.value[0]?.id || '', alias: '', model: '', vendor: '', series: '', version: '', suffix: '', notes: '' };
+                        rapiModal.form = { platform_id: presetPlatformId || rapiPlatformFilter.value || platforms.value[0]?.id || '', alias: '', model: '', vendor: '', series: '', version: '', suffix: '', notes: '' };
                         rapiModal.headers = [];
                         rapiModal.keyIDs = [];
                     }
                     rapiModal.show = true;
                 };
 
-                const closeRapiModal = () => { rapiModal.show = false; };
+                const closeRapiModal = () => { rapiModal.show = false; addChain.active = false; };
+
+                // 新增向导（链式）：平台 → 密钥 → 模型。＋新增 启动；每个弹窗「下一步」把已建对象透传给下一步。
+                const startAddChain = () => {
+                    addChain.active = true;
+                    addChain.platformId = 0;
+                    addChain.keyId = 0;
+                    openPlatformModal(null);
+                };
+                const endAddChain = () => { addChain.active = false; };
+                const chainNextPlatform = async () => {
+                    const p = await savePlatform();
+                    if (!p || !p.id) return;
+                    addChain.platformId = p.id;
+                    addChain.active = true;   // savePlatform 关闭弹窗时会复位，这里重新置位
+                    openKeyModal(null, p.id);
+                };
+                const chainNextKey = async () => {
+                    const k = await saveKeyModal();
+                    if (!k || !k.id) return;
+                    addChain.keyId = k.id;
+                    addChain.active = true;
+                    openRapiModal(null, addChain.platformId);
+                };
+                const chainNextRapi = async () => {
+                    const r = await saveRapi();
+                    if (!r || !r.id) return;
+                    endAddChain();
+                    showToast('链路已创建', '平台 → 密钥 → 模型 已完成', 'success');
+                };
 
                 // RAPI key-model direct test
                 const openRapiTestModal = (rapi) => {
@@ -6264,9 +5981,11 @@
                             body: JSON.stringify(rapiModal.form)
                         });
                         if (r.ok) {
+                            const saved = await r.json().catch(() => ({}));
                             showToast('成功', '模型接口映射配置已保存', 'success');
                             closeRapiModal();
                             refreshData();
+                            return saved;
                         } else {
                             const data = await r.json().catch(() => ({}));
                             showToast('保存失败', data.error || `服务器返回 ${r.status}`, 'error');
@@ -7044,6 +6763,7 @@
                         unreadPanelOpen.value = false;
                         syncPanelOpen.value = false;
                         updatePanelOpen.value = false;
+                        refreshMenuOpen.value = false;
                     });
 
                     setInterval(fetchSyncCenter, 30000);
@@ -7123,12 +6843,11 @@
                     computeModelName, rapiDisplayName, lapisForRapi,
                     rapiPlatformFilter, openPlatformModelsTab,
 
-                    // Fixed top bar: unread / search / keys / add wizard / update
+                    // Fixed top bar: unread / search / keys / add chain / update
                     appVersion, unread, totalUnread, unreadItems, unreadCounts, unreadPanelOpen, unreadGrouped, markMenuRead, markAllRead, markItemRead, openUnreadItem, unreadDotColor, unreadTitleColor, unreadTime, unreadRelTime, unreadFullTime,
                     updateInfo, updatePanelOpen, toggleUpdatePanel, checkUpdate, confirmApplyUpdate, formatUpdateTime,
                     globalSearchQuery, globalSearchCandidates, showSearchResults, searchSelection, onGlobalSearchInput, onSearchBlur, moveSearchSelection, chooseSearchResult, clearGlobalSearch, searchMenuLabel, searchMenuStyle,
                     keysList, keysSearchQuery, filteredKeys, sortedKeys, keyPlatformFilter, loadKeys, keyHealthLabel, keyCooldownTitle, keyCooldownRemaining, probeKeyFlat, discoverKeyModels, toggleKeyFlat, deleteKeyFlat, keyModal, openKeyModal, closeKeyModal, saveKeyModal, openKeysTab, jumpToPlatform,
-                    addWizard, openAddWizard, closeAddWizard, checkPlatDomain, testWizardPlatform, testWizardKey, testWizardModel, discoverWizardModels, submitAddWizard, doWizardSave, wizardHasNew, wizardKeyOptions, wizardModelOptions,
                     
                     // Log selection
                     selectedLog,
@@ -7156,6 +6875,8 @@
                     fmtNum,
                     fmtRelTime,
                     refreshData,
+                    refreshMenuOpen, doRefreshCenter, doRefreshEdge, doRefreshCompare,
+                    addChain, startAddChain, endAddChain, chainNextPlatform, chainNextKey, chainNextRapi,
                     insightData, rapiUtilization, fmtCountdown,
                     insightFilter, levelFilter,
                     hasAnyInsights, hasCriticalInsights, hasWarningInsights,
