@@ -579,19 +579,35 @@ func (g *ProxyGateway) isBlocked(keyID, rapiID int64) (string, bool) {
 	}
 	if !b.expiresAt.IsZero() && !b.expiresAt.After(time.Now()) {
 		g.blockMu.RUnlock()
-		// Upgrade to a write lock and purge the expired entry.
-		g.blockMu.Lock()
-		if mm := g.blocks[keyID]; mm != nil {
-			delete(mm, rapiID)
-			if len(mm) == 0 {
-				delete(g.blocks, keyID)
-			}
-		}
-		g.blockMu.Unlock()
-		return "", false
+		return g.purgeExpiredBlock(keyID, rapiID)
 	}
 	g.blockMu.RUnlock()
 	return b.reason, true
+}
+
+// purgeExpiredBlock 在写锁下重新校验后清理过期块。返回值语义同 isBlocked：
+// RUnlock→Lock 之间另一请求可能刚用新 TTL 重新拉黑同一对，此时必须保留
+// 新块并返回它的状态，而不是按读锁时的旧判断无条件删除——否则本请求会
+// 放行一个必定失败的 Key×模型组合。
+func (g *ProxyGateway) purgeExpiredBlock(keyID, rapiID int64) (string, bool) {
+	g.blockMu.Lock()
+	defer g.blockMu.Unlock()
+	mm := g.blocks[keyID]
+	if mm == nil {
+		return "", false
+	}
+	cur, ok := mm[rapiID]
+	if !ok {
+		return "", false
+	}
+	if cur.expiresAt.IsZero() || cur.expiresAt.After(time.Now()) {
+		return cur.reason, true // 已被并发刷新，保留有效块
+	}
+	delete(mm, rapiID)
+	if len(mm) == 0 {
+		delete(g.blocks, keyID)
+	}
+	return "", false
 }
 
 // filterBlockedKeys drops keys that are capability-blocked for rapiID so they
@@ -1004,12 +1020,12 @@ func (g *ProxyGateway) tryKeyForRAPI(
 					"status", resp.StatusCode, "reason", reason)
 				recoverAt, keyChanged := g.scheduler.MarkKeyBillingFailure(key.ID, reason)
 				if keyChanged && g.notifyService != nil {
+					// PublishEvent 内部已 RecordUnread；再调一次会命中同状态合并，
+					// 把首次冷却记成 Count=2 并用第二条标题覆盖第一条。
 					g.notifyService.PublishEvent("error", notify.MenuKeys, "cooling",
 						fmt.Sprintf("Key #%d 计费错误冷却（%s）", key.KeyIndex, rapi.PlatformName),
-						reason, key.ID)
-					g.notifyService.RecordUnread(notify.MenuKeys, "cooling",
-						fmt.Sprintf("Key #%d 冷却中（计费，至 %s）", key.KeyIndex, recoverAt.Format("15:04:05")),
-						reason, key.ID)
+						fmt.Sprintf("%s（冷却至 %s）", reason, recoverAt.Format("15:04:05")),
+						key.ID)
 				}
 				if g.log != nil {
 					g.log.RecordError(requestID, reason+" (可恢复计费错误，已按临时失败处理)", "UPSTREAM_RESPONSE")
@@ -1079,12 +1095,11 @@ func (g *ProxyGateway) tryKeyForRAPI(
 			// 429/5xx 冷却通知（限流类最有价值；capability/计费已在上文单独通知）。
 			// 只在 Key 状态确实改变（进入冷却）时发。
 			if keyChanged && g.notifyService != nil && (resp.StatusCode == 429 || resp.StatusCode >= 500) {
+				// 同上：恢复时间放进 detail，只上报一次，避免未读计数翻倍。
 				g.notifyService.PublishEvent("error", notify.MenuKeys, "cooling",
 					fmt.Sprintf("Key #%d 冷却（%s，%d）", key.KeyIndex, rapi.PlatformName, resp.StatusCode),
-					reason, key.ID)
-				g.notifyService.RecordUnread(notify.MenuKeys, "cooling",
-					fmt.Sprintf("Key #%d 冷却中（至 %s）", key.KeyIndex, recoverAt.Format("15:04:05")),
-					reason, key.ID)
+					fmt.Sprintf("%s（冷却至 %s）", reason, recoverAt.Format("15:04:05")),
+					key.ID)
 			}
 			continue
 		}

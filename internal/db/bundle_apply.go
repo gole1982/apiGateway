@@ -60,6 +60,29 @@ func (db *DB) GetSyncState() (SyncState, error) {
 	return st, nil
 }
 
+// RewindLastGoodVersion 把 last_good_version 回退到合并前的值。
+//
+// 并集合并回推中心失败时，ApplyBundle 已把 last_good_version 推进到中心版本，
+// 而中心版本并未变化（回推没成功）。若不回退，下一轮 syncOnce 会被 syncAction
+// 的 remote == lastGood 短路成 skip，force 也绕不过，本地并集与脏标记就永远
+// 失去重试机会。回退后版本重新"不一致"，下一轮自然重走 merge 并再次回推；
+// 重复合并是幂等的（本地快照 ∪ 中心包，同键本地胜）。
+//
+// 只改版本元数据，不动 current_version / last_synced_at / 任何业务行：
+// current 继续表示"最近尝试应用的中心包版本"，状态接口的 in_sync 由
+// last_good 判定，回退后正确显示未同步。
+func (db *DB) RewindLastGoodVersion(v int64) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if _, err := db.conn.Exec(syncStateDDL); err != nil {
+		return fmt.Errorf("sync_state ddl: %w", err)
+	}
+	if _, err := db.conn.Exec(`UPDATE sync_state SET last_good_version = ? WHERE id = 1`, v); err != nil {
+		return fmt.Errorf("rewind last_good_version: %w", err)
+	}
+	return nil
+}
+
 // ApplyBundle 把中心拉到的定义快照单事务应用进本地 SQLite。
 //
 // 语义（设计 §5.2/§5.3/§5.4 + 自然键迁移 §5.1）：

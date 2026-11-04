@@ -303,3 +303,40 @@ func TestApplyBundle_RejectsLegacyCiphertext(t *testing.T) {
 		t.Fatalf("platform count = %d, want 0 (nothing applied on failure)", n)
 	}
 }
+
+// 并集合并回推失败后必须回退 last_good_version：否则本地已等于未变的中心
+// 版本，之后每轮 syncOnce 都被 remote==lastGood 短路成 skip，永远无法重试。
+func TestRewindLastGoodVersion(t *testing.T) {
+	db := setupTestDB(t)
+	if err := db.ApplyBundle(&bundle.Envelope{
+		SchemaVersion: bundle.SchemaVersion,
+		Version:       8,
+		Bundle: bundle.Bundle{
+			Platforms: []bundle.Platform{{
+				Name: "p1", BaseURL: "https://x", Enabled: true, SupportedFormats: `["openai"]`,
+			}},
+		},
+	}, "http://test"); err != nil {
+		t.Fatalf("apply v8: %v", err)
+	}
+	st, err := db.GetSyncState()
+	if err != nil || st.LastGoodVersion != 8 {
+		t.Fatalf("before rewind last_good=%d err=%v, want 8", st.LastGoodVersion, err)
+	}
+	if err := db.RewindLastGoodVersion(7); err != nil {
+		t.Fatalf("rewind: %v", err)
+	}
+	st, err = db.GetSyncState()
+	if err != nil {
+		t.Fatalf("get sync_state: %v", err)
+	}
+	if st.LastGoodVersion != 7 {
+		t.Errorf("last_good = %d, want 7", st.LastGoodVersion)
+	}
+	if st.CurrentVersion != 8 {
+		t.Errorf("current = %d, want 8（只回退 last_good）", st.CurrentVersion)
+	}
+	if st.SourceURL != "http://test" {
+		t.Errorf("source_url = %q 被意外改动", st.SourceURL)
+	}
+}

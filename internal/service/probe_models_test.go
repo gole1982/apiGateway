@@ -309,6 +309,23 @@ func TestCutoverSafe(t *testing.T) {
 	}
 }
 
+// 平台所有 Key 都禁用 = 一把都没探测过。计数必须体现这一点，否则各项
+// 全为 0 会让 cutoverSafe 误判 Healthy=true（无知而非无害）。
+func TestAllDisabledKeysAreNotCutoverSafe(t *testing.T) {
+	plat := &models.Platform{ID: 1, Name: "all-disabled"}
+	keys := []models.PlatformKey{{ID: 1, Enabled: false}, {ID: 2, Enabled: false}}
+	rep, err := buildProbeReportGrouped(plat, keys, nil)
+	if err != nil {
+		t.Fatalf("buildProbeReportGrouped: %v", err)
+	}
+	if rep.UnprobedKeys != len(keys) {
+		t.Errorf("UnprobedKeys = %d, want %d", rep.UnprobedKeys, len(keys))
+	}
+	if rep.Healthy {
+		t.Error("Healthy = true，但一把 Key 都没探测")
+	}
+}
+
 // TestDiffEmptyCatalog 一把 Key 探测到空目录 ≠ 它什么都访问不了，而是上游没给
 // 目录（聚合站的常见情况）。此时全部已定义模型都会被算成过度授权，报告里的
 // over_granted_total 会很大 —— 调用方必须能区分这两种情况，因此 catalog_size

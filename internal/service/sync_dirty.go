@@ -16,6 +16,7 @@ package service
 
 import (
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -176,9 +177,25 @@ func edgeInSync(centerVer, localVer int64) bool {
 }
 
 // syncMerging 报告是否有合并/回推正在后台执行（面板"合并中…"指示用）。
-var syncMerging atomic.Bool
+// 用引用计数而非裸 Store：handleSyncRefresh 的外层 goroutine 与 applyMerge
+// 的回推分支会嵌套设置，两个 refresh 并发时也会重叠。裸 Store 下内层的
+// false（或先完成的那次刷新）会把仍在执行的外层状态提前清成 false。
+var (
+	syncMerging   atomic.Bool
+	syncMergingMu sync.Mutex
+	mergingDepth  int
+)
 
-func setMerging(v bool) { syncMerging.Store(v) }
+func setMerging(on bool) {
+	syncMergingMu.Lock()
+	defer syncMergingMu.Unlock()
+	if on {
+		mergingDepth++
+	} else if mergingDepth > 0 {
+		mergingDepth--
+	}
+	syncMerging.Store(mergingDepth > 0)
+}
 
 // edgeStore 包装本地 Store：面板定义写成功后标脏。管理模式下本包装已被
 // supabase.Store 替换（store.Use），不会误标；网关运行时写走 db 直写，

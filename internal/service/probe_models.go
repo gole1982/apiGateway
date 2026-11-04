@@ -201,6 +201,9 @@ func probePlatformKeysModels(ctx context.Context, platformID int64) (*probePlatf
 		kr := &report.Keys[i]
 		if !k.Enabled {
 			kr.ProbeError = "密钥已禁用，未探测"
+			// 禁用的 Key 同样提供不了任何目录真相，必须计入 UnprobedKeys：
+			// 否则全部 Key 禁用时各项计数全 0，cutoverSafe 会误判 Healthy=true。
+			report.UnprobedKeys++
 			continue
 		}
 
@@ -264,6 +267,9 @@ func buildProbeReportGrouped(plat *models.Platform, keys []models.PlatformKey, r
 		kr := &report.Keys[i]
 		if !k.Enabled {
 			kr.ProbeError = "密钥已禁用，未探测"
+			// 禁用的 Key 同样提供不了任何目录真相，必须计入 UnprobedKeys：
+			// 否则全部 Key 禁用时各项计数全 0，cutoverSafe 会误判 Healthy=true。
+			report.UnprobedKeys++
 			continue
 		}
 		hash := models.TokenHash(k.Token)

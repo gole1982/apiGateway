@@ -159,3 +159,44 @@ func TestEdgeInSyncCleanDB(t *testing.T) {
 		t.Error("different versions must not be in-sync")
 	}
 }
+
+// setMerging 用引用计数：handleSyncRefresh 外层与 applyMerge 回推内层会嵌套，
+// 两次刷新并发时也会重叠。内层结束 / 先完成者不得把仍在执行的状态清零。
+func TestSetMergingNestedAndOverlapping(t *testing.T) {
+	t.Cleanup(func() {
+		syncMergingMu.Lock()
+		mergingDepth = 0
+		syncMerging.Store(false)
+		syncMergingMu.Unlock()
+	})
+
+	setMerging(false) // 未配对的 false 不得把计数打成负数
+	if syncMerging.Load() {
+		t.Fatal("unpaired false must leave merging=false")
+	}
+
+	setMerging(true) // 外层 refresh
+	setMerging(true) // 内层 applyMerge 回推
+	if !syncMerging.Load() {
+		t.Fatal("nested merge should stay merging")
+	}
+	setMerging(false) // 内层结束，外层还在拉回对齐
+	if !syncMerging.Load() {
+		t.Fatal("inner false must not clear the still-running outer scope")
+	}
+	setMerging(false)
+	if syncMerging.Load() {
+		t.Fatal("merging should be false after all scopes end")
+	}
+
+	setMerging(true) // 两个 refresh 并发
+	setMerging(true)
+	setMerging(false) // 先完成者
+	if !syncMerging.Load() {
+		t.Fatal("first completion must not clear the second refresh")
+	}
+	setMerging(false)
+	if syncMerging.Load() {
+		t.Fatal("merging should be false after both refreshes")
+	}
+}

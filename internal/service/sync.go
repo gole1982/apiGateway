@@ -248,6 +248,14 @@ func applyMerge(env *bundle.Envelope, sourceURL string) error {
 	gen := edgeDirtyGen.Load()
 	d := db.Get()
 
+	// 记下合并前的 last_good_version：下面的 ApplyBundle 会把它推进到
+	// env.Version，但回推失败时中心版本根本没变，必须回退才能留下重试窗口。
+	prevSt, err := d.GetSyncState()
+	if err != nil {
+		return err
+	}
+	prevGood := prevSt.LastGoodVersion
+
 	localSnap, err := d.ExportBundle()
 	if err != nil {
 		sbSystemLog("error", "并集合并：本地快照导出失败: "+err.Error())
@@ -281,7 +289,13 @@ func applyMerge(env *bundle.Envelope, sourceURL string) error {
 	if pushErr != nil {
 		sum.PushError = pushErr.Error()
 		saveMergeSummary(sum)
-		sbSystemLog("error", "并集合并：回推中心失败（本地已生效，可稍后手动推送）: "+pushErr.Error())
+		sbSystemLog("error", "并集合并：回推中心失败（本地已生效，下一轮自动重试）: "+pushErr.Error())
+		// 关键：回退版本号。否则本地 last_good 已等于未变的中心版本，之后每轮
+		// syncAction 都短路成 skip（force 也绕不过第一行），并集与脏标记将永久
+		// 卡住，只剩破坏性的全量推送一条恢复路径。本地数据已生效，重复合并幂等。
+		if err := d.RewindLastGoodVersion(prevGood); err != nil {
+			sbSystemLog("error", "并集合并：回退同步版本失败（需手动推送恢复）: "+err.Error())
+		}
 		return nil
 	}
 	sum.PushedBack = true

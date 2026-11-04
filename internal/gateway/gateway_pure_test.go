@@ -176,3 +176,51 @@ func TestHandleChatCompletionsBodyLimit(t *testing.T) {
 		t.Errorf("small invalid body: got %d, want 400", rec.Code)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// 过期块惰性清理：读写锁升级窗口里另一请求可能刚用新 TTL 重新拉黑同一对，
+// 写锁阶段必须重新校验，不能按读锁时的旧判断无条件 delete。
+// ---------------------------------------------------------------------------
+
+func TestPurgeExpiredBlockKeepsRefreshedBlock(t *testing.T) {
+	g := &ProxyGateway{blocks: map[int64]map[int64]keyModelBlock{
+		7: {9: {reason: "403 refreshed", expiresAt: time.Now().Add(time.Hour)}},
+	}}
+	reason, blocked := g.purgeExpiredBlock(7, 9)
+	if !blocked || reason != "403 refreshed" {
+		t.Fatalf("purge = (%q,%v), want (%q,true)", reason, blocked, "403 refreshed")
+	}
+	if _, ok := g.blocks[7][9]; !ok {
+		t.Error("并发刷新的有效块被误删")
+	}
+}
+
+func TestPurgeExpiredBlockRemovesStale(t *testing.T) {
+	g := &ProxyGateway{blocks: map[int64]map[int64]keyModelBlock{
+		7: {9: {reason: "403 stale", expiresAt: time.Now().Add(-time.Minute)}},
+	}}
+	if _, blocked := g.purgeExpiredBlock(7, 9); blocked {
+		t.Error("过期块仍被判为 blocked")
+	}
+	if len(g.blocks) != 0 {
+		t.Errorf("过期块未被清理，剩余 %d 个 key", len(g.blocks))
+	}
+}
+
+func TestIsBlockedExpiryAndRefresh(t *testing.T) {
+	g := &ProxyGateway{blocks: map[int64]map[int64]keyModelBlock{
+		7: {9: {reason: "403 stale", expiresAt: time.Now().Add(-time.Minute)}},
+	}}
+	if _, blocked := g.isBlocked(7, 9); blocked {
+		t.Error("过期块应视为未阻止")
+	}
+	if len(g.blocks) != 0 {
+		t.Error("过期块应被惰性清理")
+	}
+	g.blocks[7] = map[int64]keyModelBlock{
+		9: {reason: "403 fresh", expiresAt: time.Now().Add(time.Hour)},
+	}
+	if _, blocked := g.isBlocked(7, 9); !blocked {
+		t.Error("有效块应视为阻止")
+	}
+}
