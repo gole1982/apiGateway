@@ -1738,15 +1738,15 @@
                         <div v-else style="padding:16px 14px;color:#e5484d;">✕ 中心离线：{{ syncCenter.error }}</div>
                     </div>
                 </div>
-                <!-- GitHub 图标 + 版本更新提示：有新版本时显示红色 badge -->
-                <div style="position:relative;display:inline-flex;">
+                <!-- 本地直运才显示版本更新入口；容器部署只在启动时通知 -->
+                <div v-if="updateInfo.update_mode !== 'container'" style="position:relative;display:inline-flex;">
                     <button class="topbar-icon" @click="toggleUpdatePanel" :title="updateInfo.update_available ? '有新版本可用！' : '版本更新'" :style="{ color: updateInfo.update_available ? 'var(--color-primary)' : 'inherit' }">
                         <svg style="width:16px;height:16px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                     </button>
                     <span v-if="updateInfo.update_available" style="position:absolute;top:-2px;right:-2px;width:8px;height:8px;border-radius:50%;background:#e5484d;border:1.5px solid var(--bg-card);animation:pulse 1.5s ease-in-out infinite;"></span>
                 </div>
-                <!-- 更新弹窗 -->
-                <div v-if="updatePanelOpen" class="update-panel-overlay" @click.self="updatePanelOpen = false">
+                <!-- 更新弹窗（仅本地直运） -->
+                <div v-if="updateInfo.update_mode !== 'container' && updatePanelOpen" class="update-panel-overlay" @click.self="updatePanelOpen = false">
                     <div class="update-panel">
                         <div class="update-panel-header">
                             <span v-if="updateInfo.updating" style="color:var(--color-primary);">⏳ 正在更新...</span>
@@ -1779,7 +1779,7 @@
                         </div>
                         <div style="display:flex;gap:8px;justify-content:flex-end;padding-top:8px;border-top:1px solid var(--border);">
                             <a v-if="updateInfo.release_url" :href="updateInfo.release_url" target="_blank" rel="noopener" class="btn btn-sm" style="text-decoration:none;">GitHub Release</a>
-                            <button v-if="updateInfo.update_available && !updateInfo.updating" class="btn btn-primary btn-sm" @click="confirmApplyUpdate">⬆ 更新到 v{{ updateInfo.latest_version }}</button>
+                            <button v-if="updateInfo.update_available && updateInfo.update_mode !== 'container' && !updateInfo.updating" class="btn btn-primary btn-sm" @click="confirmApplyUpdate">⬆ 更新到 v{{ updateInfo.latest_version }}</button>
                             <button v-if="updateInfo.updating" class="btn btn-sm" disabled>更新中...</button>
                             <button class="btn btn-sm" @click="checkUpdate(true)">↻ 检查更新</button>
                         </div>
@@ -5101,9 +5101,10 @@
                 // ============ FIXED TOP BAR: UNREAD / SEARCH / KEYS / ADD CHAIN ============
                 const appVersion = ref('dev');
                 // 版本更新检查
-                const updateInfo = reactive({ current_version: '', latest_version: '', update_available: false, release_notes: '', release_url: '', checked_at: '', commits: [], updating: false, update_error: '' });
+                const updateInfo = reactive({ current_version: '', latest_version: '', update_available: false, release_notes: '', release_url: '', checked_at: '', commits: [], updating: false, update_error: '', update_mode: '' });
                 const updatePanelOpen = ref(false);
                 const updatePolling = ref(false); // 更新后轮询标志
+                const updateStartupNotified = ref(false);
                 const checkUpdate = async (force) => {
                     try {
                         const r = await fetch('/api/update/check');
@@ -5111,19 +5112,29 @@
                             const d = await r.json();
                             Object.assign(updateInfo, d);
                             if (d.updating) updatePolling.value = true;
+                            if (!force && !updateStartupNotified.value && d.update_mode === 'container' && d.update_available) {
+                                updateStartupNotified.value = true;
+                                showToast('发现新版本', `当前 v${d.current_version}，可在服务器执行 bash update.sh 更新`, 'warning');
+                            }
                         }
                     } catch (e) {}
                 };
-                const toggleUpdatePanel = () => { updatePanelOpen.value = !updatePanelOpen.value; if (updatePanelOpen.value) checkUpdate(false); };
+                const toggleUpdatePanel = () => {
+                    if (updateInfo.update_mode === 'container') return;
+                    updatePanelOpen.value = !updatePanelOpen.value;
+                    if (updatePanelOpen.value) checkUpdate(false);
+                };
                 const formatUpdateTime = (t) => { try { return new Date(t).toLocaleString('zh-CN'); } catch(e) { return t; } };
                 const confirmApplyUpdate = async () => {
-                    if (!confirm(`确定更新到 v${updateInfo.latest_version}？\n\n容器将被重建，过程中服务会短暂不可用（约 30 秒）。`)) return;
+                    if (updateInfo.update_mode === 'container') return;
+                    if (!confirm(`确定更新到 v${updateInfo.latest_version}？\n\n服务会短暂重启，请保存当前操作。`)) return;
                     updateInfo.updating = true;
                     updatePolling.value = true;
                     try {
-                        await fetch('/api/update/apply', { method: 'POST' });
-                    } catch(e) { /* 容器重建会断开连接，这是正常的 */ }
-                    // 开始轮询——容器重建后页面会自动重连
+                        const r = await fetch('/api/update/apply', { method: 'POST' });
+                        const d = await r.json().catch(() => ({}));
+                        if (!r.ok) showToast('更新失败', d.error || '请查看服务日志', 'error');
+                    } catch(e) { /* 服务重启会断开连接，这是正常的 */ }
                     updatePanelOpen.value = false;
                 };
                 const unread = reactive({ items: [], counts: {}, total: 0 });

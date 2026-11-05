@@ -40,6 +40,7 @@ type UpdateInfo struct {
 	Commits     []CommitInfo `json:"commits,omitempty"`
 	Updating    bool         `json:"updating"`               // 正在执行更新
 	UpdateError string       `json:"update_error,omitempty"` // 上次更新失败原因
+	UpdateMode  string       `json:"update_mode"`            // "container" | "local"
 }
 
 // CommitInfo 简要展示两个版本之间的提交。
@@ -65,7 +66,7 @@ type githubRelease struct {
 
 var (
 	updateMu     sync.RWMutex
-	cachedUpdate UpdateInfo
+	cachedUpdate = UpdateInfo{UpdateMode: updateModeName()}
 	lastCheckErr error
 	updateState  string // "" | "updating" | "failed" | "success"
 	updateErrMsg string
@@ -101,6 +102,7 @@ func doCheck() {
 			LatestVersion:   "",
 			UpdateAvailable: false,
 			CheckedAt:       time.Now().Format(time.RFC3339),
+			UpdateMode:      updateModeName(),
 		}
 		updateMu.Unlock()
 		return
@@ -112,6 +114,10 @@ func doCheck() {
 		logger.DefaultConsole().Warn("service", "[UPDATE] 版本检查失败", "err", err)
 		lastCheckErr = err
 		// 保留上次的缓存，不覆盖——避免网络抖动导致提示消失。
+		// 但运行模式必须实时返回，容器部署不能短暂显示更新按钮。
+		updateMu.Lock()
+		cachedUpdate.UpdateMode = updateModeName()
+		updateMu.Unlock()
 		return
 	}
 
@@ -134,6 +140,7 @@ func doCheck() {
 		Commits:         commits,
 		Updating:        updateState == "updating",
 		UpdateError:     updateErrMsg,
+		UpdateMode:      updateModeName(),
 	}
 	updateMu.Unlock()
 	lastCheckErr = nil
@@ -281,55 +288,76 @@ func compareVersions(a, b string) int {
 func getUpdateInfo() UpdateInfo {
 	updateMu.RLock()
 	defer updateMu.RUnlock()
-	return cachedUpdate
+	info := cachedUpdate
+	info.UpdateMode = updateModeName()
+	info.Updating = updateState == "updating"
+	info.UpdateError = updateErrMsg
+	return info
 }
 
-// applyUpdate 在服务器上执行 update.sh。
-// 此函数会阻塞直到更新完成或超时（5 分钟）。
+func updateModeName() string {
+	if isContainerEnv() {
+		return "container"
+	}
+	return "local"
+}
+
+// applyUpdate 执行版本更新。
+//
+// 容器镜像只包含 /app/gateway，既没有 bash/update.sh，也不能直接访问宿主机。
+// 容器内的一键更新因此必须由服务器管理员在宿主机执行 update.sh；面板只负责
+// 明确告知这个限制，不再返回“已触发”的假成功。宿主机直运时才执行本地脚本。
 func applyUpdate() error {
 	updateMu.Lock()
 	if updateState == "updating" {
 		updateMu.Unlock()
 		return fmt.Errorf("更新正在进行中")
 	}
+
+	if isContainerEnv() {
+		msg := "容器部署无法从面板直接更新：请在服务器仓库目录执行 bash update.sh（或 docker compose pull && docker compose up -d）"
+		updateState = "failed"
+		updateErrMsg = msg
+		updateMu.Unlock()
+		logger.DefaultConsole().Warn("service", "[UPDATE] 容器内拒绝更新", "err", msg)
+		return fmt.Errorf("%s", msg)
+	}
+
 	updateState = "updating"
 	updateErrMsg = ""
 	updateMu.Unlock()
 
-	// 更新完成后清理状态。
 	defer func() {
 		updateMu.Lock()
 		if updateState == "updating" {
-			updateState = "" // 正常退出时清空
+			updateState = ""
 		}
 		updateMu.Unlock()
 	}()
 
-	// 用 context 控制超时（5 分钟）。
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	updateMu.Lock()
 	updateCtrl = cancel
 	updateMu.Unlock()
 
-	// 执行 update.sh —— 它会 git pull + docker compose pull + up -d + 健康检查。
-	// 注意：这个进程自己就在容器里跑，docker compose up -d 会重建容器，
-	// 当前进程会被杀掉。所以这个 HTTP 请求大概率不会收到正常返回。
-	// 前端需要用超时 + 轮询 /api/update/check 来判断更新是否成功。
+	// 宿主机直运时执行仓库根目录的 update.sh。
+	// 脚本会重建/重启服务，当前进程可能被杀掉，所以 HTTP 响应未必能正常返回。
 	cmd := exec.CommandContext(ctx, "bash", "update.sh")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		outputText := strings.TrimSpace(string(output))
 		updateMu.Lock()
 		updateState = "failed"
-		updateErrMsg = fmt.Sprintf("更新失败: %v\n输出: %s", err, string(output))
+		updateErrMsg = fmt.Sprintf("更新失败: %v\n输出: %s", err, outputText)
 		updateMu.Unlock()
-		logger.DefaultConsole().Error("service", "[UPDATE] 更新失败", "err", err, "output", string(output))
+		logger.DefaultConsole().Error("service", "[UPDATE] 更新失败", "err", err, "output", outputText)
 		return fmt.Errorf("%s", updateErrMsg)
 	}
 
 	updateMu.Lock()
 	updateState = "success"
 	updateMu.Unlock()
-	logger.DefaultConsole().Info("service", "[UPDATE] 更新成功", "output", string(output))
+	logger.DefaultConsole().Info("service", "[UPDATE] 更新成功", "output", strings.TrimSpace(string(output)))
 	return nil
 }

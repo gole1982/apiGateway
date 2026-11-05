@@ -2216,8 +2216,7 @@ func createWebHandler() http.Handler {
 	// 版本更新检查 & 一键更新（面板右上角 GitHub 图标改造）。
 	mux.HandleFunc("/api/update/check", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		info := getUpdateInfo()
-		json.NewEncoder(w).Encode(info)
+		json.NewEncoder(w).Encode(getUpdateInfo())
 	})
 	mux.HandleFunc("/api/update/apply", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -2225,12 +2224,15 @@ func createWebHandler() http.Handler {
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 			return
 		}
-		// 异步执行——update.sh 会重建容器，当前进程会被杀掉，
-		// HTTP 响应大概率发不出去。前端靠轮询 /api/update/check 判断结果。
+		if updateModeName() == "container" {
+			http.Error(w, `{"error":"容器部署无法从面板更新，请在服务器执行 bash update.sh"}`, http.StatusConflict)
+			return
+		}
+		// 本地直运时异步执行；脚本会重启服务，HTTP 响应未必能正常返回。
 		go applyUpdate()
 		json.NewEncoder(w).Encode(map[string]any{
 			"accepted": true,
-			"message":  "更新已触发，容器将被重建。请等待约 30 秒后刷新页面。",
+			"message":  "更新已触发，服务将短暂重启。",
 		})
 	})
 
