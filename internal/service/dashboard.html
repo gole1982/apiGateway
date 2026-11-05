@@ -1498,6 +1498,127 @@
         .metrics-matrix .mm-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); font-family: var(--font-mono); font-size: 0.78rem; }
         .metrics-matrix .mm-val { font-family: var(--font-mono); font-weight: 600; font-size: 0.78rem; flex-shrink: 0; }
         .metrics-matrix .mm-empty { color: var(--text-muted); font-size: 0.78rem; text-align: center; padding: 6px 0; }
+
+        /* ==========================================================================
+           UNIFIED DESIGN SYSTEM —— 统一设计令牌与组件类
+           规则：筛选控件（搜索 / 下拉 / chip / 说明）靠左，主操作（＋新增 / 保存 / 发送）靠右。
+           页面级横排操作区一律用 .toolbar，禁止再写内联 display:flex 的对齐逻辑。
+           ========================================================================== */
+        :root {
+            /* 字号阶梯：同类语义只允许用同一档 */
+            --fs-caption: 0.7rem;   /* 角标、序号 */
+            --fs-xs: 0.72rem;       /* 辅助信息、时间 */
+            --fs-sm: 0.8rem;        /* 表头、按钮 */
+            --fs-body: 0.82rem;     /* 正文 */
+            --fs-base: 0.88rem;     /* label、说明文字 */
+            --fs-md: 0.95rem;       /* 表单控件、卡片内容 */
+            --fs-lg: 1.1rem;        /* 卡片标题、页面标题 */
+            --fs-xl: 1.25rem;       /* 弹窗标题 */
+            --fs-kpi: 1.45rem;      /* 指标数值 */
+            /* 尺寸与间距 */
+            --ctrl-h: 36px;
+            --ctrl-h-sm: 30px;
+            --ctrl-radius: 8px;
+            --space-1: 4px;
+            --space-2: 8px;
+            --space-3: 12px;
+            --space-4: 16px;
+            --space-5: 20px;
+            /* 历史遗留：曾被引用但未定义，补齐为等价别名（勿再新增同名） */
+            --bg-card: var(--bg-surface);
+            --border: rgba(255, 255, 255, 0.08);
+            --card-blur: 12px;
+            --color-muted: var(--text-muted);
+        }
+
+        /* ---- 统一工具栏 ---- */
+        .toolbar {
+            display: flex;
+            align-items: center;
+            gap: var(--space-3);
+            flex-wrap: wrap;
+            margin-bottom: var(--space-4);
+        }
+        .toolbar--compact { margin-bottom: var(--space-3); }
+        .toolbar--flush { margin-bottom: 0; }
+        /* 加在「右侧第一个元素」上即可推右，无需空 span 占位 */
+        .toolbar__end {
+            margin-left: auto;
+            display: flex;
+            align-items: center;
+            gap: var(--space-2);
+            flex-wrap: wrap;
+        }
+        /* 主操作在 DOM 里排在前面、但视觉上必须排最后时用 */
+        .toolbar__primary-last { order: 1; margin-left: auto; }
+        .toolbar__spacer { flex: 1 1 auto; }
+        .toolbar__search {
+            flex: 1 1 260px;
+            min-width: 200px;
+            max-width: 360px;
+        }
+        .toolbar__select {
+            width: auto;
+            min-width: 200px;
+            max-width: 240px;
+            flex: 0 0 auto;
+        }
+        .toolbar__title {
+            font-size: var(--fs-lg);
+            font-weight: 700;
+            color: var(--color-primary);
+            white-space: nowrap;
+        }
+        .toolbar__hint {
+            font-size: var(--fs-base);
+            color: var(--text-muted);
+        }
+
+        /* ---- 控件统一尺寸 ---- */
+        .btn {
+            height: var(--ctrl-h);
+            padding: 0 16px;
+            font-size: var(--fs-sm);
+            border-radius: var(--ctrl-radius);
+            white-space: nowrap;
+        }
+        .btn-sm {
+            height: var(--ctrl-h-sm);
+            padding: 0 12px;
+            font-size: var(--fs-xs);
+        }
+        input.form-control,
+        select.form-control {
+            height: var(--ctrl-h);
+            padding: 0 12px;
+            font-size: var(--fs-md);
+            border-radius: var(--ctrl-radius);
+        }
+        textarea.form-control { padding: 10px 12px; font-size: var(--fs-md); }
+        .search-container input { padding-left: 36px !important; }
+        .form-group label { font-size: var(--fs-base); }
+
+        /* 主新增按钮：所有页面统一样式 */
+        .btn-add {
+            background: linear-gradient(135deg, var(--color-primary), var(--color-secondary));
+            color: #fff;
+            border-color: transparent;
+            box-shadow: 0 4px 14px rgba(56, 189, 248, 0.3);
+        }
+        .btn-add:hover {
+            transform: translateY(-1.5px);
+            box-shadow: 0 6px 20px rgba(56, 189, 248, 0.45);
+        }
+
+        /* ---- 标题与说明统一 ---- */
+        .card-title { font-size: var(--fs-lg); }
+        .modal-header h3 { font-size: var(--fs-xl); }
+        .kpi-value { font-size: var(--fs-kpi); }
+        th { font-size: var(--fs-sm); }
+        .u-muted-xs { font-size: var(--fs-caption); }
+        .u-muted-sm { font-size: var(--fs-xs); }
+        .u-muted-md { font-size: var(--fs-sm); }
+        .u-muted-lg { font-size: var(--fs-body); } /* 修正历史 lg < md 的反序 */
     </style>
 </head>
 <body>
@@ -1771,8 +1892,8 @@
             <div v-if="activeTab === 'dashboard'" class="tab-pane">
 
                 <!-- 页首操作：新增向导（链式：平台 → 密钥 → 模型）。原在顶栏，按方案 §5.1 移到此处。 -->
-                <div style="display:flex;align-items:center;justify-content:flex-end;margin-bottom:12px;">
-                    <button class="btn btn-primary btn-sm" @click="startAddChain" title="从零配置：平台 → 密钥 → 模型">＋ 新增</button>
+                <div class="toolbar toolbar--compact">
+                    <button class="btn btn-primary btn-add toolbar__end" @click="startAddChain" title="从零配置：平台 → 密钥 → 模型">＋ 新增</button>
                 </div>
 
                 <!-- 上层：中心连接信息（本地角色 / 连接状态 / 是否同步 / 各表中心·本地·启动以来变化） -->
@@ -1822,10 +1943,10 @@
                 </div>
 
                 <!-- 顶行：周期切换 + 待处理 chips + KPI 摘要 -->
-                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
+                <div class="toolbar toolbar--compact">
                     <span class="chip" :class="{ active: metricsPeriod === 'today' }" @click="metricsPeriod='today'; loadMetrics()">今日</span>
                     <span class="chip" :class="{ active: metricsPeriod === 'month' }" @click="metricsPeriod='month'; loadMetrics()">本月</span>
-                    <span style="flex:1;"></span>
+                    <span class="toolbar__spacer"></span>
                     <template v-for="it in (metricsData.needs_attention || [])" :key="it.kind+it.name">
                         <span class="chip" :class="{ danger: it.kind==='platform' || it.kind==='key', warning: it.kind==='model' }"
                               :title="it.reason"
@@ -1868,7 +1989,7 @@
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
                     <div class="glass-card" style="padding:14px 16px;">
                         <div class="card-header-row" style="margin-bottom:10px;">
-                            <span class="card-title" style="font-size:0.95rem;">待处理（按类别）</span>
+                            <span class="card-title">待处理（按类别）</span>
                             <span class="u-muted-md">{{ (metricsData.needs_attention||[]).length }} 项</span>
                         </div>
                         <div v-if="!(metricsData.needs_attention||[]).length" style="text-align:center;color:var(--color-success);font-size:0.84rem;padding:12px 0;">
@@ -1895,7 +2016,7 @@
                     </div>
                     <div class="glass-card" style="padding:14px 16px;">
                         <div class="card-header-row" style="margin-bottom:8px;">
-                            <span class="card-title" style="font-size:0.95rem;">近期错误日志</span>
+                            <span class="card-title">近期错误日志</span>
                             <button class="btn btn-secondary btn-sm" @click="setTab('logs')">全部 ›</button>
                         </div>
                         <div v-if="!(metricsData.recent_errors||[]).length" class="u-muted" style="font-size:0.84rem;padding:8px 0;">无错误记录</div>
@@ -1919,17 +2040,16 @@
             <div v-if="activeTab === 'platforms'" class="tab-pane">
                 <!-- 平台详情页：完整信息 + 关联实体 + 操作按钮（修改/删除需先点"修改"） -->
                 <template v-if="detail.type === 'platform' && platformDetail">
-                    <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;flex-wrap:wrap;">
+                    <div class="toolbar">
                         <button class="btn btn-secondary btn-sm" @click="closeDetail">← 返回列表</button>
-                        <span style="font-size:1.1rem;font-weight:700;color:var(--color-primary);">{{ platformDetail.name }}</span>
+                        <span class="toolbar__title">{{ platformDetail.name }}</span>
                         <span :class="['plat-toggle', platformDetail.enabled ? (platformDetail.available ? 'on' : 'invalid') : 'off']" class="u-noevents">
                             <span class="plat-toggle-dot"></span>
                             {{ platformDetail.enabled ? (platformDetail.available ? '生效' : '失效') : '禁用' }}
                         </span>
                         <span v-if="!platformDetail.available && platformDetail.unavailable_reason"
                               style="font-size:0.76rem;color:var(--color-danger);">{{ platformDetail.unavailable_reason }}</span>
-                        <span class="u-flex1"></span>
-                        <div class="u-flex-gap8">
+                        <div class="u-flex-gap8 toolbar__end">
                             <button v-if="platformDetail.enabled && !platformDetail.available"
                                     class="btn btn-sm" :disabled="platformDetail._restoring" @click="restorePlatform(platformDetail)"
                                     style="background:rgba(239,68,68,0.12);color:var(--color-danger);border:1px solid rgba(239,68,68,0.3);">重试</button>
@@ -1999,12 +2119,12 @@
                 </template>
 
                 <template v-else>
-                <div style="margin-bottom:20px;display:flex;justify-content:space-between;align-items:center;">
-                    <div class="search-container">
+                <div class="toolbar">
+                    <div class="search-container toolbar__search">
                         <svg class="search-icon-svg" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
                         <input type="text" class="form-control" placeholder="模糊过滤平台名称或地址..." v-model="platformSearchQuery">
                     </div>
-                    <button class="btn btn-primary" @click="openPlatformModal(null)">+ 添加平台</button>
+                    <button class="btn btn-primary btn-add toolbar__end" @click="openPlatformModal(null)">+ 添加平台</button>
                 </div>
                 <div class="table-responsive">
                     <table>
@@ -2078,14 +2198,13 @@
             <div v-if="activeTab === 'keys'" class="tab-pane">
                 <!-- 密钥详情页 -->
                 <template v-if="detail.type === 'key' && keyDetail">
-                    <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;flex-wrap:wrap;">
+                    <div class="toolbar">
                         <button class="btn btn-secondary btn-sm" @click="closeDetail">← 返回列表</button>
-                        <span style="font-size:1.1rem;font-weight:700;color:var(--color-primary);">{{ keyDetail.label || ('Key #' + keyDetail.key_index) }}</span>
+                        <span class="toolbar__title">{{ keyDetail.label || ('Key #' + keyDetail.key_index) }}</span>
                         <span class="platform-type type-static u-pointer" @click="openDetail('platform', keyDetail.platform_id)" title="查看平台详情">{{ keyDetail.platform_name || ('平台-'+keyDetail.platform_id) }} ›</span>
                         <span :style="keyBadgeStyle(keyDetail)" :title="keyCooldownTitle(keyDetail)">{{ keyHealthLabel(keyDetail) }}</span>
                         <span v-if="keyDetail.cooling" style="font-size:0.76rem;color:var(--color-warning);" :title="keyCooldownTitle(keyDetail)">{{ keyCooldownRemaining(keyDetail) }}</span>
-                        <span class="u-flex1"></span>
-                        <div class="u-flex-gap8">
+                        <div class="u-flex-gap8 toolbar__end">
                             <button class="plat-toggle" :class="keyDetail.enabled ? 'on' : 'off'" @click="toggleKeyFlat(keyDetail)">
                                 <span class="plat-toggle-dot"></span>
                                 {{ keyDetail.enabled ? '生效' : '禁用' }}
@@ -2141,16 +2260,16 @@
                 </template>
 
                 <template v-else>
-                <div style="margin-bottom:20px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
-                    <div class="search-container" style="flex:1;min-width:240px;">
+                <div class="toolbar">
+                    <div class="search-container toolbar__search">
                         <svg class="search-icon-svg" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
                         <input type="text" class="form-control" placeholder="模糊过滤密钥标签、Token 或平台名称..." v-model="keysSearchQuery">
                     </div>
-                    <select class="form-control" v-model="keyPlatformFilter" style="max-width:220px;">
+                    <select class="form-control toolbar__select" v-model="keyPlatformFilter">
                         <option value="">全部平台</option>
                         <option v-for="p in platforms" :key="'kf-'+p.id" :value="String(p.id)">{{ p.name }}</option>
                     </select>
-                    <button class="btn btn-primary" @click="openKeyModal(null)">+ 添加密钥</button>
+                    <button class="btn btn-primary btn-add toolbar__end" @click="openKeyModal(null)">+ 添加密钥</button>
                 </div>
                 <p style="font-size:0.78rem;color:var(--text-muted);margin:-6px 0 14px;">
                     同一平台下多个 Key 按序（#0 → #1 → …）轮换，429 / 503 自动切换；免费 Key 优先、同资费组先到期先用，到期自动禁用。点击行查看详情。
@@ -2242,16 +2361,15 @@
             <div v-if="activeTab === 'rapis'" class="tab-pane">
                 <!-- 模型详情页 -->
                 <template v-if="detail.type === 'rapi' && rapiDetail">
-                    <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;flex-wrap:wrap;">
+                    <div class="toolbar">
                         <button class="btn btn-secondary btn-sm" @click="closeDetail">← 返回列表</button>
-                        <span style="font-size:1.05rem;font-weight:700;color:var(--color-primary);font-family:var(--font-mono);">{{ rapiDisplayName(rapiDetail) }}</span>
+                        <span class="toolbar__title u-mono">{{ rapiDisplayName(rapiDetail) }}</span>
                         <span class="platform-type type-static u-pointer" @click="openDetail('platform', rapiDetail.platform_id)" title="查看平台详情">{{ getPlatformName(rapiDetail.platform_id) }} ›</span>
                         <span :class="['plat-toggle', rapiDetail.enabled ? (rapiDetail.available ? 'on' : 'invalid') : 'off']" class="u-noevents">
                             <span class="plat-toggle-dot"></span>
                             {{ rapiDetail.enabled ? (rapiDetail.available ? '生效' : '失效') : '禁用' }}
                         </span>
-                        <span class="u-flex1"></span>
-                        <div class="u-flex-gap8">
+                        <div class="u-flex-gap8 toolbar__end">
                             <button v-if="rapiDetail.enabled && !rapiDetail.available" class="btn btn-sm" style="background:rgba(239,68,68,0.12);color:var(--color-danger);border:1px solid rgba(239,68,68,0.3);" @click="restoreRapi(rapiDetail)" title="重试连接，成功则恢复生效状态">重试</button>
                             <button class="plat-toggle" :class="rapiDetail.enabled ? 'on' : 'off'" @click="toggleRapi(rapiDetail)">
                                 <span class="plat-toggle-dot"></span>
@@ -2332,16 +2450,16 @@
                 </template>
 
                 <template v-else>
-                <div style="margin-bottom:20px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
-                    <div class="search-container" style="flex:1;min-width:220px;">
+                <div class="toolbar">
+                    <div class="search-container toolbar__search">
                         <svg class="search-icon-svg" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
                         <input type="text" class="form-control" placeholder="模糊过滤模型名称、上游模型或所属平台..." v-model="rapiSearchQuery">
                     </div>
-                    <select class="form-control" v-model="rapiPlatformFilter" style="max-width:200px;">
+                    <select class="form-control toolbar__select" v-model="rapiPlatformFilter">
                         <option value="">全部平台</option>
                         <option v-for="p in platforms" :key="'rf-'+p.id" :value="String(p.id)">{{ p.name }}</option>
                     </select>
-                    <button class="btn btn-primary" @click="openRapiModal(null)">+ 新增模型</button>
+                    <button class="btn btn-primary btn-add toolbar__end" @click="openRapiModal(null)">+ 新增模型</button>
                 </div>
 
                 <div class="table-responsive">
@@ -2436,15 +2554,14 @@
             <div v-if="activeTab === 'lapis'" class="tab-pane">
                 <!-- 接口详情页 -->
                 <template v-if="detail.type === 'lapi' && lapiDetail">
-                    <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;flex-wrap:wrap;">
+                    <div class="toolbar">
                         <button class="btn btn-secondary btn-sm" @click="closeDetail">← 返回列表</button>
-                        <span style="font-size:1.05rem;font-weight:700;color:var(--color-primary);font-family:var(--font-mono);">{{ lapiDetail.alias }}</span>
+                        <span class="toolbar__title u-mono">{{ lapiDetail.alias }}</span>
                         <span :class="['plat-toggle', lapiDetail.enabled ? 'on' : 'off']" class="u-noevents">
                             <span class="plat-toggle-dot"></span>
                             {{ lapiDetail.enabled ? '生效' : '禁用' }}
                         </span>
-                        <span class="u-flex1"></span>
-                        <div class="u-flex-gap8">
+                        <div class="u-flex-gap8 toolbar__end">
                             <button class="plat-toggle" :class="lapiDetail.enabled ? 'on' : 'off'" @click="toggleLapi(lapiDetail)">
                                 <span class="plat-toggle-dot"></span>
                                 {{ lapiDetail.enabled ? '生效' : '禁用' }}
@@ -2504,12 +2621,12 @@
                 </template>
 
                 <template v-else>
-                <div style="margin-bottom:20px;display:flex;justify-content:space-between;align-items:center;">
-                    <div class="search-container">
+                <div class="toolbar">
+                    <div class="search-container toolbar__search">
                         <svg class="search-icon-svg" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
                         <input type="text" class="form-control" placeholder="模糊过滤接口别名或候选模型..." v-model="lapiSearchQuery">
                     </div>
-                    <button class="btn btn-primary" @click="openLapiModal(null)">+ 创建接口</button>
+                    <button class="btn btn-primary btn-add toolbar__end" @click="openLapiModal(null)">+ 创建接口</button>
                 </div>
                 <div class="table-responsive">
                     <table>
@@ -2593,16 +2710,15 @@
             <div v-if="activeTab === 'logs'" class="tab-pane">
                 <!-- 详情页：行点击后整页展示（与其他 tab 的详情页同构） -->
                 <template v-if="selectedLogDetail">
-                    <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;flex-wrap:wrap;">
+                    <div class="toolbar">
                         <button class="btn btn-secondary btn-sm" @click="closeLogDetail">← 返回列表</button>
-                        <span style="font-size:1.1rem;font-weight:700;color:var(--color-primary);">{{ selectedLogDetail.lapi_alias || '未匹配接口' }}</span>
+                        <span class="toolbar__title">{{ selectedLogDetail.lapi_alias || '未匹配接口' }}</span>
                         <span class="badge-status" :class="getStatusClass(selectedLogDetail.response_status) === 'success' ? 'active' : 'inactive'"
                               :style="getStatusClass(selectedLogDetail.response_status) !== 'success' ? 'color:var(--color-danger);background:rgba(244,63,94,0.08);border-color:rgba(244,63,94,0.2);' : ''">
                             {{ selectedLogDetail.response_status > 0 ? selectedLogDetail.response_status : '—' }}
                         </span>
                         <span class="detail-meta-id">请求 ID: {{ selectedLogDetail.id }}</span>
-                        <span class="u-flex1"></span>
-                        <div class="u-flex-gap8">
+                        <div class="u-flex-gap8 toolbar__end">
                             <button class="btn btn-secondary btn-sm" @click="testResendRequest(selectedLogDetail)">直接重试</button>
                         </div>
                     </div>
@@ -2671,24 +2787,22 @@
 
                 <!-- 汇总表视图：与其他 tab 同构（搜索左 / 主操作右 / 表格在下） -->
                 <template v-else>
-                    <div style="margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
-                        <div class="search-container" style="flex-grow:1;max-width:520px;">
+                    <div class="toolbar">
+                        <div class="search-container toolbar__search">
                             <svg class="search-icon-svg" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
                             <input type="text" class="form-control" placeholder="模糊过滤请求ID、客户端IP、接口、模型、状态码或报错..." v-model="logSearchQuery">
                         </div>
-                        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                            <span class="u-muted-sm">日志级别</span>
-                            <select class="form-control" style="width:auto;min-width:180px;padding:6px 10px;" v-model="logLevel" @change="setLogLevel">
-                                <option v-for="item in logLevels" :key="item.value" :value="item.value">{{ item.label }}</option>
-                            </select>
-                            <span class="chip" :class="{ active: logStatusFilter === '' }" @click="logStatusFilter = ''">全部</span>
-                            <span class="chip" :class="{ active: logStatusFilter === '200', success: logStatusFilter === '200' }" @click="logStatusFilter = logStatusFilter === '200' ? '' : '200'">2xx</span>
-                            <span class="chip" :class="{ active: logStatusFilter === '429', warning: logStatusFilter === '429' }" @click="logStatusFilter = logStatusFilter === '429' ? '' : '429'">429</span>
-                            <span class="chip" :class="{ active: logStatusFilter === '401', warning: logStatusFilter === '401' }" @click="logStatusFilter = logStatusFilter === '401' ? '' : '401'">401</span>
-                            <span class="chip" :class="{ active: logStatusFilter === '500', danger: logStatusFilter === '500' }" @click="logStatusFilter = logStatusFilter === '500' ? '' : '500'">5xx</span>
-                            <button class="btn btn-secondary" @click="clearLogs" title="清空数据库全部日志记录">🗑️ 清理</button>
-                            <button class="btn btn-primary" @click="setTab('playground')">⚡ Playground</button>
-                        </div>
+                        <span class="u-muted-sm">日志级别</span>
+                        <select class="form-control toolbar__select" v-model="logLevel" @change="setLogLevel">
+                            <option v-for="item in logLevels" :key="item.value" :value="item.value">{{ item.label }}</option>
+                        </select>
+                        <span class="chip" :class="{ active: logStatusFilter === '' }" @click="logStatusFilter = ''">全部</span>
+                        <span class="chip" :class="{ active: logStatusFilter === '200', success: logStatusFilter === '200' }" @click="logStatusFilter = logStatusFilter === '200' ? '' : '200'">2xx</span>
+                        <span class="chip" :class="{ active: logStatusFilter === '429', warning: logStatusFilter === '429' }" @click="logStatusFilter = logStatusFilter === '429' ? '' : '429'">429</span>
+                        <span class="chip" :class="{ active: logStatusFilter === '401', warning: logStatusFilter === '401' }" @click="logStatusFilter = logStatusFilter === '401' ? '' : '401'">401</span>
+                        <span class="chip" :class="{ active: logStatusFilter === '500', danger: logStatusFilter === '500' }" @click="logStatusFilter = logStatusFilter === '500' ? '' : '500'">5xx</span>
+                        <button class="btn btn-secondary toolbar__end" @click="clearLogs" title="清空数据库全部日志记录">🗑️ 清理</button>
+                        <button class="btn btn-primary" @click="setTab('playground')">⚡ Playground</button>
                     </div>
 
                     <!-- 系统/中心互联日志（syncOnce 成败、直写成败、池冷却等） -->
@@ -2762,11 +2876,10 @@
             <!-- 6a. CLIENT USAGE tab — 下游客户端用量（按 client_ip 聚合） -->
             <!-- 放在 sbconfig 之前：它是纯查询页，不改任何配置，访问频率高于中心配置。 -->
             <div v-if="activeTab === 'clients'" class="tab-pane">
-                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
-                    <span style="font-size:1.1rem;font-weight:700;color:var(--color-primary);">客户端用量</span>
+                <div class="toolbar toolbar--compact">
+                    <span class="toolbar__title">客户端用量</span>
                     <span class="u-muted-md">按来源 IP 聚合的调用量</span>
-                    <span style="flex:1;"></span>
-                    <span class="chip" :class="{ active: clientUsagePeriod === 'today' }" @click="clientUsagePeriod='today'; loadClientUsage()">今日</span>
+                    <span class="chip toolbar__end" :class="{ active: clientUsagePeriod === 'today' }" @click="clientUsagePeriod='today'; loadClientUsage()">今日</span>
                     <span class="chip" :class="{ active: clientUsagePeriod === '7d' }" @click="clientUsagePeriod='7d'; loadClientUsage()">近 7 天</span>
                     <span class="chip" :class="{ active: clientUsagePeriod === '30d' }" @click="clientUsagePeriod='30d'; loadClientUsage()">近 30 天</span>
                     <span class="chip" :class="{ active: clientUsagePeriod === 'month' }" @click="clientUsagePeriod='month'; loadClientUsage()">本月</span>
@@ -2830,22 +2943,21 @@
             <!-- 7. SB CONFIG tab — 中心配置（Supabase）：URL+key 加密保存+角色探测+同步状态 -->
             <div v-if="activeTab === 'sbconfig'" class="tab-pane">
                 <!-- 头部：标题 + 单一状态徽章（角色·连通，合并去重）+ 右上角操作 -->
-                <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap;">
-                    <span style="font-size:1.1rem;font-weight:700;color:var(--color-primary);">中心配置</span>
+                <div class="toolbar toolbar--compact">
+                    <span class="toolbar__title">中心配置</span>
                     <span class="badge-status" :class="sbConfig.role !== 'offline' ? 'active' : 'inactive'"
                           :style="{ color: roleColor(sbConfig.role) }">
                         {{ roleLabel(sbConfig.role) }}{{ sbConfig.connected ? ' · 已连通' : (sbConfig.role === 'offline' ? '' : ' · 未连通') }}
                     </span>
                     <span v-if="sbConfig.error" style="color:var(--color-danger);font-size:0.8rem;">⚠ {{ sbConfig.error }}</span>
-                    <span class="u-flex1"></span>
-                    <button class="btn btn-secondary btn-sm" @click="fetchSBConfig">重新探测</button>
+                    <button class="btn btn-secondary btn-sm toolbar__end" @click="fetchSBConfig">重新探测</button>
                     <button class="btn btn-primary btn-sm" @click="saveSBConfig(sbConfigForm.url, sbConfigForm.key)">保存并激活</button>
                 </div>
 
                 <!-- 录入 API Key（紧凑：URL + Key 同行） -->
                 <div class="glass-card" style="padding:12px 16px;margin-bottom:14px;">
                     <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
-                        <span class="card-title" style="font-size:0.95rem;">录入 API Key</span>
+                        <span class="card-title">录入 API Key</span>
                         <span class="u-muted-md">角色由 key 权限自动判定：可写=管理端 / 只读=代理端 / 空=未连接</span>
                     </div>
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
@@ -2943,14 +3055,13 @@
             <!-- 6. PLAYGROUND tab — independent debug module -->
             <div v-if="activeTab === 'playground'" class="tab-pane">
                 <!-- 发送通道切换 -->
-                <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
+                <div class="toolbar">
                     <span style="font-size:0.8rem;color:var(--text-muted);">发送通道：</span>
                     <span class="chip" :class="{ active: playground.channel === 'upstream' }" @click="playground.channel = 'upstream'"
                           title="绕过路由链，直接用所选 Key 向所选模型的上游端点发真实请求">直测上游</span>
                     <span class="chip" :class="{ active: playground.channel === 'gateway' }" @click="playground.channel = 'gateway'"
                           title="以客户端身份走本地网关 /v1/chat/completions，验证完整路由链">本地网关</span>
-                    <span style="flex:1;"></span>
-                    <span style="font-size:0.76rem;color:var(--text-muted);">
+                    <span class="toolbar__hint toolbar__end">
                         {{ playground.channel === 'upstream' ? '验证 平台+Key+模型 配对是否可用' : '验证 LAPI 路由链与故障转移行为' }}
                     </span>
                 </div>
@@ -3059,7 +3170,7 @@
                         </template>
 
                         <!-- 发送选项 + 按钮 -->
-                        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding-top:4px;border-top:1px solid rgba(255,255,255,0.05);">
+                        <div class="toolbar toolbar--flush" style="padding-top:4px;border-top:1px solid rgba(255,255,255,0.05);">
                             <label class="checkbox-container" style="margin:0;gap:6px;font-size:0.8rem;" title="请求体带 stream:true；本地网关通道将实时逐块显示">
                                 <input type="checkbox" v-model="playground.stream">
                                 <span>流式输出 (Stream)</span>
@@ -3068,8 +3179,7 @@
                                 <input type="checkbox" v-model="playground.clearOnSuccess">
                                 <span>成功后恢复 Key 状态</span>
                             </label>
-                            <span style="flex:1;"></span>
-                            <button class="btn btn-primary" :disabled="playground.sending" @click="pgSend">
+                            <button class="btn btn-primary toolbar__end" :disabled="playground.sending" @click="pgSend">
                                 {{ playground.sending ? '请求发送中…' : '🚀 发送请求' }}
                             </button>
                         </div>
@@ -3357,8 +3467,8 @@
                             <textarea class="form-control" rows="7" v-model="rapiTestModal.body"
                                       style="font-family:var(--font-mono);font-size:0.82rem;"></textarea>
                         </div>
-                        <div style="display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap;">
-                            <button class="btn btn-primary" :disabled="rapiTestModal.sending" @click="sendRapiTest">
+                        <div class="toolbar toolbar--compact" style="margin-top:10px;">
+                            <button class="btn btn-primary toolbar__primary-last" :disabled="rapiTestModal.sending" @click="sendRapiTest">
                                 {{ rapiTestModal.sending ? '测试请求中...' : '🚀 发送测试请求' }}
                             </button>
                             <label class="checkbox-container" style="margin:0;gap:6px;font-size:0.8rem;cursor:pointer;">
@@ -3462,8 +3572,8 @@
                             </p>
 
                             <!-- 搜索过滤框 + 批量选择 -->
-                            <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;">
-                                <input class="form-control u-flex1" type="text" placeholder="搜索模型名称..."
+                            <div class="toolbar toolbar--compact">
+                                <input class="form-control toolbar__search" type="text" placeholder="搜索模型名称..."
                                        v-model="importSearchQuery">
                                 <button class="btn btn-secondary btn-sm u-nowrap" @click="selectAllFiltered">全选筛选</button>
                                 <button class="btn btn-secondary btn-sm u-nowrap" @click="clearSelection">清空选择</button>
