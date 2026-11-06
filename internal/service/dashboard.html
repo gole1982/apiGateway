@@ -2375,7 +2375,7 @@
                                 <span class="plat-toggle-dot"></span>
                                 {{ rapiDetail.enabled ? '生效' : '禁用' }}
                             </button>
-                            <button class="btn btn-secondary btn-sm" @click="openRapiTestModal(rapiDetail)" title="选一个有效 Key 直接向该模型的上游端点发测试请求">测试</button>
+                            <button class="btn btn-secondary btn-sm" @click="testRapiInPlayground(rapiDetail)" title="带到 Playground 并预选该模型与一把可用 Key，直接发测试请求">测试</button>
                             <button class="btn btn-secondary btn-sm" @click="openAddToLapiModal(rapiDetail)" title="将此模型加入某个已有接口的路由链末尾">添加到接口</button>
                             <button class="btn btn-secondary btn-sm" @click="openLapiFromRapi(rapiDetail)" title="新建接口，接口名默认为该模型名">新建接口</button>
                             <button class="btn btn-primary btn-sm" @click="openRapiModal(rapiDetail)">修改</button>
@@ -3188,7 +3188,15 @@
                     <!-- 右：响应面板 -->
                     <div class="pg-response-pane">
                         <div class="playground-response-header">
-                            <span style="font-weight:600;font-size:0.85rem;color:var(--text-secondary)">响应结果</span>
+                            <span style="display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                                <span style="font-weight:600;font-size:0.85rem;color:var(--text-secondary)">响应结果</span>
+                                <span class="chip" :class="{ active: playground.responseView === 'auto' }"
+                                      @click="pgSetResponseView('auto')"
+                                      title="按本次发送的模式展示：对话模式看回复正文，报文模式看完整返回">按发送模式</span>
+                                <span class="chip" :class="{ active: playground.responseView === 'raw' }"
+                                      @click="pgSetResponseView('raw')"
+                                      title="无论发送模式，都显示完整原始返回">原始报文</span>
+                            </span>
                             <span style="display:inline-flex;align-items:center;gap:8px;">
                                 <span v-if="playground.latency" style="font-size:0.76rem;color:var(--text-muted);font-family:var(--font-mono);">{{ playground.latency }} ms</span>
                                 <span v-if="playground.status" class="badge-status" :class="playground.status < 400 ? 'active' : 'inactive'">
@@ -3197,6 +3205,7 @@
                             </span>
                         </div>
                         <pre class="playground-response-pre">{{ playground.response || '选择目标、填写对话信息后点击发送按钮查看上游返回…' }}</pre>
+                        <div v-if="playground.responseNote" class="toolbar__hint" style="margin-top:8px;">{{ playground.responseNote }}</div>
                     </div>
                 </div>
             </div>
@@ -3431,58 +3440,6 @@
                                 class="btn btn-danger" @click="deleteRapi(rapiModal.item)">删除</button>
                         <button v-if="!addChain.active" class="btn btn-primary" @click="saveRapi">保存配置</button>
                         <button v-else class="btn btn-primary" @click="chainNextRapi">保存并完成 ›</button>
-                    </div>
-                </div>
-            </div>
-
-            <!-- 2c. RAPI KEY-MODEL DIRECT TEST MODAL -->
-            <div v-if="rapiTestModal.show" class="modal-overlay" @click.self="closeRapiTestModal">
-                <div class="modal-container" style="max-width:760px;">
-                    <div class="modal-header">
-                        <h3>🧪 直测 key-model — {{ rapiTestModal.rapi ? rapiDisplayName(rapiTestModal.rapi) : '' }}</h3>
-                        <button class="btn btn-secondary btn-sm" @click="closeRapiTestModal">✕</button>
-                    </div>
-                    <div class="modal-body">
-                        <p style="font-size:0.82rem;color:var(--text-secondary);margin-bottom:14px;line-height:1.6;">
-                            绕过路由链，直接用所选 Key 向该模型的上游端点发真实请求，验证
-                            <b>key-model 配对</b>是否可用（如欠费冷却到期后、白名单调整后）。
-                        </p>
-                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
-                            <div class="form-group">
-                                <label>测试 Key</label>
-                                <select class="form-control" v-model="rapiTestModal.keyId">
-                                    <option value="0">平台 Token（无 Key 时）</option>
-                                    <option v-for="k in rapiTestKeys" :key="k.id" :value="k.id">
-                                        {{ keyHealthMeta[keyHealth(k)].icon }} #{{ k.key_index }} {{ k.label || '未命名' }}{{ k.enabled ? '' : '（已禁用）' }}
-                                    </option>
-                                </select>
-                            </div>
-                            <div class="form-group">
-                                <label>上游模型</label>
-                                <input type="text" class="form-control u-mono" :value="rapiTestModal.rapi?.model" disabled>
-                            </div>
-                        </div>
-                        <div class="form-group">
-                            <label>请求体 (OpenAI 格式，model 字段将按上面模型名发送)</label>
-                            <textarea class="form-control" rows="7" v-model="rapiTestModal.body"
-                                      style="font-family:var(--font-mono);font-size:0.82rem;"></textarea>
-                        </div>
-                        <div class="toolbar toolbar--compact" style="margin-top:10px;">
-                            <button class="btn btn-primary toolbar__primary-last" :disabled="rapiTestModal.sending" @click="sendRapiTest">
-                                {{ rapiTestModal.sending ? '测试请求中...' : '🚀 发送测试请求' }}
-                            </button>
-                            <label class="checkbox-container" style="margin:0;gap:6px;font-size:0.8rem;cursor:pointer;">
-                                <input type="checkbox" v-model="rapiTestModal.clearOnSuccess">
-                                <span>测试成功(2xx)后清除该 Key 失败标记，一键恢复</span>
-                            </label>
-                            <span v-if="rapiTestModal.status" class="badge-status" :class="rapiTestModal.status < 400 ? 'active' : 'inactive'">
-                                状态码: {{ rapiTestModal.status }} · {{ rapiTestModal.latency }} ms
-                            </span>
-                        </div>
-                        <pre v-if="rapiTestModal.response" class="playground-response-pre" style="margin-top:12px;max-height:320px;">{{ rapiTestModal.response }}</pre>
-                    </div>
-                    <div class="modal-footer">
-                        <button class="btn btn-secondary" @click="closeRapiTestModal">关闭</button>
                     </div>
                 </div>
             </div>
@@ -4120,10 +4077,6 @@
                 });
                 const addToLapiModal = reactive({ show: false, rapi: null, selectedLapiId: null });
                 const rapiModal = reactive({ show: false, item: null, form: { platform_id: '', alias: '', model: '', vendor: '', series: '', version: '', suffix: '', notes: '' }, headers: [], keyIDs: [] });
-                // Key-model direct test modal (per-RAPI 测试 button).
-                const rapiTestModal = reactive({ show: false, rapi: null, keyId: 0, body: '', sending: false, status: 0, latency: 0, response: '', clearOnSuccess: true });
-                // Keys this RAPI may use (its filtered pool), for the test-key selector.
-                const rapiTestKeys = computed(() => rapiTestModal.rapi ? keyPoolForRapi(rapiTestModal.rapi).keys : []);
                 // Key whitelist for the RAPI modal: the platform's keys rendered as
                 // checkboxes for the currently selected platform.
                 const selectedPlatformKeys = computed(() => {
@@ -4329,6 +4282,11 @@
                     status: 0,
                     latency: 0,
                     response: '',
+                    responseRaw: '',        // 完整原始返回（供「原始报文」视图）
+                    responseView: 'auto',  // auto 跟随发送模式 | raw 强制看原文
+                    responseNote: '',      // 当前展示方式的说明
+                    sentMode: 'chat',      // 发送那一刻的编辑器模式
+                    sentStream: false,     // 发送那一刻是否流式
                 });
 
                 // TRAFFIC CHART instance
@@ -6014,53 +5972,6 @@
                     showToast('链路已创建', '平台 → 密钥 → 模型 已完成', 'success');
                 };
 
-                // RAPI key-model direct test
-                const openRapiTestModal = (rapi) => {
-                    rapiTestModal.rapi = rapi;
-                    const pool = keyPoolForRapi(rapi).keys;
-                    const firstOk = pool.find(k => k.failure_type === 0 && k.enabled && !isKeyExpired(k)) || pool[0];
-                    rapiTestModal.keyId = firstOk ? firstOk.id : 0;
-                    rapiTestModal.body = JSON.stringify({ model: rapi.model, messages: [{ role: 'user', content: 'ping' }], max_tokens: 16 }, null, 2);
-                    rapiTestModal.status = 0;
-                    rapiTestModal.latency = 0;
-                    rapiTestModal.response = '';
-                    rapiTestModal.sending = false;
-                    rapiTestModal.clearOnSuccess = true;
-                    rapiTestModal.show = true;
-                };
-                const closeRapiTestModal = () => { rapiTestModal.show = false; };
-                const sendRapiTest = async () => {
-                    if (!rapiTestModal.rapi || rapiTestModal.sending) return;
-                    rapiTestModal.sending = true;
-                    rapiTestModal.status = 0;
-                    rapiTestModal.response = '';
-                    try {
-                        const r = await fetch('/api/rapis/test', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ rapi_id: rapiTestModal.rapi.id, key_id: Number(rapiTestModal.keyId), body: rapiTestModal.body, clear_on_success: rapiTestModal.clearOnSuccess })
-                        });
-                        const data = await r.json().catch(() => ({}));
-                        if (data.status !== undefined) {
-                            rapiTestModal.status = data.status;
-                            rapiTestModal.latency = data.latency_ms || 0;
-                            rapiTestModal.response = data.body || '(空响应)';
-                            if (data.cleared) {
-                                showToast('已恢复', `Key 测试成功，失败标记已清除，已重新加入调度池`, 'success');
-                                refreshData();
-                            }
-                        } else {
-                            rapiTestModal.status = r.status || 0;
-                            rapiTestModal.response = data.error ? `错误: ${data.error}` : '请求失败';
-                        }
-                    } catch (e) {
-                        rapiTestModal.status = 0;
-                        rapiTestModal.response = '网络请求失败: ' + (e.message || e);
-                    } finally {
-                        rapiTestModal.sending = false;
-                    }
-                };
-
                 // CUSTOM HEADERS MODAL
                 const openHeadersModal = (rapi) => {
                     headersModal.rapi = rapi;
@@ -6593,9 +6504,73 @@
                 };
 
                 // Pretty-print a response body when it's JSON; pass SSE/plain text through.
+                // tryParseJSON 解析失败时返回原字符串（不是 null），故必须判断类型，
+                // 否则纯文本 / SSE 会被包成带引号转义的字符串。
                 const pgFormatBody = (text) => {
                     const parsed = tryParseJSON(text);
-                    return parsed !== null ? JSON.stringify(parsed, null, 2) : text;
+                    return (parsed && typeof parsed === 'object') ? JSON.stringify(parsed, null, 2) : text;
+                };
+
+                // 从 OpenAI 兼容响应（含 SSE 流）里提取助手回复正文；取不到返回空串。
+                const pgExtractText = (raw) => {
+                    if (!raw) return '';
+                    if (/(^|\n)data:/.test(raw)) {
+                        let out = '';
+                        for (const line of raw.split(/\r?\n/)) {
+                            const s = line.trim();
+                            if (!s.startsWith('data:')) continue;
+                            const payload = s.slice(5).trim();
+                            if (!payload || payload === '[DONE]') continue;
+                            const obj = tryParseJSON(payload);
+                            if (!obj || typeof obj !== 'object') continue;
+                            const c = (obj.choices || [])[0] || {};
+                            const part = (c.delta && c.delta.content) ?? (c.message && c.message.content) ?? c.text ?? '';
+                            if (typeof part === 'string') out += part;
+                        }
+                        return out;
+                    }
+                    const obj = tryParseJSON(raw);
+                    if (!obj || typeof obj !== 'object' || !Array.isArray(obj.choices)) return '';
+                    const c = obj.choices[0] || {};
+                    const content = (c.message && c.message.content) ?? (c.delta && c.delta.content) ?? c.text;
+                    return typeof content === 'string' ? content : '';
+                };
+
+                const pgResetResponse = () => {
+                    playground.response = '';
+                    playground.responseRaw = '';
+                    playground.responseNote = '';
+                };
+
+                // 按「发送那一刻」的模式渲染；完整返回始终留在 responseRaw 供随时切换。
+                const pgRenderResponse = () => {
+                    const raw = playground.responseRaw;
+                    if (!raw) { playground.response = ''; playground.responseNote = ''; return; }
+                    if (playground.responseView === 'raw') {
+                        playground.response = raw;
+                        playground.responseNote = '原始报文 · 完整返回（含状态字段、用量与流式帧）';
+                        return;
+                    }
+                    if (playground.sentMode === 'raw') {
+                        playground.response = raw;
+                        playground.responseNote = '报文模式发送 · 展示完整返回';
+                        return;
+                    }
+                    const text = pgExtractText(raw);
+                    if (text) {
+                        playground.response = text;
+                        playground.responseNote = playground.sentStream
+                            ? '对话模式 · 流式片段已拼成连续回复（切「原始报文」看每一帧）'
+                            : '对话模式 · 只展示回复正文（切「原始报文」看完整 JSON）';
+                    } else {
+                        playground.response = raw;
+                        playground.responseNote = '对话模式 · 未能提取正文，已回退完整返回';
+                    }
+                };
+
+                const pgSetResponseView = (v) => {
+                    playground.responseView = v;
+                    pgRenderResponse();
                 };
 
                 // Logs → Playground: retry a logged request through the local gateway.
@@ -6605,10 +6580,42 @@
                     playground.mode = 'raw';
                     playground.rawBody = detail.request_body || playground.rawBody;
                     try { playground.stream = !!(detail.request_body && JSON.parse(detail.request_body)?.stream); } catch (_) {}
-                    playground.response = '';
+                    pgResetResponse();
                     playground.status = 0;
                     playground.latency = 0;
                     setTab('playground');
+                };
+
+                // 模型详情「测试」→ Playground：预选平台 / 一把可用 Key / 刚点的模型，
+                // 并填入轻量 ping 报文，落地即可发送（旧的独立直测窗口已移除）。
+                const testRapiInPlayground = (rapi) => {
+                    if (!rapi) return;
+                    const pid = String(rapi.platform_id);
+                    const keys = keysList.value.filter(k => String(k.platform_id) === pid);
+                    const firstOk = keys.find(k => keyHealth(k) === 'healthy');
+                    const prefKeyId = firstOk ? firstOk.id : (keys[0] ? keys[0].id : 0);
+                    const prefRapiId = String(rapi.id);
+
+                    playground.channel = 'upstream';
+                    playground.mode = 'raw';
+                    playground.rawBody = JSON.stringify({ model: rapi.model, messages: [{ role: 'user', content: 'ping' }], max_tokens: 16 }, null, 2);
+                    playground.stream = false;
+                    playground.clearOnSuccess = true;
+                    playground.sending = false;
+                    playground.status = 0;
+                    playground.latency = 0;
+                    pgResetResponse();
+
+                    playground.platformId = pid;
+                    playground.keyId = prefKeyId;
+                    playground.rapiId = prefRapiId;
+                    setTab('playground');
+                    // 切平台会触发联动 watch 把 Key / 模型重置成「第一个」，
+                    // 等它跑完再盖回本次预选，保证落地就是刚才那个模型。
+                    nextTick(() => {
+                        playground.keyId = prefKeyId;
+                        playground.rapiId = prefRapiId;
+                    });
                 };
 
                 const pgSend = async () => {
@@ -6630,6 +6637,9 @@
                     }
 
                     playground.sending = true;
+                    pgResetResponse();
+                    playground.sentMode = playground.mode;
+                    playground.sentStream = !!playground.stream;
                     playground.status = 0;
                     playground.latency = 0;
                     playground.response = playground.channel === 'upstream'
@@ -6664,7 +6674,8 @@
                             if (data.status !== undefined) {
                                 playground.status = data.status || r.status;
                                 playground.latency = data.latency_ms || 0;
-                                playground.response = pgFormatBody(data.body || '(空响应)');
+                                playground.responseRaw = pgFormatBody(data.body || '(空响应)');
+                                pgRenderResponse();
                                 if (data.cleared) {
                                     showToast('已恢复', 'Key 直测成功，失败标记已清除，已重新加入调度池', 'success');
                                     refreshData();
@@ -6681,18 +6692,20 @@
                                 body: JSON.stringify(payload)
                             });
                             playground.status = r.status;
-                            playground.response = '';
+                            pgResetResponse();
                             if (playground.stream && r.ok) {
                                 const reader = r.body.getReader();
                                 const decoder = new TextDecoder();
                                 while (true) {
                                     const { value, done } = await reader.read();
                                     if (done) break;
-                                    playground.response += decoder.decode(value, { stream: true });
+                                    playground.responseRaw += decoder.decode(value, { stream: true });
+                                    pgRenderResponse();
                                 }
                             } else {
                                 const text = await r.text();
-                                playground.response = pgFormatBody(text);
+                                playground.responseRaw = pgFormatBody(text);
+                                pgRenderResponse();
                             }
                             playground.latency = Math.round(performance.now() - startedAt);
                         }
@@ -7036,7 +7049,7 @@
                     copyToken,
                     platformModal, openPlatformModal, closePlatformModal, savePlatform, deletePlatform, togglePlatform, restorePlatform, fetchPlatformModels,
                     rapiModal, openRapiModal, closeRapiModal, saveRapi, deleteRapi, toggleRapi, restoreRapi,
-                    rapiTestModal, openRapiTestModal, closeRapiTestModal, sendRapiTest, rapiTestKeys,
+                    testRapiInPlayground,
                     selectedPlatformKeys, rapiKeySelectionLabel,
                     // Key ↔ Model linkage
                     keyPoolForRapi, poolWarning, keyBadgeStyle, keyHealth, keyHealthMeta, keyShortLabel, keyBadgeTitle,
@@ -7053,7 +7066,7 @@
                     lapiModal, openLapiModal, closeLapiModal, openLapiFromRapi, saveLapi, deleteLapi, toggleLapi,
                     
                     // Playground
-                    playground, pgKeys, pgRapis, pgSwitchMode, pgSend, testResendRequest,
+                    playground, pgKeys, pgRapis, pgSwitchMode, pgSend, pgSetResponseView, testResendRequest,
                     removeToast
                 };
             }
