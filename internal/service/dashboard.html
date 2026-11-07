@@ -1619,6 +1619,106 @@
         .u-muted-sm { font-size: var(--fs-xs); }
         .u-muted-md { font-size: var(--fs-sm); }
         .u-muted-lg { font-size: var(--fs-body); } /* 修正历史 lg < md 的反序 */
+
+        /* ---- Playground 统一形态标签 + 对话式聊天窗口 ---- */
+        .pg-main-tabs { margin-bottom: var(--space-3); }
+        .pg-main-tabs .pg-mode-tab { flex: 0 0 auto; min-width: 110px; }
+        .pg-target-summary { font-size: var(--fs-base); color: var(--text-muted); }
+        .pg-chat {
+            display: flex; flex-direction: column;
+            height: calc(100vh - 300px); min-height: 460px;
+            background: var(--bg-solid); border: 1px solid var(--border-glow);
+            border-radius: 14px; overflow: hidden;
+        }
+        .pg-chat-stream { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+        .pg-bubble-row { display: flex; }
+        .pg-bubble-row--user { justify-content: flex-end; }
+        .pg-bubble-row--assistant, .pg-bubble-row--system { justify-content: flex-start; }
+        .pg-bubble {
+            max-width: 78%; border-radius: 14px; padding: 12px 16px;
+            border: 1px solid rgba(255, 255, 255, 0.08); background: rgba(255, 255, 255, 0.03);
+        }
+        .pg-bubble--user { background: rgba(56, 189, 248, 0.10); border-color: rgba(56, 189, 248, 0.25); }
+        .pg-bubble--assistant { background: rgba(255, 255, 255, 0.04); }
+        .pg-bubble--system { background: rgba(245, 158, 11, 0.07); border-color: rgba(245, 158, 11, 0.22); }
+        .pg-bubble-meta { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: var(--fs-xs); color: var(--text-muted); }
+        .pg-bubble-meta select { background: transparent; border: none; color: var(--text-muted); font-size: var(--fs-xs); outline: none; }
+        .pg-bubble textarea {
+            width: 100%; min-height: 46px; background: transparent; border: none;
+            color: var(--text-primary); font-family: var(--font-sans);
+            font-size: var(--fs-body); line-height: 1.6; resize: vertical; outline: none;
+        }
+        .pg-bubble-content { white-space: pre-wrap; word-break: break-word; font-size: var(--fs-body); line-height: 1.7; color: var(--text-primary); }
+        .pg-chat-empty { margin: auto; text-align: center; font-size: var(--fs-base); color: var(--text-muted); line-height: 1.8; }
+        .pg-composer { display: flex; gap: var(--space-2); align-items: flex-end; padding: 12px 16px; border-top: 1px solid rgba(255,255,255,0.06); background: rgba(0,0,0,0.2); }
+        .pg-composer textarea {
+            flex: 1; min-height: 46px; max-height: 140px; padding: 10px 12px;
+            background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1);
+            border-radius: var(--ctrl-radius); color: var(--text-primary);
+            font-family: var(--font-sans); font-size: var(--fs-body); resize: vertical; outline: none;
+        }
+        .pg-composer textarea:focus { border-color: var(--color-primary); }
+        .pg-chat-footer { padding: 8px 16px; border-top: 1px solid rgba(255,255,255,0.04); margin-bottom: 0; }
+        @media (max-width: 1100px) { .pg-chat { height: 62vh; } }
+
+        /* ---- Playground 紧凑版：级联目标选择 + 输入框内选模型 ---- */
+        .tab-pane--playground { display: flex; flex-direction: column; height: calc(100vh - 190px); min-height: 460px; }
+        .pg-main-tabs { margin-bottom: var(--space-2); flex-shrink: 0; }
+        .pg-main-tabs .pg-mode-tab { flex: 0 0 auto; min-width: 92px; padding: 6px 12px; }
+        .pg-kind-chips { display: inline-flex; gap: 4px; align-items: center; }
+        .pg-kind-chips .chip { padding: 4px 9px; font-size: var(--fs-xs); }
+        .pg-chat { flex: 1; min-height: 0; height: auto; }
+        .pg-chat-stream { padding: 14px 18px; gap: 10px; }
+        .pg-bubble { padding: 10px 14px; }
+        .pg-composer-wrap { position: relative; flex-shrink: 0; }
+        .pg-composer { flex-direction: column; align-items: stretch; gap: 8px; padding: 10px 14px; }
+        .pg-composer-bar, .pg-composer-main { display: flex; align-items: center; gap: 8px; }
+        .pg-composer-main { align-items: flex-end; }
+        .pg-target-btn {
+            display: inline-flex; align-items: center; gap: 6px;
+            max-width: 360px; padding: 5px 10px; border-radius: 8px;
+            background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25);
+            color: var(--color-primary); font-size: var(--fs-xs); cursor: pointer;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .pg-target-btn:hover { background: rgba(56, 189, 248, 0.16); }
+        .pg-composer-main textarea { min-height: 44px; }
+        .pg-composer-main .btn { align-self: stretch; }
+        .pg-chat-footer { flex-shrink: 0; padding: 6px 14px; gap: 8px; }
+        .pg-advanced { flex: 1; min-width: 0; }
+        .pg-advanced summary { cursor: pointer; font-size: var(--fs-xs); color: var(--text-muted); }
+        .pg-advanced-body { display: flex; flex-wrap: wrap; gap: 12px; padding: 8px 0; align-items: center; }
+        .pg-advanced-body .form-group { margin-bottom: 0; }
+        .pg-advanced-body .form-control { width: auto; min-width: 100px; height: 30px; padding: 0 10px; font-size: var(--fs-sm); }
+        .pg-advanced-body .checkbox-container { margin: 0; font-size: var(--fs-xs); }
+        .pg-picker {
+            position: absolute; bottom: 100%; left: 0; z-index: 30;
+            display: flex; align-items: stretch; margin-bottom: 6px;
+            background: var(--bg-solid); border: 1px solid var(--border-glow-hover);
+            border-radius: 10px; overflow: hidden;
+        }
+        .pg-picker-col { width: 176px; border-right: 1px solid rgba(255,255,255,0.07); display: flex; flex-direction: column; }
+        .pg-picker-col:last-child { border-right: none; }
+        .pg-picker-title { padding: 6px 10px; font-size: var(--fs-xs); color: var(--text-muted); border-bottom: 1px solid rgba(255,255,255,0.07); }
+        .pg-picker-list { height: 160px; overflow-y: auto; }
+        .pg-picker-item {
+            padding: 7px 10px; font-size: var(--fs-sm); cursor: pointer;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+            border-bottom: 1px solid rgba(255,255,255,0.03);
+        }
+        .pg-picker-item:hover { background: rgba(255,255,255,0.05); }
+        .pg-picker-item.active { background: rgba(56,189,248,0.14); color: var(--color-primary); }
+        .pg-picker-empty { padding: 10px; font-size: var(--fs-xs); color: var(--text-muted); }
+        .pg-raw-target { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
+        .pg-raw-target select { width: auto; min-width: 110px; max-width: 210px; height: 30px; padding: 0 10px; font-size: var(--fs-sm); }
+        .pg-editor-pane { padding: 14px; gap: 10px; }
+        .pg-response-pane { padding: 14px; }
+        .pg-layout { flex: 1; min-height: 0; height: auto; }
+
+        /* ---- 仪表盘：重复标签移除、长清单内部滚轮、整页固定一屏 ---- */
+        .tab-pane--dashboard { max-height: calc(100vh - 170px); overflow-y: auto; padding-right: 2px; }
+        .tab-pane--dashboard > .metrics-card { max-height: 40vh; overflow: auto; }
+        .dash-scroll { max-height: 176px; overflow-y: auto; padding-right: 4px; }
     </style>
 </head>
 <body>
@@ -1889,7 +1989,7 @@
 
             <!-- TABS CONTENT -->
             <!-- 1. DASHBOARD OVERVIEW（单屏指标矩阵：今日/本月 × 4 维度 × 10 指标 TOP3 + 待处理 + 近期错误） -->
-            <div v-if="activeTab === 'dashboard'" class="tab-pane">
+            <div v-if="activeTab === 'dashboard'" class="tab-pane tab-pane--dashboard">
 
                 <!-- 页首操作：新增向导（链式：平台 → 密钥 → 模型）。原在顶栏，按方案 §5.1 移到此处。 -->
                 <div class="toolbar toolbar--compact">
@@ -1947,18 +2047,12 @@
                     <span class="chip" :class="{ active: metricsPeriod === 'today' }" @click="metricsPeriod='today'; loadMetrics()">今日</span>
                     <span class="chip" :class="{ active: metricsPeriod === 'month' }" @click="metricsPeriod='month'; loadMetrics()">本月</span>
                     <span class="toolbar__spacer"></span>
-                    <template v-for="it in (metricsData.needs_attention || [])" :key="it.kind+it.name">
-                        <span class="chip" :class="{ danger: it.kind==='platform' || it.kind==='key', warning: it.kind==='model' }"
-                              :title="it.reason"
-                              @click="jumpToAttention(it)">
-                            {{ attentionLabel(it.kind) }} {{ it.name }}
-                        </span>
-                    </template>
                     <span v-if="!(metricsData.needs_attention||[]).length" style="font-size:0.8rem;color:var(--color-success);">全部资源正常</span>
+                    <span v-else class="u-muted-md">{{ (metricsData.needs_attention||[]).length }} 项待处理，详见下方清单</span>
                 </div>
 
                 <!-- 指标矩阵：10 指标行 × 4 维度列（每格 TOP3） -->
-                <div class="glass-card" style="padding:14px 16px;margin-bottom:14px;overflow-x:auto;">
+                <div class="glass-card metrics-card" style="padding:14px 16px;margin-bottom:14px;overflow-x:auto;">
                     <table class="metrics-matrix">
                         <thead>
                             <tr>
@@ -1996,7 +2090,7 @@
                             <svg style="width:22px;height:22px;opacity:0.4;display:block;margin:0 auto 6px;" viewBox="0 0 24 24" fill="none" stroke="var(--color-success)" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
                             全部资源正常
                         </div>
-                        <div v-else style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+                        <div v-else class="dash-scroll" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
                             <template v-for="kind in ['platform','key','model','interface']" :key="kind">
                                 <div v-if="attentionByKind(kind).length" style="border:1px solid rgba(255,255,255,0.06);border-radius:8px;padding:8px 10px;">
                                     <div style="font-size:0.76rem;color:var(--text-muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px;">
@@ -2020,7 +2114,7 @@
                             <button class="btn btn-secondary btn-sm" @click="setTab('logs')">全部 ›</button>
                         </div>
                         <div v-if="!(metricsData.recent_errors||[]).length" class="u-muted" style="font-size:0.84rem;padding:8px 0;">无错误记录</div>
-                        <div v-else style="display:flex;flex-direction:column;gap:4px;max-height:220px;overflow-y:auto;">
+                        <div v-else class="dash-scroll" style="display:flex;flex-direction:column;gap:4px;">
                             <div v-for="(e, i) in (metricsData.recent_errors||[])" :key="i"
                                  class="u-pointer" style="display:flex;align-items:center;gap:8px;padding:4px 6px;border-radius:6px;font-size:0.8rem;"
                                  @click="openLogById(e.id)">
@@ -2058,6 +2152,7 @@
                                 {{ platformDetail.enabled ? '生效' : '禁用' }}
                             </button>
                             <button class="btn btn-secondary btn-sm" @click="fetchPlatformModels(platformDetail)" title="拉取该平台的上游模型列表并导入">发现模型</button>
+                            <button class="btn btn-primary btn-sm" @click="quickDiscoverAndTest(platformDetail, null)" title="只查上游模型目录（不发真实请求），选好模型后直接带到 Playground">探测并测试</button>
                             <button class="btn btn-primary btn-sm" @click="openPlatformModal(platformDetail)">修改</button>
                         </div>
                     </div>
@@ -3053,158 +3148,163 @@
             </div>
 
             <!-- 6. PLAYGROUND tab — independent debug module -->
-            <div v-if="activeTab === 'playground'" class="tab-pane">
-                <!-- 发送通道切换 -->
-                <div class="toolbar">
-                    <span style="font-size:0.8rem;color:var(--text-muted);">发送通道：</span>
-                    <span class="chip" :class="{ active: playground.channel === 'upstream' }" @click="playground.channel = 'upstream'"
-                          title="绕过路由链，直接用所选 Key 向所选模型的上游端点发真实请求">直测上游</span>
-                    <span class="chip" :class="{ active: playground.channel === 'gateway' }" @click="playground.channel = 'gateway'"
-                          title="以客户端身份走本地网关 /v1/chat/completions，验证完整路由链">本地网关</span>
-                    <span class="toolbar__hint toolbar__end">
-                        {{ playground.channel === 'upstream' ? '验证 平台+Key+模型 配对是否可用' : '验证 LAPI 路由链与故障转移行为' }}
+            <div v-if="activeTab === 'playground'" class="tab-pane tab-pane--playground">
+                <!-- 形态标签 + 测试内容（原顶部「发送通道」并入这里成为选项之一） -->
+                <div class="pg-mode-tabs pg-main-tabs">
+                    <button type="button" class="pg-mode-tab" :class="{ active: playground.mode === 'chat' }" @click="pgSwitchMode('chat')">💬 对话</button>
+                    <button type="button" class="pg-mode-tab" :class="{ active: playground.mode === 'raw' }" @click="pgSwitchMode('raw')">📝 报文</button>
+                    <span class="pg-kind-chips toolbar__end">
+                        <span class="chip" :class="{ active: playground.targetKind === 'rapi' }" @click="pgSetTargetKind('rapi')"
+                              title="直测上游：绕过路由链，验证平台 + Key + 模型配对">模型</span>
+                        <span class="chip" :class="{ active: playground.targetKind === 'lapi' }" @click="pgSetTargetKind('lapi')"
+                              title="走本地网关：验证接口路由链与故障转移">接口</span>
                     </span>
                 </div>
 
-                <div class="pg-layout">
-                    <!-- 左：配置 + 请求编辑 -->
-                    <div class="pg-editor-pane">
-                        <!-- 上游通道：平台 / Key / 模型 级联选择 -->
-                        <template v-if="playground.channel === 'upstream'">
-                            <div class="form-group">
-                                <label>平台 (Platform)</label>
-                                <select class="form-control" v-model="playground.platformId">
-                                    <option value="" disabled>选择平台…</option>
-                                    <option v-for="p in platforms" :key="'pgp-'+p.id" :value="String(p.id)">
-                                        {{ p.name }}{{ p.enabled ? '' : '（已禁用）' }}
-                                    </option>
-                                </select>
-                            </div>
-                            <div class="pg-selects-grid">
-                                <div class="form-group">
-                                    <label>密钥 (Key)</label>
-                                    <select class="form-control" v-model="playground.keyId">
-                                        <option :value="0">平台 Token（无 Key 时）</option>
-                                        <option v-for="k in pgKeys" :key="'pgk-'+k.id" :value="k.id">
-                                            {{ keyHealthMeta[keyHealth(k)].icon }} #{{ k.key_index }} {{ k.label || '未命名' }}{{ k.enabled ? '' : '（已禁用）' }}
-                                        </option>
-                                    </select>
-                                </div>
-                                <div class="form-group">
-                                    <label>模型 (RAPI)</label>
-                                    <select class="form-control" v-model="playground.rapiId" :disabled="!playground.platformId">
-                                        <option value="" disabled>选择模型…</option>
-                                        <option v-for="rp in pgRapis" :key="'pgr-'+rp.id" :value="String(rp.id)">
-                                            {{ rp.alias }}（{{ rp.model }}）
-                                        </option>
-                                    </select>
-                                </div>
-                            </div>
-                        </template>
-                        <!-- 网关通道：LAPI 选择 -->
-                        <template v-else>
-                            <div class="form-group">
-                                <label>本地接口 (LAPI)</label>
-                                <select class="form-control" v-model="playground.lapiAlias">
-                                    <option value="" disabled>选择接口…</option>
-                                    <option v-for="l in lapis" :key="'pgl-'+l.id" :value="l.alias">
-                                        {{ l.alias }}{{ l.enabled ? '' : '（已禁用）' }}
-                                    </option>
-                                </select>
-                                <small style="color:var(--text-muted);font-size:0.77rem;margin-top:3px;display:block;">
-                                    请求将发往本地代理端口 {{ stats.proxy_port || '13579' }}，model 字段自动填接口别名
-                                </small>
-                            </div>
-                        </template>
-
-                        <!-- 对话 / 报文 双模式 -->
-                        <div class="pg-mode-tabs">
-                            <button type="button" class="pg-mode-tab" :class="{ active: playground.mode === 'chat' }" @click="pgSwitchMode('chat')">💬 对话模式</button>
-                            <button type="button" class="pg-mode-tab" :class="{ active: playground.mode === 'raw' }" @click="pgSwitchMode('raw')">📝 报文模式</button>
-                        </div>
-
-                        <!-- 对话模式：消息编辑 -->
-                        <template v-if="playground.mode === 'chat'">
-                            <div style="display:flex;justify-content:space-between;align-items:center;">
-                                <label style="font-weight:600;font-size:0.88rem;color:var(--text-secondary);">对话消息 (Messages)</label>
-                                <button class="btn btn-secondary btn-sm" @click="playground.messages.push({ role: 'user', content: '' })">+ 添加消息</button>
-                            </div>
-                            <div class="pg-msg-body">
-                                <div v-for="(m, idx) in playground.messages" :key="'pgm-'+idx" class="pg-msg-row">
-                                    <select class="form-control" v-model="m.role">
+                <!-- 对话标签：紧凑聊天窗口 -->
+                <div v-if="playground.mode === 'chat'" class="pg-chat">
+                    <div class="pg-chat-stream">
+                        <div v-for="(m, idx) in playground.messages" :key="'pgm-'+idx" class="pg-bubble-row" :class="'pg-bubble-row--' + m.role">
+                            <div class="pg-bubble" :class="'pg-bubble--' + m.role">
+                                <div class="pg-bubble-meta">
+                                    <select v-model="m.role" title="切换角色">
                                         <option value="system">system</option>
                                         <option value="user">user</option>
                                         <option value="assistant">assistant</option>
                                     </select>
-                                    <textarea class="form-control" rows="2" v-model="m.content"
-                                              :placeholder="m.role === 'system' ? '系统设定，如：你是一个严谨的翻译助手' : '消息内容…'"
-                                              style="font-size:0.84rem;resize:vertical;"></textarea>
-                                    <button class="btn btn-danger btn-sm btn-icon" @click="playground.messages.splice(idx, 1)"
-                                            :disabled="playground.messages.length <= 1" title="删除此条消息">
-                                        <svg style="width:12px;height:12px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                                    </button>
+                                    <span class="u-flex1"></span>
+                                    <button class="btn btn-secondary btn-sm" @click="playground.messages.splice(idx, 1)" :disabled="playground.messages.length <= 1" title="删除这条">✕</button>
                                 </div>
+                                <textarea v-model="m.content" rows="2" :placeholder="m.role === 'system' ? '系统设定…' : '消息内容…'"></textarea>
                             </div>
-                            <div class="pg-params-row">
-                                <div class="form-group">
-                                    <label>Temperature (可选)</label>
-                                    <input type="number" step="0.1" min="0" max="2" class="form-control" v-model="playground.params.temperature" placeholder="如 0.7，留空则不发送">
+                        </div>
+                        <div v-if="playground.sending || playground.response" class="pg-bubble-row pg-bubble-row--assistant">
+                            <div class="pg-bubble pg-bubble--assistant">
+                                <div class="pg-bubble-meta">
+                                    <span>模型回复</span>
+                                    <span v-if="playground.status">状态码 {{ playground.status }}</span>
+                                    <span v-if="playground.latency">{{ playground.latency }} ms</span>
                                 </div>
-                                <div class="form-group">
-                                    <label>Max Tokens (可选)</label>
-                                    <input type="number" step="1" min="1" class="form-control" v-model="playground.params.maxTokens" placeholder="如 1024，留空则不发送">
-                                </div>
+                                <div class="pg-bubble-content">{{ playground.sending ? '正在回复…' : playground.response }}</div>
                             </div>
-                        </template>
-                        <!-- 报文模式：直接编辑发送内容 -->
-                        <template v-else>
-                            <div style="display:flex;justify-content:space-between;align-items:center;">
-                                <label style="font-weight:600;font-size:0.88rem;color:var(--text-secondary);">请求体 Payload (JSON)</label>
-                                <span style="font-size:0.74rem;color:var(--text-muted);">
-                                    {{ playground.channel === 'upstream' ? 'model 将按所选模型自动覆盖' : 'model 将按所选接口自动覆盖' }}
-                                </span>
-                            </div>
-                            <textarea class="form-control" rows="14" v-model="playground.rawBody"
-                                      style="font-family:var(--font-mono);font-size:0.8rem;flex:1;min-height:220px;resize:vertical;"
-                                      spellcheck="false"></textarea>
-                        </template>
+                        </div>
+                        <div v-if="!playground.sending && !playground.response" class="pg-chat-empty">先在输入框里选好测试目标，再输入一句话开始对话。</div>
+                    </div>
 
-                        <!-- 发送选项 + 按钮 -->
+                    <div class="pg-composer-wrap">
+                        <!-- 逐级向右展开：平台 → 该平台的 Key → 模型或接口，每列固定 5 行滚轮 -->
+                        <div v-if="playground.pickerOpen" class="pg-picker">
+                            <div class="pg-picker-col">
+                                <div class="pg-picker-title">① 平台</div>
+                                <div class="pg-picker-list">
+                                    <div v-for="p in platforms" :key="'pkp-'+p.id" class="pg-picker-item"
+                                         :class="{ active: String(p.id) === String(playground.platformId) }"
+                                         @click="pgPickPlatform(p)">{{ p.name }}</div>
+                                    <div v-if="!platforms.length" class="pg-picker-empty">暂无平台</div>
+                                </div>
+                            </div>
+                            <div v-if="playground.pickStep >= 2" class="pg-picker-col">
+                                <div class="pg-picker-title">② Key</div>
+                                <div class="pg-picker-list">
+                                    <div class="pg-picker-item" :class="{ active: playground.keyId === 0 }" @click="pgPickKey(null)">平台 Token</div>
+                                    <div v-for="k in pgKeys" :key="'pkk-'+k.id" class="pg-picker-item"
+                                         :class="{ active: k.id === playground.keyId }" @click="pgPickKey(k)">#{{ k.key_index }}<span v-if="k.label"> · {{ k.label }}</span></div>
+                                    <div v-if="!pgKeys.length" class="pg-picker-empty">该平台无 Key</div>
+                                </div>
+                            </div>
+                            <div v-if="playground.pickStep >= 3" class="pg-picker-col">
+                                <div class="pg-picker-title">③ {{ playground.targetKind === 'rapi' ? '模型' : '接口' }}</div>
+                                <div class="pg-picker-list">
+                                    <template v-if="playground.targetKind === 'rapi'">
+                                        <div v-for="rp in pgRapis" :key="'pkr-'+rp.id" class="pg-picker-item"
+                                             :class="{ active: String(rp.id) === String(playground.rapiId) }"
+                                             @click="pgPickRapi(rp)">{{ rapiDisplayName(rp) }}<span v-if="rp.model && rp.model !== rapiDisplayName(rp)"> · {{ rp.model }}</span></div>
+                                        <div v-if="!pgRapis.length" class="pg-picker-empty">该平台无模型</div>
+                                    </template>
+                                    <template v-else>
+                                        <div v-for="l in lapis" :key="'pkl-'+l.id" class="pg-picker-item"
+                                             :class="{ active: l.alias === playground.lapiAlias }"
+                                             @click="pgPickLapi(l)">{{ l.alias }}</div>
+                                        <div v-if="!lapis.length" class="pg-picker-empty">暂无接口</div>
+                                    </template>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="pg-composer">
+                            <div class="pg-composer-bar">
+                                <button class="pg-target-btn" @click="pgTogglePicker" title="逐级选择：平台 → Key → 模型或接口">🎯 {{ pgTargetSummary }} ▾</button>
+                                <span class="toolbar__hint toolbar__end">{{ playground.targetKind === 'rapi' ? '直测上游 · 平台 + Key + 模型配对' : '本地网关 · 接口路由链' }}</span>
+                            </div>
+                            <div class="pg-composer-main">
+                                <textarea v-model="playground.draft" rows="2" placeholder="输入消息，Enter 发送，Shift+Enter 换行" @keydown.enter.exact.prevent="pgSendChat"></textarea>
+                                <button class="btn btn-primary" :disabled="playground.sending || !playground.draft.trim()" @click="pgSendChat">{{ playground.sending ? '发送中…' : '发送' }}</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="toolbar toolbar--flush pg-chat-footer">
+                        <details class="pg-advanced">
+                            <summary>高级选项</summary>
+                            <div class="pg-advanced-body">
+                                <div class="form-group"><label>Temperature</label><input type="number" step="0.1" min="0" max="2" class="form-control" v-model="playground.params.temperature"></div>
+                                <div class="form-group"><label>Max Tokens</label><input type="number" step="1" min="1" class="form-control" v-model="playground.params.maxTokens"></div>
+                                <label class="checkbox-container"><input type="checkbox" v-model="playground.stream"><span>流式输出</span></label>
+                                <label v-if="playground.targetKind === 'rapi'" class="checkbox-container"><input type="checkbox" v-model="playground.clearOnSuccess"><span>成功后恢复 Key</span></label>
+                            </div>
+                        </details>
+                        <button class="btn btn-secondary btn-sm" @click="playground.messages.push({ role: 'user', content: '' })">+ 添加一轮</button>
+                        <button class="btn btn-secondary btn-sm" @click="pgClearChat">清空对话</button>
+                        <span v-if="playground.responseNote" class="toolbar__hint toolbar__end">{{ playground.responseNote }}</span>
+                    </div>
+                </div>
+
+                <!-- 报文标签：紧凑目标下拉 + JSON 编辑器 + 完整原始返回 -->
+                <div v-if="playground.mode === 'raw'" class="pg-layout">
+                    <div class="pg-editor-pane">
+                        <div class="pg-raw-target">
+                            <template v-if="playground.targetKind === 'rapi'">
+                                <select class="form-control" v-model="playground.platformId" title="平台">
+                                    <option value="" disabled>平台…</option>
+                                    <option v-for="p in platforms" :key="'rp-'+p.id" :value="String(p.id)">{{ p.name }}</option>
+                                </select>
+                                <select class="form-control" v-model="playground.keyId" title="Key">
+                                    <option :value="0">平台 Token</option>
+                                    <option v-for="k in pgKeys" :key="'rk-'+k.id" :value="k.id">#{{ k.key_index }}{{ k.label ? ' · ' + k.label : '' }}</option>
+                                </select>
+                                <select class="form-control" v-model="playground.rapiId" title="模型">
+                                    <option value="" disabled>模型…</option>
+                                    <option v-for="rp in pgRapis" :key="'rr-'+rp.id" :value="String(rp.id)">{{ rapiDisplayName(rp) }}</option>
+                                </select>
+                            </template>
+                            <template v-else>
+                                <select class="form-control" v-model="playground.lapiAlias" title="接口">
+                                    <option value="" disabled>接口…</option>
+                                    <option v-for="l in lapis" :key="'rl-'+l.id" :value="l.alias">{{ l.alias }}</option>
+                                </select>
+                            </template>
+                            <span class="toolbar__hint toolbar__end">{{ pgTargetSummary }}</span>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;align-items:center;">
+                            <label style="font-weight:600;font-size:0.88rem;color:var(--text-secondary);">请求体 Payload (JSON)</label>
+                            <span class="u-muted-sm">model 按所选目标自动覆盖</span>
+                        </div>
+                        <textarea class="form-control" rows="14" v-model="playground.rawBody"
+                                  style="font-family:var(--font-mono);font-size:0.8rem;flex:1;min-height:200px;resize:vertical;" spellcheck="false"></textarea>
                         <div class="toolbar toolbar--flush" style="padding-top:4px;border-top:1px solid rgba(255,255,255,0.05);">
-                            <label class="checkbox-container" style="margin:0;gap:6px;font-size:0.8rem;" title="请求体带 stream:true；本地网关通道将实时逐块显示">
-                                <input type="checkbox" v-model="playground.stream">
-                                <span>流式输出 (Stream)</span>
-                            </label>
-                            <label v-if="playground.channel === 'upstream'" class="checkbox-container" style="margin:0;gap:6px;font-size:0.8rem;" title="2xx 成功时清除该 Key 的失败/冷却标记并解除该 Key×模型限制">
-                                <input type="checkbox" v-model="playground.clearOnSuccess">
-                                <span>成功后恢复 Key 状态</span>
-                            </label>
                             <button class="btn btn-primary toolbar__end" :disabled="playground.sending" @click="pgSend">
                                 {{ playground.sending ? '请求发送中…' : '🚀 发送请求' }}
                             </button>
                         </div>
                     </div>
-
-                    <!-- 右：响应面板 -->
                     <div class="pg-response-pane">
                         <div class="playground-response-header">
-                            <span style="display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                                <span style="font-weight:600;font-size:0.85rem;color:var(--text-secondary)">响应结果</span>
-                                <span class="chip" :class="{ active: playground.responseView === 'auto' }"
-                                      @click="pgSetResponseView('auto')"
-                                      title="按本次发送的模式展示：对话模式看回复正文，报文模式看完整返回">按发送模式</span>
-                                <span class="chip" :class="{ active: playground.responseView === 'raw' }"
-                                      @click="pgSetResponseView('raw')"
-                                      title="无论发送模式，都显示完整原始返回">原始报文</span>
-                            </span>
+                            <span style="font-weight:600;font-size:0.85rem;color:var(--text-secondary)">响应结果 · 完整原始返回</span>
                             <span style="display:inline-flex;align-items:center;gap:8px;">
-                                <span v-if="playground.latency" style="font-size:0.76rem;color:var(--text-muted);font-family:var(--font-mono);">{{ playground.latency }} ms</span>
-                                <span v-if="playground.status" class="badge-status" :class="playground.status < 400 ? 'active' : 'inactive'">
-                                    状态码: {{ playground.status }}
-                                </span>
+                                <span v-if="playground.latency" class="u-muted-sm">{{ playground.latency }} ms</span>
+                                <span v-if="playground.status" class="badge-status" :class="playground.status < 400 ? 'active' : 'inactive'">状态码: {{ playground.status }}</span>
                             </span>
                         </div>
-                        <pre class="playground-response-pre">{{ playground.response || '选择目标、填写对话信息后点击发送按钮查看上游返回…' }}</pre>
+                        <pre class="playground-response-pre">{{ playground.responseRaw || '点击「发送请求」查看完整原始返回…' }}</pre>
                         <div v-if="playground.responseNote" class="toolbar__hint" style="margin-top:8px;">{{ playground.responseNote }}</div>
                     </div>
                 </div>
@@ -3628,7 +3728,7 @@
                         </span>
                         <button class="btn btn-secondary" @click="closeImportWizard">取消</button>
                         <button class="btn btn-primary" :disabled="importToAdd.length === 0 && importToRemove.length === 0" @click="importSelectedModels">
-                            同步模型配置
+                            {{ importWizard.goPlayground ? '导入并去 Playground 测试 ›' : '同步模型配置' }}
                         </button>
                     </div>
                 </div>
@@ -4259,7 +4359,7 @@
                 const headersModal = reactive({ show: false, rapi: null, headers: [] });
                 const lapiModal = reactive({ show: false, item: null, fromRapiId: 0, form: { alias: '', notes: '', vendor: '', series: '', version: '', suffix: '' } });
                 const lapiRoutesModal = reactive({ show: false, lapi: null, chain: [], selectedRapiId: '' });
-                const importWizard = reactive({ show: false, platform: null, keyId: null, loading: false, fetchError: '', emptyList: false, models: [], selected: [], manualInput: '', existing: {}, manualAdded: [] });
+                const importWizard = reactive({ show: false, platform: null, keyId: null, loading: false, fetchError: '', emptyList: false, models: [], selected: [], manualInput: '', existing: {}, manualAdded: [], goPlayground: false });
                 // 各分类折叠状态：默认全部展开，用户可点击标题折叠/展开。
                 // 每个分类体独立滚动，避免大类目把其他类目挤到视线外。
                 const wizardCollapsed = reactive({ manual: false, validSelected: false, invalidSelected: false, validUnselected: false });
@@ -4283,7 +4383,11 @@
                     latency: 0,
                     response: '',
                     responseRaw: '',        // 完整原始返回（供「原始报文」视图）
-                    responseView: 'auto',  // auto 跟随发送模式 | raw 强制看原文
+                    draft: '',             // 对话标签底部输入框
+                    targetKind: 'rapi',    // rapi=直测上游 | lapi=走本地网关
+                    pickerOpen: false,     // 级联选择浮层
+                    pickStep: 1,           // 1 平台 / 2 Key / 3 目标
+                    keyPicked: false,
                     responseNote: '',      // 当前展示方式的说明
                     sentMode: 'chat',      // 发送那一刻的编辑器模式
                     sentStream: false,     // 发送那一刻是否流式
@@ -4888,7 +4992,7 @@
                             const saved = await r.json().catch(() => ({}));
                             showToast('成功', keyModal.item
                                 ? `Key #${keyModal.item.key_index} 属性已更新`
-                                : 'Key 已添加，已自动探测并恢复受影响的模型。', 'success');
+                                : 'Key 已添加。可用「发现模型」拉取上游目录。', 'success');
                             closeKeyModal();
                             refreshData();
                             return saved;
@@ -5620,8 +5724,9 @@
                     } catch (e) {}
                 };
 
-                const fetchPlatformModels = async (plat, keyId = null) => {
+                const fetchPlatformModels = async (plat, keyId = null, goPg = false) => {
                     importWizard.platform = plat;
+                    importWizard.goPlayground = goPg;
                     importWizard.keyId = keyId;
                     importWizard.loading = true;
                     importWizard.models = [];
@@ -5661,6 +5766,9 @@
                         if (r.ok) {
                             const data = await r.json();
                             importWizard.models = data.models || [];
+                            if (importWizard.goPlayground && importWizard.models.length && importWizard.selected.length === 0) {
+                                importWizard.selected.push(importWizard.models[0]);
+                            }
                             // Serverless / HTTP-node gateways often answer /v1/models with
                             // HTTP 200 + an empty data array (no maintained model whitelist;
                             // any model name is accepted). Surfacing an empty list as "you
@@ -5684,6 +5792,13 @@
                         importWizard.loading = false;
                         importWizard.fetchError = '网络请求失败，无法连接至远程平台';
                     }
+                };
+
+                // 快捷：只向上游问「有哪些模型」（GET /v1/models，不发真实请求），
+                // 勾选导入后直接把目标带进 Playground；是否真发请求由用户在那边决定。
+                const quickDiscoverAndTest = (plat, keyId = null) => {
+                    if (!plat) return;
+                    fetchPlatformModels(plat, keyId, true);
                 };
 
                 const addManualModel = () => {
@@ -5716,7 +5831,7 @@
                     }
                 };
 
-                const closeImportWizard = () => { importWizard.show = false; };
+                const closeImportWizard = () => { importWizard.show = false; importWizard.goPlayground = false; };
 
                 // 4-section categorisation for the discovery wizard.
                 //   manual          — existing source=manual + session-added (always kept)
@@ -5918,8 +6033,19 @@
                     const failMsg = (failed > 0 || errors.length > 0) ? `，${errors.length || failed} 个失败: ${errors.slice(0, 3).join('; ')}` : '';
 
                     showToast(failed > 0 ? '部分完成' : '成功', `模型同步完成：${summary}${failMsg}`, failed > 0 ? 'warning' : 'success');
+                    const goPg = importWizard.goPlayground;
+                    const pgKeyId = importWizard.keyId;
+                    const pgPlatformId = importWizard.platform?.id;
+                    const pgSelected = [...(importWizard.selected || []), ...(importWizard.manualAdded || [])].map(s => String(s).trim().toLowerCase());
                     closeImportWizard();
                     refreshData();
+                    if (goPg) {
+                        await loadRapis(); // refreshData 只在部分页面刷新模型，这里显式拉一次
+                        const pool = rapis.value.filter(r => String(r.platform_id) === String(pgPlatformId));
+                        const target = pool.find(r => pgSelected.includes(String(r.model || r.alias || '').toLowerCase()));
+                        if (target) testRapiInPlayground(target, pgKeyId);
+                        else showToast('未找到模型', '目录已导入，但没能自动选中模型，请到模型页点「测试」', 'warning');
+                    }
                 };
 
                 // RAPI CRUD
@@ -5962,8 +6088,10 @@
                     const k = await saveKeyModal();
                     if (!k || !k.id) return;
                     addChain.keyId = k.id;
-                    addChain.active = true;
-                    openRapiModal(null, addChain.platformId);
+                    const p = platforms.value.find(x => String(x.id) === String(addChain.platformId));
+                    endAddChain();
+                    if (p) quickDiscoverAndTest(p, k.id);
+                    else showToast('错误', '未找到刚创建的平台', 'error');
                 };
                 const chainNextRapi = async () => {
                     const r = await saveRapi();
@@ -6440,6 +6568,60 @@
                 };
 
                 // DEVELOPER PLAYGROUND (independent tab)
+                // 目标选择：先定测模型（直测上游）还是测接口（走本地网关），
+                // 再按「平台 → 该平台 Key → 目标」逐级向右展开。
+                const pgTargetSummary = computed(() => {
+                    const kind = playground.targetKind === 'rapi' ? '模型' : '接口';
+                    const p = platforms.value.find(x => String(x.id) === String(playground.platformId));
+                    const parts = [kind];
+                    if (p) parts.push(p.name);
+                    if (playground.targetKind === 'rapi') {
+                        if (p) {
+                            const k = keysList.value.find(x => String(x.id) === String(playground.keyId));
+                            parts.push(k ? `#${k.key_index}` : '平台 Token');
+                            const r = rapis.value.find(x => String(x.id) === String(playground.rapiId));
+                            if (r) parts.push(rapiDisplayName(r));
+                        }
+                    } else if (playground.lapiAlias) {
+                        parts.push(playground.lapiAlias);
+                    }
+                    return parts.length > 1 ? parts.join(' / ') : kind + ' · 未选目标';
+                });
+                const pgTogglePicker = () => {
+                    playground.pickerOpen = !playground.pickerOpen;
+                    playground.pickStep = 1;
+                };
+                const pgSetTargetKind = (kind) => {
+                    playground.targetKind = kind;
+                    playground.channel = kind === 'rapi' ? 'upstream' : 'gateway';
+                    playground.platformId = '';
+                    playground.keyId = 0;
+                    playground.rapiId = '';
+                    playground.lapiAlias = '';
+                    playground.keyPicked = false;
+                    playground.pickStep = 1;
+                    playground.pickerOpen = true;
+                };
+                const pgPickPlatform = (p) => {
+                    playground.platformId = String(p.id);
+                    playground.pickStep = 2;
+                };
+                const pgPickKey = (k) => {
+                    playground.keyId = k ? k.id : 0;
+                    playground.keyPicked = true;
+                    playground.pickStep = 3;
+                };
+                const pgPickRapi = (rp) => {
+                    playground.rapiId = String(rp.id);
+                    playground.pickStep = 1;
+                    playground.pickerOpen = false;
+                };
+                const pgPickLapi = (l) => {
+                    playground.lapiAlias = l.alias;
+                    playground.pickStep = 1;
+                    playground.pickerOpen = false;
+                };
+
                 // Keys of the selected platform (upstream channel).
                 const pgKeys = computed(() => {
                     if (!playground.platformId) return [];
@@ -6457,16 +6639,10 @@
                     playground.keyId = firstOk ? firstOk.id : (keys[0] ? keys[0].id : 0);
                     playground.rapiId = pgRapis.value[0] ? String(pgRapis.value[0].id) : '';
                 });
-                // First entry to the tab → default platform/model/interface selection.
+                // 进入 Playground 不再自动替用户选平台：目标由级联选择器逐级确认。
                 watch(() => activeTab.value, (tab) => {
-                    if (tab !== 'playground' || playground.platformId) return;
-                    playground.platformId = platforms.value[0] ? String(platforms.value[0].id) : '';
-                    playground.lapiAlias = lapis.value[0]?.alias || '';
-                    const rapisOfPlat = rapis.value.filter(rp => String(rp.platform_id) === String(playground.platformId));
-                    playground.rapiId = rapisOfPlat[0] ? String(rapisOfPlat[0].id) : '';
-                    const keys = pgKeys.value;
-                    const firstOk = keys.find(k => keyHealth(k) === 'healthy');
-                    playground.keyId = firstOk ? firstOk.id : (keys[0] ? keys[0].id : 0);
+                    if (tab !== 'playground') return;
+                    if (!playground.targetKind) playground.targetKind = 'rapi';
                 });
 
                 // Build the request payload from the current editor mode (chat or raw).
@@ -6479,26 +6655,14 @@
                     return payload;
                 };
 
-                // Switch between chat editor and raw JSON editor, syncing content both ways.
+                // 两个标签各自保留自己的内容：对话用 messages，报文用 rawBody。
+                // 切到报文时把当前对话序列化成 JSON 方便继续改；切回来不反向覆盖 ——
+                // 标签只是导航，不该因为报文格式不标准就点不动。
                 const pgSwitchMode = (target) => {
                     if (target === playground.mode) return;
                     if (target === 'raw') {
-                        // chat → raw: serialize current conversation into editable JSON.
                         const payload = pgBuildPayload();
-                        if (payload !== null) playground.rawBody = JSON.stringify(payload, null, 2);
-                    } else {
-                        // raw → chat: parse messages back into the conversation editor.
-                        const payload = tryParseJSON(playground.rawBody);
-                        if (payload === null || !Array.isArray(payload.messages) || payload.messages.length === 0) {
-                            showToast('无法切换', '报文不是有效的对话 JSON（需含 messages 数组），请先修正。', 'error');
-                            return;
-                        }
-                        playground.messages = payload.messages
-                            .filter(m => m && typeof m.content === 'string')
-                            .map(m => ({ role: ['system', 'user', 'assistant'].includes(m.role) ? m.role : 'user', content: m.content }));
-                        if (playground.messages.length === 0) playground.messages = [{ role: 'user', content: '' }];
-                        playground.params.temperature = (payload.temperature !== undefined && payload.temperature !== null) ? String(payload.temperature) : '';
-                        playground.params.maxTokens = (payload.max_tokens !== undefined && payload.max_tokens !== null) ? String(payload.max_tokens) : '';
+                        if (payload && typeof payload === 'object') playground.rawBody = JSON.stringify(payload, null, 2);
                     }
                     playground.mode = target;
                 };
@@ -6546,36 +6710,52 @@
                 const pgRenderResponse = () => {
                     const raw = playground.responseRaw;
                     if (!raw) { playground.response = ''; playground.responseNote = ''; return; }
-                    if (playground.responseView === 'raw') {
-                        playground.response = raw;
-                        playground.responseNote = '原始报文 · 完整返回（含状态字段、用量与流式帧）';
-                        return;
-                    }
                     if (playground.sentMode === 'raw') {
                         playground.response = raw;
-                        playground.responseNote = '报文模式发送 · 展示完整返回';
+                        playground.responseNote = '报文模式 · 完整原始返回已显示在右侧';
                         return;
                     }
                     const text = pgExtractText(raw);
                     if (text) {
                         playground.response = text;
                         playground.responseNote = playground.sentStream
-                            ? '对话模式 · 流式片段已拼成连续回复（切「原始报文」看每一帧）'
-                            : '对话模式 · 只展示回复正文（切「原始报文」看完整 JSON）';
+                            ? '对话模式 · 流式片段已拼成连续回复（原始帧见「报文」标签）'
+                            : '对话模式 · 只展示回复正文（完整返回见「报文」标签）';
                     } else {
                         playground.response = raw;
                         playground.responseNote = '对话模式 · 未能提取正文，已回退完整返回';
                     }
+                    pgScrollChat();
                 };
 
-                const pgSetResponseView = (v) => {
-                    playground.responseView = v;
-                    pgRenderResponse();
+                const pgScrollChat = () => {
+                    nextTick(() => {
+                        const el = document.querySelector('.pg-chat-stream');
+                        if (el) el.scrollTop = el.scrollHeight;
+                    });
+                };
+                // 对话标签：输入框内容作为一条 user 消息加入上下文，再发送。
+                const pgSendChat = async () => {
+                    const text = (playground.draft || '').trim();
+                    if (!text || playground.sending) return;
+                    playground.messages.push({ role: 'user', content: text });
+                    playground.draft = '';
+                    pgScrollChat();
+                    await pgSend();
+                };
+                const pgClearChat = () => {
+                    playground.messages = [{ role: 'user', content: '' }];
+                    playground.draft = '';
+                    pgResetResponse();
+                    playground.status = 0;
+                    playground.latency = 0;
                 };
 
                 // Logs → Playground: retry a logged request through the local gateway.
                 const testResendRequest = (detail) => {
                     playground.channel = 'gateway';
+                    playground.targetKind = 'lapi';
+                    playground.pickerOpen = false;
                     playground.lapiAlias = detail.lapi_alias || playground.lapiAlias;
                     playground.mode = 'raw';
                     playground.rawBody = detail.request_body || playground.rawBody;
@@ -6588,17 +6768,23 @@
 
                 // 模型详情「测试」→ Playground：预选平台 / 一把可用 Key / 刚点的模型，
                 // 并填入轻量 ping 报文，落地即可发送（旧的独立直测窗口已移除）。
-                const testRapiInPlayground = (rapi) => {
+                const testRapiInPlayground = (rapi, keyIdOverride) => {
                     if (!rapi) return;
                     const pid = String(rapi.platform_id);
                     const keys = keysList.value.filter(k => String(k.platform_id) === pid);
                     const firstOk = keys.find(k => keyHealth(k) === 'healthy');
-                    const prefKeyId = firstOk ? firstOk.id : (keys[0] ? keys[0].id : 0);
+                    const prefKeyId = keyIdOverride ? Number(keyIdOverride) : (firstOk ? firstOk.id : (keys[0] ? keys[0].id : 0));
                     const prefRapiId = String(rapi.id);
 
                     playground.channel = 'upstream';
-                    playground.mode = 'raw';
-                    playground.rawBody = JSON.stringify({ model: rapi.model, messages: [{ role: 'user', content: 'ping' }], max_tokens: 16 }, null, 2);
+                    playground.targetKind = 'rapi';
+                    playground.pickerOpen = false;
+                    playground.pickStep = 1;
+                    playground.keyPicked = true;
+                    playground.mode = 'chat';
+                    playground.messages = [{ role: 'user', content: 'ping' }];
+                    playground.draft = '';
+                    playground.params.maxTokens = '16';
                     playground.stream = false;
                     playground.clearOnSuccess = true;
                     playground.sending = false;
@@ -7057,7 +7243,7 @@
                     // key×model capability blacklist
                     keyModelBlock, blockedKeysForRapi, unblockKeyModel, keyBadgeStyleFor, keyBadgeTitleFor, poolOverflow,
                     headersModal, openHeadersModal, closeHeadersModal, saveHeaders,
-                    importWizard, closeImportWizard, importSelectedModels, addManualModel, removeManualSession, deleteManualExisting,
+                    importWizard, closeImportWizard, importSelectedModels, quickDiscoverAndTest, addManualModel, removeManualSession, deleteManualExisting,
                     importToAdd, importToRemove, wizardSections, selectAllFiltered, clearSelection, wizardCollapsed, toggleSection, bindKeyToModelPool, poolJoinState,
                     lapiRoutesModal, editLapiRoutes, closeLapiRoutesModal, moveRouteUp, moveRouteDown, removeRoute, addRouteToChain, quickAddToChain, saveLapiRoutes,
                     onChainDragStart, onChainDragOver, onChainDragLeave, onChainDrop, onChainDragEnd,
@@ -7066,7 +7252,8 @@
                     lapiModal, openLapiModal, closeLapiModal, openLapiFromRapi, saveLapi, deleteLapi, toggleLapi,
                     
                     // Playground
-                    playground, pgKeys, pgRapis, pgSwitchMode, pgSend, pgSetResponseView, testResendRequest,
+                    playground, pgKeys, pgRapis, pgSwitchMode, pgSend, pgSendChat, pgClearChat, testResendRequest,
+                    pgTargetSummary, pgTogglePicker, pgSetTargetKind, pgPickPlatform, pgPickKey, pgPickRapi, pgPickLapi,
                     removeToast
                 };
             }
