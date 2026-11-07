@@ -2,7 +2,7 @@
 #   首次部署： 复制 .env.example 为 .env（填 APIGATEWAY_KEY，见 proxy.docker.cfg 注释），
 #             然后 docker compose up -d --build
 #   日常更新： docker compose pull && docker compose up -d
-# 注意：挂载的是 proxy.docker.cfg（容器端口 13579/24680），不是仓库根的
+# 注意：挂载的是 proxy.docker.cfg（容器端口 9999/9998），不是仓库根的
 # proxy.cfg（那是本地 Windows 直运的 43210/43211，两处端口必须与 ports 一致）。
 services:
   gateway:
@@ -18,15 +18,15 @@ services:
     container_name: api-gateway
     restart: unless-stopped
     ports:
-      - "13579:13579"   # OpenAI-compatible proxy
-      # 面板只发布到宿主回环。**刻意不写成 "24680:24680"**：那样等于把一个
+      - "9999:9999"   # OpenAI-compatible proxy
+      # 面板只发布到宿主回环。**刻意不写成 "9998:9998"**：那样等于把一个
       # 无认证的完整管理 API（可读改平台/Key/token）暴露到宿主所有网卡，
       # 同网段或云主机安全组一放开就是可达。
       #
-      # 需要从别的机器访问面板时，不要改回 "24680:24680"，而是显式写
-      # "0.0.0.0:24680:24680" —— 让"我确实要暴露"成为一个显式的选择，
+      # 需要从别的机器访问面板时，不要改回 "9998:9998"，而是显式写
+      # "0.0.0.0:9998:9998" —— 让"我确实要暴露"成为一个显式的选择，
       # 而不是默认行为的意外后果。届时请自行在前面加 TLS + 认证反代。
-      - "127.0.0.1:24680:24680"   # Web dashboard（仅本机）
+      - "127.0.0.1:9998:9998"   # Web dashboard（仅本机）
     volumes:
       - ./proxy.docker.cfg:/app/proxy.cfg:ro
       - gateway-data:/app/data
@@ -51,7 +51,7 @@ services:
     # Health check (proxy endpoint)。必须用 CMD-SHELL：CMD 形式不经过 shell，
     # "||" 会被当成 wget 的字面参数导致检查恒失败。
     healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:13579/status || exit 1"]
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:9999/status || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3

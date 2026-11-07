@@ -28,80 +28,80 @@ func TestOriginGuardBlocksCrossOriginWrite(t *testing.T) {
 	}{
 		{
 			name: "same-origin write passes", method: http.MethodPost,
-			origin: "http://127.0.0.1:24680", host: "127.0.0.1:24680",
+			origin: "http://127.0.0.1:9998", host: "127.0.0.1:9998",
 			wantHit: true, want: http.StatusOK,
 		},
 		{
 			name: "cross-origin write blocked", method: http.MethodPost,
-			origin: "http://evil.example", host: "127.0.0.1:24680",
+			origin: "http://evil.example", host: "127.0.0.1:9998",
 			wantHit: false, want: http.StatusForbidden,
 		},
 		{
 			name: "cross-origin PUT blocked", method: http.MethodPut,
-			origin: "http://evil.example", host: "127.0.0.1:24680",
+			origin: "http://evil.example", host: "127.0.0.1:9998",
 			wantHit: false, want: http.StatusForbidden,
 		},
 		{
 			name: "cross-origin DELETE blocked", method: http.MethodDelete,
-			origin: "http://evil.example", host: "127.0.0.1:24680",
+			origin: "http://evil.example", host: "127.0.0.1:9998",
 			wantHit: false, want: http.StatusForbidden,
 		},
 		{
 			// 端口不同也算跨源：同 host 不同端口是不同源。
 			name: "same host different port blocked", method: http.MethodPost,
-			origin: "http://127.0.0.1:9999", host: "127.0.0.1:24680",
+			origin: "http://127.0.0.1:12345", host: "127.0.0.1:9998",
 			wantHit: false, want: http.StatusForbidden,
 		},
 		{
 			// https 页面发到 http 面板：scheme 不同即跨源。
 			name: "scheme mismatch blocked", method: http.MethodPost,
-			origin: "https://127.0.0.1:24680", host: "127.0.0.1:24680",
+			origin: "https://127.0.0.1:9998", host: "127.0.0.1:9998",
 			wantHit: false, want: http.StatusForbidden,
 		},
 		{
 			// Host 大小写不敏感，不该因此误拦。
 			name: "host case insensitive", method: http.MethodPost,
-			origin: "http://LOCALHOST:24680", host: "localhost:24680",
+			origin: "http://LOCALHOST:9998", host: "localhost:9998",
 			wantHit: true, want: http.StatusOK,
 		},
 		{
 			name: "cross-origin GET allowed (read-only)", method: http.MethodGet,
-			origin: "http://evil.example", host: "127.0.0.1:24680",
+			origin: "http://evil.example", host: "127.0.0.1:9998",
 			wantHit: true, want: http.StatusOK,
 		},
 		{
 			// 无 Origin/Referer = 非浏览器客户端（curl / 脚本），不受 CSRF 影响。
 			name: "no origin header passes", method: http.MethodPost,
-			host:    "127.0.0.1:24680",
+			host:    "127.0.0.1:9998",
 			wantHit: true, want: http.StatusOK,
 		},
 		{
 			// 只有 Referer（老浏览器）也按同源判。
 			name: "referer same-origin passes", method: http.MethodPost,
-			referer: "http://127.0.0.1:24680/settings", host: "127.0.0.1:24680",
+			referer: "http://127.0.0.1:9998/settings", host: "127.0.0.1:9998",
 			wantHit: true, want: http.StatusOK,
 		},
 		{
 			name: "referer cross-origin blocked", method: http.MethodPost,
-			referer: "http://evil.example/x", host: "127.0.0.1:24680",
+			referer: "http://evil.example/x", host: "127.0.0.1:9998",
 			wantHit: false, want: http.StatusForbidden,
 		},
 		{
 			// Origin 优先于 Referer：两者冲突时以 Origin 判。
 			name: "origin takes precedence over referer", method: http.MethodPost,
-			origin: "http://evil.example", referer: "http://127.0.0.1:24680/",
-			host:    "127.0.0.1:24680",
+			origin: "http://evil.example", referer: "http://127.0.0.1:9998/",
+			host:    "127.0.0.1:9998",
 			wantHit: false, want: http.StatusForbidden,
 		},
 		{
 			// 畸形 Origin 按不同源处理，不能靠构造怪值绕过。
 			name: "malformed origin blocked", method: http.MethodPost,
-			origin: "://not a url", host: "127.0.0.1:24680",
+			origin: "://not a url", host: "127.0.0.1:9998",
 			wantHit: false, want: http.StatusForbidden,
 		},
 		{
 			name: "null origin blocked", method: http.MethodPost,
-			origin: "null", host: "127.0.0.1:24680",
+			origin: "null", host: "127.0.0.1:9998",
 			wantHit: false, want: http.StatusForbidden,
 		},
 	}

@@ -133,8 +133,8 @@ func LoadFrom(cfgPath string) (*Config, error) {
 	cfg, err := ini.Load(cfgPath)
 	if err != nil {
 		return &Config{
-			ProxyPort:          13579,
-			WebPort:            24680,
+			ProxyPort:          9999,
+			WebPort:            9998,
 			DialTimeoutSec:     30,
 			ResponseTimeoutSec: 300, CooldownSec: 10,
 			MaxCooldownSec:     120,
@@ -154,8 +154,8 @@ func LoadFrom(cfgPath string) (*Config, error) {
 	}
 
 	c := &Config{
-		ProxyPort:          cfg.Section("").Key("proxy_port").MustInt(13579),
-		WebPort:            cfg.Section("").Key("web_port").MustInt(24680),
+		ProxyPort:          cfg.Section("").Key("proxy_port").MustInt(9999),
+		WebPort:            cfg.Section("").Key("web_port").MustInt(9998),
 		DialTimeoutSec:     cfg.Section("").Key("dial_timeout_sec").MustInt(30),
 		ResponseTimeoutSec: cfg.Section("").Key("response_timeout_sec").MustInt(300),
 		CooldownSec:        cfg.Section("").Key("cooldown_sec").MustInt(10),

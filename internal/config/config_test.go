@@ -21,8 +21,8 @@ func TestLoadFromMissingFileReturnsDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFrom missing: %v", err)
 	}
-	if c.ProxyPort != 13579 || c.WebPort != 24680 {
-		t.Errorf("ports = %d/%d, want 13579/24680", c.ProxyPort, c.WebPort)
+	if c.ProxyPort != 9999 || c.WebPort != 9998 {
+		t.Errorf("ports = %d/%d, want 9999/9998", c.ProxyPort, c.WebPort)
 	}
 	if c.CooldownSec != 10 || c.MaxCooldownSec != 120 || c.BillingCooldownSec != 1800 {
 		t.Errorf("cooldowns = %d/%d/%d, want 10/120/1800",

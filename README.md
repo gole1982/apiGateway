@@ -66,8 +66,8 @@
 
 | 服务 | 默认端口 | 绑定地址 |
 |------|---------|---------|
-| Proxy | 13579 | 0.0.0.0 |
-| Dashboard | 24680 | 127.0.0.1（容器内自动改绑 0.0.0.0） |
+| Proxy | 9999 | 0.0.0.0 |
+| Dashboard | 9998 | 127.0.0.1（容器内自动改绑 0.0.0.0） |
 
 面板监听地址可用环境变量 `APIGATEWAY_WEB_HOST` 显式覆盖；检测到容器时默认绑全网卡。
 
@@ -160,7 +160,7 @@ curl -X POST http://localhost:54321/v1/chat/completions \
 
 ### Prometheus 指标
 
-`GET :13579/metrics` 输出 Prometheus 文本格式（`text/plain; version=0.0.4`），
+`GET :9999/metrics` 输出 Prometheus 文本格式（`text/plain; version=0.0.4`），
 无外部依赖（手写曝光格式，不引入 `client_golang`），可直接被抓取：
 
 | 指标 | 类型 | 含义 |
@@ -187,7 +187,7 @@ counter 全部来自 `request_logs` 聚合，**重启不归零**，可直接用 
 scrape_configs:
   - job_name: apigateway
     static_configs:
-      - targets: ['127.0.0.1:13579']
+      - targets: ['127.0.0.1:9999']
 ```
 
 三条最实用的告警规则：
@@ -236,10 +236,10 @@ groups:
 本项目定位是**自部署自用**：所有 HTTP 端点均**无认证**。请据此部署：
 
 - **Dashboard 默认只发布到宿主回环**。`docker-compose.yml` 写的是
-  `127.0.0.1:24680:24680` 而不是 `24680:24680` —— 后者等于把可读改
+  `127.0.0.1:9998:9998` 而不是 `9998:9998` —— 后者等于把可读改
   平台 / Key / token 的完整管理 API 暴露到宿主所有网卡。确需远程访问时，
-  请显式写 `0.0.0.0:24680:24680`，并自行在前面加 TLS + 认证反向代理。
-- **代理端口无认证**：任何能连到 `13579` 的人都能消耗你的上游额度，
+  请显式写 `0.0.0.0:9998:9998`，并自行在前面加 TLS + 认证反向代理。
+- **代理端口无认证**：任何能连到 `9999` 的人都能消耗你的上游额度，
   不要直接暴露到公网。
 - 面板**写**接口已做 Origin 校验（CSRF 防护）；读接口无保护。
 - 主密钥通过 `APIGATEWAY_KEY` 注入；**不要提交 `.env`**（已在 `.gitignore`）。
@@ -281,10 +281,10 @@ cp .env.example .env   # 填 APIGATEWAY_KEY（openssl rand -hex 32）
 docker compose up -d --build
 ```
 
-- 健康检查：`GET :13579/status`，`docker ps` 应显示 `healthy`。
-- 指标：`GET :13579/metrics`（Prometheus 文本格式）。
+- 健康检查：`GET :9999/status`，`docker ps` 应显示 `healthy`。
+- 指标：`GET :9999/metrics`（Prometheus 文本格式）。
 - 更新：一键脚本 `bash update.sh`，或手动 `docker compose pull && docker compose up -d`（镜像由 CI 在 push main / tag 时自动构建推送到 GHCR，多架构 `linux/amd64, linux/arm64`）。每次 push master 会自动打版本 tag 并建 Release，镜像同时带 `latest`、`sha-<7位>` 和版本号（如 `1.2.20261001`）三种标签。
-- 本地快速迭代（约 6 秒，不拉镜像）：`bash local-update.sh` —— 只把新编译的二进制塞进运行中的容器；`--rollback` 可回滚，失败会自动回滚。容器当前版本见 `GET :24680/api/status` 的 `version` 字段。
+- 本地快速迭代（约 6 秒，不拉镜像）：`bash local-update.sh` —— 只把新编译的二进制塞进运行中的容器；`--rollback` 可回滚，失败会自动回滚。容器当前版本见 `GET :9998/api/status` 的 `version` 字段。
 
 ---
 

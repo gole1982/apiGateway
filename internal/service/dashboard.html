@@ -1755,9 +1755,9 @@
                 </div>
             </div>
             <div class="topbar-actions">
-                <div class="topbar-status" :class="{ offline: !gatewayLive }" :title="'代理端口 ' + (stats.proxy_port || '13579') + (gatewayLive ? '（网关运行中）' : '（网关已离线）')">
+                <div class="topbar-status" :class="{ offline: !gatewayLive }" :title="'代理端口 ' + (stats.proxy_port || '9999') + (gatewayLive ? '（网关运行中）' : '（网关已离线）')">
                     <span class="topbar-status-dot"></span>
-                    <span class="topbar-status-port">:{{ stats.proxy_port || '13579' }}</span>
+                    <span class="topbar-status-port">:{{ stats.proxy_port || '9999' }}</span>
                 </div>
                 <div class="unread-wrap" @click.stop>
                     <button class="topbar-icon" @click="unreadPanelOpen = !unreadPanelOpen" title="未读信息">
@@ -6872,7 +6872,7 @@
                             }
                         } else {
                             // Client-style request through the local gateway proxy.
-                            const r = await fetch(`http://localhost:${stats.value.proxy_port || 13579}/v1/chat/completions`, {
+                            const r = await fetch(`http://localhost:${stats.value.proxy_port || 9999}/v1/chat/completions`, {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify(payload)

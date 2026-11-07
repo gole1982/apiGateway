@@ -12,13 +12,13 @@
 # 裸 docker run（配置文件用仓库的 proxy.docker.cfg，不要用 proxy.cfg ——
 # 后者是本地 Windows 直运的端口 43210/43211）：
 #   docker build -t api-gateway .
-#   docker run -d -p 13579:13579 -p 127.0.0.1:24680:24680 \
+#   docker run -d -p 9999:9999 -p 127.0.0.1:9998:9998 \
 #     -v $(pwd)/proxy.docker.cfg:/app/proxy.cfg:ro \
 #     -v gateway-data:/app/data \
 #     -e APIGATEWAY_KEY=<64位hex> api-gateway
 #
 # 面板端口刻意只发布到回环：面板 API 无认证，暴露到全网卡等于把平台/Key/token
-# 的读写权交给同网段任何人。确需远程访问时改成 -p 0.0.0.0:24680:24680，
+# 的读写权交给同网段任何人。确需远程访问时改成 -p 0.0.0.0:9998:9998，
 # 并自行在前面加 TLS + 认证反向代理。
 # =============================================================================
 
@@ -62,9 +62,9 @@ WORKDIR /app
 COPY --from=builder /gateway .
 
 # Default config (overridable by volume mount or env)
-RUN printf "proxy_port = 13579\nweb_port = 24680\nrefresh_interval_sec = 600\n" > /app/proxy.cfg
+RUN printf "proxy_port = 9999\nweb_port = 9998\nrefresh_interval_sec = 600\n" > /app/proxy.cfg
 
-EXPOSE 13579 24680
+EXPOSE 9999 9998
 
 VOLUME ["/app/data"]
 

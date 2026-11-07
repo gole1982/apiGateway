@@ -303,7 +303,7 @@ func (s *Service) Run() error {
 	// 面板监听地址。默认 127.0.0.1（只给本机，暴露面最小）。
 	//
 	// 容器里必须绑 0.0.0.0：Docker 的端口映射是转发到容器网卡的，映射到容器内
-	// 的 127.0.0.1 上，宿主机/局域网都访问不到面板 —— 症状是"代理 13579 正常
+	// 的 127.0.0.1 上，宿主机/局域网都访问不到面板 —— 症状是"代理 9999 正常
 	// 但面板打不开"。故检测到容器（/.dockerenv 或 cgroup 提到 docker）时改绑
 	// 全网卡。APIGATEWAY_WEB_HOST 可显式覆盖（想让容器内面板只走回环时用）。
 	webHost := strings.TrimSpace(os.Getenv("APIGATEWAY_WEB_HOST"))
@@ -652,7 +652,7 @@ func originGuard(next http.Handler) http.Handler {
 		// 也不能让一个刻意构造的畸形 Origin 绕过检查。
 		//
 		// 比对必须同时看 scheme 与 host：只比 Host 的话，攻击者页面
-		// https://127.0.0.1:24680（不同源，但 Host 字面量相同）会被放行。
+		// https://127.0.0.1:9998（不同源，但 Host 字面量相同）会被放行。
 		// 同源的定义就是 (scheme, host, port) 三者全等。
 		u, err := url.Parse(source)
 		if err != nil || u.Host == "" || !sameOrigin(u, r) {
@@ -670,7 +670,7 @@ func originGuard(next http.Handler) http.Handler {
 // sameOrigin 判断请求来源是否与本服务同源。
 //
 // 同源 = (scheme, host, port) 三者全等，故必须同时比 scheme：
-// 只比 Host 会让 https://127.0.0.1:24680 这样的跨源来源蒙混过关
+// 只比 Host 会让 https://127.0.0.1:9998 这样的跨源来源蒙混过关
 // （Host 字面量与 http 的完全一样，只有 scheme 不同）。
 //
 // scheme 的基准取自请求本身：Go 的 http.Server 不"TLS 感知"，r.TLS 为 nil

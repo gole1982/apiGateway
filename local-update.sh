@@ -14,7 +14,7 @@
 # 环境变量：
 #   CONTAINER   容器名（默认 api-gateway）
 #   REMOTE      user@host；设了就走 SSH 远端模式
-#   WEB_PORT    容器内 web 端口（默认 24680，用于读取自报版本）
+#   WEB_PORT    容器内 web 端口（默认 9998，用于读取自报版本）
 # =============================================================================
 set -euo pipefail
 
@@ -22,7 +22,7 @@ cd "$(dirname "$0")"
 
 CONTAINER="${CONTAINER:-api-gateway}"
 REMOTE="${REMOTE:-}"
-WEB_PORT="${WEB_PORT:-24680}"
+WEB_PORT="${WEB_PORT:-9998}"
 OUT=bin/gateway-local
 
 # 备份放在 docker 宿主机上（不是容器内）—— 容器崩溃/起不来时依然能取用。
@@ -41,7 +41,7 @@ die() { echo "错误：$*" >&2; exit 1; }
 # stdout，只重定向 stderr 挡不住，输出会刷屏。
 health_ok() {
   $DOCKER exec "$CONTAINER" \
-    wget -q -O /dev/null --spider http://localhost:13579/status >/dev/null 2>&1
+    wget -q -O /dev/null --spider http://localhost:9999/status >/dev/null 2>&1
 }
 
 wait_healthy() {
