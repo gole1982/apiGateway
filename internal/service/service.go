@@ -2239,8 +2239,11 @@ func createWebHandler() http.Handler {
 	// 状态接口 - 用于Dashboard显示
 	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		rapis, _ := store.A().GetRAPIs()
-		lapis, _ := store.A().GetLAPIs()
+		// 读路径只读本地镜像：管理模式下 store.A() 是远端 Supabase，原先逐 lapi
+		// 查一次映射会变成 N+1 次 HTTPS 往返（实测 ~14s，且面板每 10s 轮询）。本地
+		// 镜像就是网关实际路由所用的数据；非管理模式下 store.A() 本就等于本地 db。
+		rapis, _ := db.Get().GetRAPIs()
+		lapis, _ := db.Get().GetLAPIs()
 		stats, _ := db.Get().GetRAPIStats()
 
 		// 获取刷新间隔参数（默认10秒）
@@ -2275,7 +2278,7 @@ func createWebHandler() http.Handler {
 		// 计算lapi被请求数量（通过检查关联的rapi是否在时间窗口内有请求）
 		lapiRequested := 0
 		for _, u := range lapis {
-			rapiIds, _ := store.A().GetLAPIRAPIMapping(u.ID)
+			rapiIds, _ := db.Get().GetLAPIRAPIMapping(u.ID)
 			for _, rapiId := range rapiIds {
 				if requestedRAPIIds[rapiId] {
 					lapiRequested++
